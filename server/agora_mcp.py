@@ -53,9 +53,9 @@ TOOLS = [
     "body": {"type": "string"}, "mention": {"type": "array", "items": {"type": "string"}},
     "idem": {"type": "string", "description": "可选；缺省按内容派生，重试天然去重"}},
    "required": ["event"]}},
- {"name": "agora_check_mail", "description": "查收件箱（拉模式）。",
+ {"name": "agora_check_mail", "description": "查收件箱（拉模式；读前自动与远端尽力同步，多机场景默认见新）。",
   "inputSchema": {**T, "properties": {"since": {"type": "string", "description": "水位指针，只返回其后新邮件"}}}},
- {"name": "agora_board", "description": "看板快照。",
+ {"name": "agora_board", "description": "看板快照（含 parent 计划进度聚合 N/M 完成；读前自动与远端尽力同步）。",
   "inputSchema": {**T, "properties": {
     "view": {"type": "string", "enum": ["todo","in-progress","blocked","all"]},
     "project": {"type": "string"}}}},
@@ -67,7 +67,7 @@ TOOLS = [
     "mode": {"type": "string", "enum": ["replace","append"]}}, "required": ["path","content"]}},
  {"name": "agora_doctor", "description": "自检与恢复。",
   "inputSchema": {**T, "properties": {"fix": {"type": "boolean"}}}},
- {"name": "agora_dispatch", "description": "跨项目派生一次性工作会话（需名册 can_spawn 权限；有深度/配额保险丝；目标有活会话时降级为通知）。",
+ {"name": "agora_dispatch", "description": "派生一次性工作会话——仅本机：只拉起本机 sessions.map 登记的 session，跨机派活请改用 agora_task_create + mention（异步）。需名册 can_spawn 权限；有深度/配额保险丝；目标有活会话时降级为通知。",
   "inputSchema": {**T, "properties": {
     "project": {"type": "string", "description": "目标项目目录"},
     "task": {"type": "string"}, "prompt": {"type": "string"}},
@@ -80,7 +80,7 @@ TOOLS = [
     "deps": {"type": "array", "items": {"type": "string"}},
     "parent": {"type": "string", "description": "父任务 gt-xxxx；被引用即成为计划根，看板自动聚合进度"}},
    "required": ["title"]}},
- {"name": "agora_history", "description": "任务全程事件链（审计/复盘/交接用，按权威顺序返回）。",
+ {"name": "agora_history", "description": "任务全程事件链（审计/复盘/交接用，按权威顺序返回；读前自动与远端尽力同步）。",
   "inputSchema": {**T, "properties": {
     "task": {"type": "string"}}, "required": ["task"]}},
  {"name": "agora_attach", "description": "证据附件：文件提交进**当前项目版本库**的独立 ref（refs/agora/evidence/<task>，orphan 链，不碰工作区不污染主分支），账本只记 <url>@<commit> 并落 attached 事件。done 的 evidence 可引用此指针。",
@@ -90,7 +90,7 @@ TOOLS = [
     "note": {"type": "string"}}, "required": ["task","files"]}},
  {"name": "agora_sync", "description": "主动与远端同步（pull）。开场仪式第 0 步；check_mail/board/history 已内置静默同步，此工具用于显式拉取与确认同步状态。无远端时返回 off。",
   "inputSchema": {**T, "properties": {}}},
- {"name": "agora_who", "description": "名册发现：列出全部注册身份（名字/dirs/can_spawn/role/是否在本机有目录）。mention 与 dispatch 前先查有谁。",
+ {"name": "agora_who", "description": "名册发现：列出全部注册身份（名字/dirs/can_spawn/role；here=当前工作目录是否归属该实体）。读前自动与远端尽力同步，可看到他机实体；mention 与 dispatch 前先查有谁。",
   "inputSchema": {**T, "properties": {}}},
 ]
 
@@ -182,6 +182,7 @@ def call(name, a):
     if name == "agora_sync":
         return run_script("sync.sh", ["pre"])
     if name == "agora_who":
+        soft_sync()
         roster = []
         for f in sorted(glob.glob(f"{HOME}/wiki/entities/*.md")):
             txt = open(f, encoding="utf-8").read()
