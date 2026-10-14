@@ -274,6 +274,17 @@ PYEOF
 kill $HPID2 2>/dev/null || true
 for i in 1 2 3 4 5 6 7 8 9 10; do [[ -f "$AGORA_HOME/.git/httpd.json" ]] || break; sleep 0.3; done
 [[ -f "$AGORA_HOME/.git/httpd.json" ]] && fail "退出后运行文件已清理" || ok "退出后运行文件已清理"
+# 缺省即随机（不设 AGORA_HTTP_PORT）
+env -u AGORA_HTTP_PORT AGORA_HOME="$AGORA_HOME" python3 "$PKG/server/agora_http.py" >/dev/null 2>&1 &
+HPID3=$!
+sleep 1
+python3 - "$AGORA_HOME" <<'PYEOF' && ok "缺省端口即随机（≠8471）" || fail "缺省端口即随机"
+import json, os, sys
+d = json.load(open(os.path.join(sys.argv[1], ".git", "httpd.json")))
+assert 0 < d["port"] != 8471, d
+PYEOF
+kill $HPID3 2>/dev/null || true
+for i in 1 2 3 4 5 6 7 8 9 10; do [[ -f "$AGORA_HOME/.git/httpd.json" ]] || break; sleep 0.3; done
 # 运行文件绝不能进 git（跨机同步会带错端口）
 git -C "$AGORA_HOME" status --porcelain | grep -q "httpd.json" && fail "运行文件未入库" || ok "运行文件未入库"
 
