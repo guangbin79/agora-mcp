@@ -1,0 +1,163 @@
+#!/usr/bin/env bash
+# post.sh —— 广场事件唯一合法写入入口（机械层核心，线性化点）
+# 用法: post.sh --actor NAME@PROJ --project PROJ --event TYPE [条件字段...]
+# 输出: stdout 为 JSON；失败时 stderr 为 {"code":...,"message":...} 且退出码非零
+set -euo pipefail
+
+AGORA_HOME="${AGORA_HOME:-$HOME/agora}"
+LOCK_WAIT="${AGORA_LOCK_WAIT:-5}"
+
+# ---------- 参数解析 ----------
+ACTOR=""; PROJECT=""; EVENT=""; TASK=""; COMMIT=""; EVIDENCE=""
+CONCLUSION=""; REASON=""; BODY=""; MENTION=""; IDEM=""; TARGET=""; CHILD=""; RUN=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --actor) ACTOR="$2";; --project) PROJECT="$2";; --event) EVENT="$2";;
+    --task) TASK="$2";; --commit) COMMIT="$2";; --evidence) EVIDENCE="$2";;
+    --conclusion) CONCLUSION="$2";; --reason) REASON="$2";; --body) BODY="$2";;
+    --mention) MENTION="$2";; --idem) IDEM="$2";; --target) TARGET="$2";;
+    --child) CHILD="$2";; --run) RUN="$2";;
+    *) echo "{\"code\":\"VALIDATION_FAILED\",\"message\":\"unknown arg: $1\"}" >&2; exit 2;;
+  esac; shift 2
+done
+
+fail() { echo "{\"code\":\"$1\",\"message\":\"$2\"}" >&2; exit "${3:-2}"; }
+json_escape() { python3 -c 'import json,sys;print(json.dumps(sys.argv[1]))' "$1"; }
+
+# ---------- 文法校验（宣言 §5.2） ----------
+case "$EVENT" in
+  claimed|done|blocked|diagnosed|escalated|retired|proposal|ack|dispatched|progress|cancelled|reopened|attached) ;;
+  *) fail VALIDATION_FAILED "bad event: $EVENT";;
+esac
+[[ -n "$ACTOR" && -n "$PROJECT" ]] || fail VALIDATION_FAILED "actor/project required"
+
+TASK_CLASS="claimed done blocked diagnosed escalated dispatched progress cancelled reopened attached"
+if [[ " $TASK_CLASS " == *" $EVENT "* ]]; then
+  [[ "$TASK" =~ ^gt-[a-z0-9]+$ ]] || fail VALIDATION_FAILED "task id must match gt-xxxx"
+  [[ -f "$AGORA_HOME/wiki/tasks/$TASK.md" ]] || fail UNKNOWN_TASK "task not found: $TASK"
+fi
+[[ "$EVENT" == done && ( -z "$COMMIT" || -z "$EVIDENCE" ) ]] && fail VALIDATION_FAILED "done requires commit+evidence"
+[[ "$EVENT" == attached && -z "$EVIDENCE" ]] && fail VALIDATION_FAILED "attached requires evidence（<url>@<commit>，一般由 agora_attach 生成）"
+[[ "$EVENT" == diagnosed && -z "$CONCLUSION" ]] && fail VALIDATION_FAILED "diagnosed requires conclusion"
+[[ "$EVENT" == retired && -z "$REASON" ]] && fail VALIDATION_FAILED "retired requires reason"
+[[ "$EVENT" == dispatched && -z "$TARGET" ]] && fail VALIDATION_FAILED "dispatched requires target"
+[[ "$MENTION" == *all* ]] && fail VALIDATION_FAILED "@all forbidden in v0"
+# 字段值禁止 | 与换行（ABNF: value 不含 "|" 与 LF）
+for v in "$TASK" "$COMMIT" "$EVIDENCE" "$CONCLUSION" "$REASON" "$BODY" "$TARGET" "$CHILD"; do
+  [[ "$v" == *"|"* || "$v" == *$'\n'* ]] && fail VALIDATION_FAILED "field value contains | or newline"
+done
+
+# ---------- 验证门（宣言 §6：done 由机械层执行 verify 背书） ----------
+DERIVED=()
+if [[ "$EVENT" == done ]]; then
+  TASK_PAGE="$AGORA_HOME/wiki/tasks/$TASK.md"
+  VERIFY=$(grep -m1 '^verify:' "$TASK_PAGE" | sed 's/^verify:[[:space:]]*//; s/^"//; s/"$//' || true)
+  PROJDIR=$(grep -m1 '^project_dir:' "$TASK_PAGE" | sed 's/^project_dir:[[:space:]]*//; s/^"//; s/"$//' || true)
+  [[ -z "$VERIFY" ]] && fail VALIDATION_FAILED "task $TASK has no verify: command"
+  VERIFY_OUT=$(cd "${PROJDIR:-$AGORA_HOME}" && timeout "${AGORA_VERIFY_TIMEOUT:-300}" bash -c "$VERIFY" 2>&1 | tail -c 2048) && RC=0 || RC=$?
+  if [[ $RC -ne 0 ]]; then
+    EVENT="verify_failed"; DERIVED+=("verify_failed")
+    VERIFY_NOTE=$(echo "$VERIFY_OUT" | tail -5 | tr '\n' ' ' | tr -d '|')
+  fi
+fi
+
+# ---------- 线性化点：flock 内完成 拉取+校验+写入+提交+推导+推送 ----------
+exec 9>"$AGORA_HOME/.git/post.lock"
+flock -w "$LOCK_WAIT" 9 || fail LOCK_TIMEOUT "flock timeout after ${LOCK_WAIT}s；可安全重试，反复失败先 agora_doctor" 3
+
+# 同步纪律：写前必见全网最新（sync.sh 在无远端时零开销返回 off）
+SYNC_PRE=$(bash "$AGORA_HOME/scripts/sync.sh" pre 2>/dev/null || true)
+SW=$(echo "$SYNC_PRE" | sed -n 's/.*"warn:\([a-z_]*\)".*/\1/p')
+[[ -n "$SW" ]] && DERIVED+=("sync_warn:$SW")
+
+SHARD_DIR="$AGORA_HOME/log/$(date +%F)"; mkdir -p "$SHARD_DIR"
+SHARD="$SHARD_DIR/$PROJECT.md"
+[[ -f "$SHARD" ]] || echo '<!-- format: git-agora-log v1 -->' > "$SHARD"
+
+# 幂等：默认 idem = sha1(actor|event|task|条件字段)。
+# 去重窗口 = 该 actor 在该 task 上的"最近一条"事件：连续重复 = 重试，静默成功；
+# 中间隔了别的事件的相同 idem = 合法的新状态迁移（如 reopen 后再次 claim），必须落账。
+if [[ -z "$IDEM" ]]; then
+  IDEM=$(printf '%s' "$ACTOR|$EVENT|$TASK|$COMMIT|$EVIDENCE|$CONCLUSION|$REASON|$BODY|$MENTION|$TARGET|$CHILD" | sha1sum | cut -c1-8)
+fi
+if [[ -n "$TASK" ]]; then
+  LAST_EV=$(grep -F "actor:$ACTOR " "$SHARD" 2>/dev/null | grep -F "task:$TASK" | tail -1 || true)
+else
+  LAST_EV=$(grep -F "actor:$ACTOR " "$SHARD" 2>/dev/null | tail -1 || true)
+fi
+if [[ -n "$LAST_EV" ]] && echo "$LAST_EV" | grep -qF "idem:$IDEM"; then
+  EXIST=$(echo "$LAST_EV" | sed -n 's/.*seq:\([0-9]*\).*/\1/p')
+  echo "{\"seq\":$EXIST,\"dedup\":true,\"derived\":[]}"
+  exit 0
+fi
+
+# per-actor seq 与 seen（seen = 分片当前事件数）
+SEQ=$(grep -cF "actor:$ACTOR" "$SHARD" 2>/dev/null || true); SEQ=$((SEQ+1))
+SEEN=$(grep -c '^- seq:' "$SHARD" 2>/dev/null || true)
+TS=$(date --iso-8601=seconds)
+
+LINE="- seq:$SEQ | ts:$TS | actor:$ACTOR | event:$EVENT | idem:$IDEM | seen:$PROJECT@$SEEN"
+[[ -n "$TASK" ]] && LINE="$LINE | task:$TASK"
+[[ -n "$COMMIT" ]] && LINE="$LINE | commit:$COMMIT"
+[[ -n "$EVIDENCE" ]] && LINE="$LINE | evidence:$EVIDENCE"
+[[ -n "$CONCLUSION" ]] && LINE="$LINE | conclusion:$CONCLUSION"
+[[ -n "$REASON" ]] && LINE="$LINE | reason:$REASON"
+[[ -n "$TARGET" ]] && LINE="$LINE | target:$TARGET"
+[[ -n "$CHILD" ]] && LINE="$LINE | child:$CHILD"
+[[ -n "$RUN" ]] && LINE="$LINE | run:$RUN"
+[[ -n "${VERIFY_NOTE:-}" ]] && LINE="$LINE | verify_output:$VERIFY_NOTE"
+[[ -n "$BODY" ]] && LINE="$LINE | body:$BODY"
+[[ -n "$MENTION" ]] && LINE="$LINE | mention:$MENTION"
+echo "$LINE" >> "$SHARD"
+REF="log/$(date +%F)/$PROJECT.md:$(grep -c '^- seq:' "$SHARD")"
+
+# claim 冲突检测（账本是事实：仍落账，只标注 derived）
+# 跨分片检索：任务可能被其他项目的 actor 认领，只看本分片会漏报（§3.4 副作用可见性）
+if [[ "$EVENT" == claimed ]]; then
+  FIRST=$(cat "$AGORA_HOME"/log/*/*.md 2>/dev/null | grep -F "task:$TASK" | grep 'event:claimed' | head -1 | sed -n 's/.*actor:\([^ |]*\).*/\1/p' || true)
+  if [[ -n "$FIRST" && "$FIRST" != "$ACTOR" ]]; then DERIVED+=("claim_conflict:$FIRST"); fi
+fi
+
+# 派生回报链：dispatched 时把 dispatcher 写入任务页；done 时自动 @提及 dispatcher
+if [[ "$EVENT" == dispatched && -n "$TASK" ]]; then
+  TP="$AGORA_HOME/wiki/tasks/$TASK.md"
+  grep -q '^dispatcher:' "$TP" || { [[ $(head -1 "$TP") == "---" ]] && sed -i "1a dispatcher: ${ACTOR%%@*}" "$TP"; } || true
+fi
+if [[ "$EVENT" == done && -n "$TASK" ]]; then
+  DISP=$(grep -m1 '^dispatcher:' "$AGORA_HOME/wiki/tasks/$TASK.md" | sed 's/^dispatcher:[[:space:]]*//' || true)
+  [[ -n "$DISP" && "$DISP" != "${ACTOR%%@*}" && "$MENTION" != *"$DISP"* ]] && MENTION="${MENTION:+$MENTION,}$DISP"
+fi
+
+# @提及路由：inbox 指针（不复制内容）
+if [[ -n "$MENTION" ]]; then
+  IFS=',' read -ra MS <<< "$MENTION"
+  for m in "${MS[@]}"; do
+    mkdir -p "$AGORA_HOME/inbox/$m"
+    printf -- '- from:%s | ts:%s | ref:%s | summary:%s %s\n' "$ACTOR" "$TS" "$REF" "$EVENT" "$TASK" \
+      > "$AGORA_HOME/inbox/$m/$(date +%s%N).md"
+  done
+  DERIVED+=("routed:${#MS[@]}")
+fi
+
+cd "$AGORA_HOME"
+export AGORA_MECHANICAL=1   # pre-commit hook 的机械层凭证（install-hooks.sh）
+git add -A >/dev/null
+git -c user.name="$ACTOR" -c user.email="$ACTOR@local" commit -qm "event:$EVENT ${TASK:-} by $ACTOR"
+bash "$AGORA_HOME/scripts/derive-board.sh" >/dev/null 2>&1 || true
+git add -A >/dev/null; git commit -qm "derive: board" >/dev/null 2>&1 || true
+
+DJSON="[]"
+if [[ ${#DERIVED[@]} -gt 0 ]]; then
+  DJSON=$(printf '%s\n' "${DERIVED[@]}" | python3 -c 'import json,sys;print(json.dumps([l.strip() for l in sys.stdin if l.strip()]))')
+fi
+
+# 同步纪律：写后推送（失败不拒事件，下次 pre 合并重试）
+SYNC_POST=$(bash "$AGORA_HOME/scripts/sync.sh" post 2>/dev/null || true)
+SW=$(echo "$SYNC_POST" | sed -n 's/.*"warn:\([a-z_]*\)".*/\1/p')
+if [[ -n "$SW" ]]; then
+  DJSON=$(echo "$DJSON" | python3 -c 'import json,sys; d=json.load(sys.stdin); d.append("sync_warn:'"$SW"'"); print(json.dumps(d))')
+fi
+echo "{\"seq\":$SEQ,\"shard\":$(json_escape "log/$(date +%F)/$PROJECT.md"),\"ref\":$(json_escape "$REF"),\"ts\":$(json_escape "$TS"),\"derived\":$DJSON}"
+
+[[ "$EVENT" == verify_failed ]] && fail VERIFY_FAILED "verify 失败（见事件 verify_output）；先本地复现修复再发 done" 4
+exit 0

@@ -1,0 +1,8 @@
+# 运行数据属于 ~/agora 数据仓库，不属于本代码仓库
+log/
+board/
+inbox/
+raw/
+wiki/
+*.live
+__pycache__/
