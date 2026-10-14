@@ -264,6 +264,7 @@ v1.7（2026-10-14）——新增 §9 远端同步与提交签名（SSH 强制、
 v1.8（2026-10-14）——新增工具 `agora_attach`（§4.10）与事件 `attached`（任务类，evidence 必填 = url@commit）：证据落项目版本库独立 ref `refs/agora/evidence/<task>`（orphan 链式，临时 index 构建，不碰工作区），广场零膨胀。取代 v1.6 的 attach 暂缓决议。
 v1.9（2026-10-14）——星型协作补全：新增 `agora_sync`（§4.11 显式同步，读路径内置静默 pre-pull）与 `agora_who`（§4.12 名册发现）；§4.7 dispatch 收窄为本机作用域（sessions.map 按机器名隔离），跨机派活定案为 task+mention 异步路径；instructions 更新开场仪式（sync 为第 0 步）。测试套件修复 B 机 env 隔离缺陷（此前双机测试实为单库假绿），45 项断言真双机全绿。
 v1.10（2026-10-14）——新增 §10 HTTP 只读窗口与 Web 浏览页（`server/agora_http.py`，GET-only 闭合、默认绑本机、七路由 + 内置单文件 Web 页）；MCP 工具描述审计修复（dispatch 标明本机作用域、agora_who 补 soft_sync、读工具标明读前同步）。测试套件 47 项断言。
+v1.11（2026-10-14）——§10.1 增补：HTTP 端口支持 `AGORA_HTTP_PORT=0` 随机分配；实际端口落 `$AGORA_HOME/.git/httpd.json`（仓库本地运行文件，SIGTERM 即清）；`agora_who` 新增 `http` 字段报告端口（含 pid 活体验证）。测试套件 51 项断言。
 
 ## 8. 附录：宿主适配器（可选，不属于协议面）
 
@@ -345,7 +346,8 @@ AGORA_HOME=~/agora python3 server/agora_http.py   # http://127.0.0.1:8471/
 
 - **只提供 GET**——写入仍唯一走 MCP/scripts（宣言铁律），HTTP 面不构成第二写入口。
 - 默认绑 `127.0.0.1`，本机即信任边界；`AGORA_HTTP_HOST=0.0.0.0` 暴露到局域网 = 该局域网可读（无写面，风险仅为信息暴露）。无认证设计，MUST NOT 暴露到不可信网络。
-- 端口 `AGORA_HTTP_PORT`（默认 8471）。
+- 端口 `AGORA_HTTP_PORT`（默认 8471）；**`=0` 由操作系统随机分配空闲端口**（多实例/自举场景免撞口）。
+- 端口发现：启动后实际端口写入 `$AGORA_HOME/.git/httpd.json`（`.git/` 内 = 仓库本地，绝不进 git、不跨机同步；进程退出含 SIGTERM 即清除）；agent MUST 经 `agora_who` 的 `http` 字段查询（带死进程活体验证，文件残留不报）。
 
 ### 10.2 路由
 

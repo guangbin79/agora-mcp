@@ -6,9 +6,11 @@
 = 该局域网所有人可读广场（无写面，风险仅为信息暴露）。
 
 用法：AGORA_HOME=~/agora python3 server/agora_http.py
-环境：AGORA_HTTP_HOST（默认 127.0.0.1） AGORA_HTTP_PORT（默认 8471）
+环境：AGORA_HTTP_HOST（默认 127.0.0.1） AGORA_HTTP_PORT（默认 8471；0 = 随机分配）
+随机端口发现：启动后实际端口写入 $AGORA_HOME/.git/httpd.json（仓库本地，不进 git），
+agent 可经 MCP 工具 agora_who 的 http 字段查询（含死进程活体验证）。
 """
-import os, re, glob, json, subprocess
+import os, re, glob, json, subprocess, atexit, time, signal
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
@@ -16,6 +18,7 @@ HOME = os.environ.get("AGORA_HOME", os.path.expanduser("~/agora"))
 SCRIPTS = os.path.join(HOME, "scripts")
 HOST = os.environ.get("AGORA_HTTP_HOST", "127.0.0.1")
 PORT = int(os.environ.get("AGORA_HTTP_PORT", "8471"))
+RUNTIME_FILE = os.path.join(HOME, ".git", "httpd.json")
 
 LINE_RE = re.compile(r'^- seq:(\d+) \| ts:(\S+) \| actor:(\S+) \| event:(\w+) \| idem:(\S+) \| seen:(\S+)(.*)$')
 KV_RE = re.compile(r'(\w+):((?:[^|]|\|(?!\s*\w+:))*?)(?=\s*\|\s*\w+:|$)')
@@ -313,5 +316,21 @@ class Handler(BaseHTTPRequestHandler):
         self.send_json({"error": "NOT_FOUND"}, 404)
 
 if __name__ == "__main__":
-    print(f"agora-http 只读窗口：http://{HOST}:{PORT}/  (AGORA_HOME={HOME})")
-    ThreadingHTTPServer((HOST, PORT), Handler).serve_forever()
+    srv = ThreadingHTTPServer((HOST, PORT), Handler)
+    actual = srv.server_address[1]  # PORT=0 时由操作系统分配的空闲端口
+    url = f"http://{HOST}:{actual}/"
+    try:
+        with open(RUNTIME_FILE, "w") as f:  # .git/ 内 = 仓库本地，绝不进同步
+            json.dump({"url": url, "host": HOST, "port": actual,
+                       "pid": os.getpid(), "started": time.strftime("%Y-%m-%dT%H:%M:%S")}, f)
+        def _cleanup(*_):
+            try: os.remove(RUNTIME_FILE)
+            except Exception: pass
+            os._exit(0)
+        atexit.register(lambda: os.path.exists(RUNTIME_FILE) and os.remove(RUNTIME_FILE))
+        signal.signal(signal.SIGTERM, _cleanup)  # kill/systemd stop 也要清运行文件
+        signal.signal(signal.SIGINT, _cleanup)
+    except Exception:
+        pass
+    print(f"agora-http 只读窗口：{url}  (AGORA_HOME={HOME})")
+    srv.serve_forever()

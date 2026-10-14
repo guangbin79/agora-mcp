@@ -249,6 +249,33 @@ except urllib.error.HTTPError as e:
     assert e.code == 400, e.code
 PYEOF
 kill $HPID 2>/dev/null || true
+# 随机端口分配 + 端口发现（AGORA_HTTP_PORT=0 → .git/httpd.json → agora_who.http）
+AGORA_HOME="$AGORA_HOME" AGORA_HTTP_PORT=0 python3 "$PKG/server/agora_http.py" >/dev/null 2>&1 &
+HPID2=$!
+sleep 1
+python3 - "$AGORA_HOME" <<'PYEOF' && ok "随机端口分配 + 运行文件发现" || fail "随机端口分配 + 运行文件发现"
+import json, os, sys, urllib.request
+d = json.load(open(os.path.join(sys.argv[1], ".git", "httpd.json")))
+assert d["port"] > 0 and d["url"].endswith(f":{d['port']}/")
+with urllib.request.urlopen(d["url"], timeout=5) as r:
+    assert r.status == 200
+PYEOF
+cd "$PROJ" && python3 - "$PKG/server/agora_mcp.py" <<'PYEOF' && ok "agora_who 报告 http 端口" || fail "agora_who 报告 http 端口"
+import json, subprocess, sys
+p = subprocess.Popen(["python3", sys.argv[1]], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+def rpc(m, ps=None, i=1):
+    p.stdin.write(json.dumps({"jsonrpc":"2.0","id":i,"method":m,"params":ps or {}})+"\n"); p.stdin.flush()
+    return json.loads(p.stdout.readline())
+rpc("initialize", {})
+r = json.loads(rpc("tools/call", {"name":"agora_who","arguments":{}}, 2)["result"]["content"][0]["text"])
+assert r.get("http", {}).get("port", 0) > 0 and r["http"]["url"].startswith("http://"), r.get("http")
+p.stdin.close()
+PYEOF
+kill $HPID2 2>/dev/null || true
+for i in 1 2 3 4 5 6 7 8 9 10; do [[ -f "$AGORA_HOME/.git/httpd.json" ]] || break; sleep 0.3; done
+[[ -f "$AGORA_HOME/.git/httpd.json" ]] && fail "退出后运行文件已清理" || ok "退出后运行文件已清理"
+# 运行文件绝不能进 git（跨机同步会带错端口）
+git -C "$AGORA_HOME" status --porcelain | grep -q "httpd.json" && fail "运行文件未入库" || ok "运行文件未入库"
 
 echo "===== doctor ====="
 OUT=$(bash "$AGORA_HOME/scripts/doctor.sh" 2>&1)
