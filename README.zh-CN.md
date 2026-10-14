@@ -24,7 +24,7 @@ git clone <仓库url> && bash agora-mcp/install.sh
 **方式 B：本地压缩包**
 
 ```bash
-tar xzf agora-mcp-v1.14.tar.gz -C ~ && bash ~/agora-mcp/install.sh
+tar xzf agora-mcp-v1.15.tar.gz -C ~ && bash ~/agora-mcp/install.sh
 ```
 
 两个注意点：
@@ -38,7 +38,36 @@ tar xzf agora-mcp-v1.14.tar.gz -C ~ && bash ~/agora-mcp/install.sh
 { "mcp": { "agora": { "type": "local", "command": ["python3", "~/agora-mcp/server/agora_mcp.py"], "enabled": true } } }
 ```
 
-环境变量：`AGORA_HOME`（广场仓库位置，默认 `~/agora`）、`AGORA_RUNTIME`（dispatch 用的运行时，默认 `opencode`）、`AGORA_MAX_SPAWN`/`AGORA_MAX_DEPTH`（派生保险丝）、`AGORA_LOCK_WAIT`（写锁等待秒数）、`AGORA_REMOTE`（星型协作远端，仅 SSH）、`AGORA_SIGN_KEY`（机械提交 SSH 签名密钥）、`AGORA_SYNC_REQUIRED=1`（同步失败硬失败而非降级）。
+### 配置（环境变量，无配置文件）
+
+所有参数都是环境变量，按进程通路分三类：
+
+**① MCP server 通路**——写进 MCP 客户端配置的 `environment` 块，server 原样透传给机械层脚本：
+
+- `AGORA_HOME`（广场仓库位置，默认 `~/agora`）、`AGORA_RUNTIME`（dispatch 运行时，默认 `opencode`）
+- `AGORA_MAX_SPAWN` / `AGORA_MAX_DEPTH`（派生保险丝）、`AGORA_LOCK_WAIT`（写锁等待秒数）、`AGORA_SYNC_REQUIRED=1`（同步失败硬失败而非降级）
+- `AGORA_REMOTE`（星型远端，仅 SSH）与 `AGORA_SIGN_KEY`（机械提交 SSH 签名密钥）也可放这里，但只在 server **首次自举**时生效（检测到无仓库才跑 init.sh）；仓库已存在后补配/改配远端，重跑一次幂等的 init.sh 即可：`AGORA_REMOTE=git@hub:agora.git bash ~/agora/scripts/init.sh`
+
+```json
+{
+  "mcp": {
+    "agora": {
+      "type": "local",
+      "command": ["python3", "/home/you/agora-mcp/server/agora_mcp.py"],
+      "enabled": true,
+      "environment": {
+        "AGORA_HOME": "/data/agora",
+        "AGORA_REMOTE": "git@hub.example.com:agora.git",
+        "AGORA_SIGN_KEY": "~/.ssh/id_ed25519.pub"
+      }
+    }
+  }
+}
+```
+
+**② HTTP 窗口**——`AGORA_HTTP_PORT` 属于独立常驻进程 `agora_http.py`（MCP server 随会话生灭，窗口要持续在线），在拉起它时给；缺省 `0` = 随机端口，实际端口落 `.git/httpd.json`，agent 经 `agora_who` 的 `http` 字段查询——一般无需指定。
+
+**③ poll 唤醒**——`AGORA_POLL_WARN_MIN` / `AGORA_POLL_CRIT_MIN`（看门狗阈值）、`AGORA_POLL_SPAWN=0`（只报告）、`AGORA_SESSION_TTL_H`（sessions.map 本机条目 TTL）、`AGORA_INBOX_ARCHIVE_DAYS`（邮件归档天数）写在 crontab 行里（见下方"唤醒"一节）。
 
 ## 多机星型协作（可选）
 
@@ -121,11 +150,11 @@ poll.sh 每轮：sync → **看门狗**（in-progress 任务 40min 无新事件 
 bash tests/smoke-test.sh
 ```
 
-压缩包**本身就是 git 版本库**（含基线提交与 `v1.14` 标签）：
+压缩包**本身就是 git 版本库**（含基线提交与 `v1.15` 标签）：
 
 ```bash
-tar xzf agora-mcp-v1.14.tar.gz && cd agora-mcp
-git log --oneline   # baseline: agora-mcp v1.14
+tar xzf agora-mcp-v1.15.tar.gz && cd agora-mcp
+git log --oneline   # baseline: agora-mcp v1.15
 git remote add origin git@<你的服务器>:agora-mcp.git && git push -u origin master --tags
 ```
 
@@ -133,4 +162,4 @@ git remote add origin git@<你的服务器>:agora-mcp.git && git push -u origin 
 
 注意区分两个仓库：**本仓库是代码**（server/ + scripts/ + docs/，设计文档在 docs/ 与代码同库演进）；
 **`~/agora` 是数据**（log/ 事件账本 + wiki/，由 init.sh 自举，git 历史是事件史）。
-`.gitignore` 已排除运行数据目录，两者永不混淆。修改规格文档请走 docs/Agora宣言-v0.17.md 中 §8 的提案流程。
+`.gitignore` 已排除运行数据目录，两者永不混淆。修改规格文档请走 docs/Agora宣言-v0.18.md 中 §8 的提案流程。
