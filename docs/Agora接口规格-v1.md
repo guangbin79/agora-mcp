@@ -112,6 +112,7 @@ cwd 未命中名册时：
 | 参数 | 类型 | 必填 | 说明 |
 |---|---|---|---|
 | `view` | enum | 可选 | `todo/waiting/in-progress/blocked/all`，默认 `all`（waiting = 依赖未满足，v1.18 起纳入枚举） |
+| `owner` | string | 可选 | 按认领者过滤任务行（v1.19）。`me` = 服务端按 cwd 裁决的当前身份——个人任务队列视角；可与 `view` 组合。todo/waiting 视图的行无归属概念，过滤后通常只剩表头 |
 | `project` | string | 可选 | 按项目过滤 |
 
 返回：渲染好的 markdown 文本 + 各列计数。MUST NOT 触发重推导（读 board/ 现有文件；新鲜度由 §4.1 的同步推导保证）。
@@ -278,6 +279,7 @@ v1.16（2026-10-14）——文档批：README 重写配置章（三类参数通�
 
 v1.17（2026-10-14）——编排鲁棒性批：§8.1 通知桥落地（scripts/notify-opencode.sh，去抖持久化、不可达/无映射静默、desktop 兜底、最新登记生效）；§11 看门狗升级阶梯（wn 账本推导跨机一致，escalated → 可选自动 reopened，配套宣言 §5.3 watchdog 特许）+ 跨机撞窗守卫 + .live 滞留回溯 mention 派单方。测试套件 84 项断言。
 - v1.18（2026-10-14）——审核修复批：§4.3 agora_board 补 waiting 视图（HTTP 窗口同步为四视图）；§4.2 check_mail 的 since 水位比较改"位置匹配优先 + (日期,行号) 数值回退"（修字典序比较在两位行号处的错误，参数货币不变）；post.sh 任务匹配加词边界（修 `task:gt-a` 前缀撞 `task:gt-ab` 造成的假冲突标注/假幂等）；task-create 单行字段禁换行（frontmatter 注入防御）；sync pre 合并失败自动 `merge --abort`（防 MERGING 残留导致冲突标记被下次提交卷入账本）+ doctor 新增"合并中断"检查（--fix 可恢复）；防御纵深全覆盖：init 自举即装 pre-commit hook（此前仅手动 install-hooks.sh），护栏从 log/ 扩至 log/ board/ wiki/（wiki-write 补机械层凭证），.gitattributes 补 sessions.map 与 allowed_signers 的 union 合并；§5 instructions 精简（长 AGORA_HOME 路径下仍 <600 字）；agora_post 描述对齐实现（撞车为 derived 标注 claim_conflict，非错误码）；§4.8 task_create 补同锁看板重推导（opencode v2 实测发现：创建后 board 不新鲜，agent 需 doctor --fix 才见新任务）。测试套件 103 项断言（含 opencode 1.19 真实安装连接与 agent 自主开场仪式回归）。
+- v1.19（2026-10-14）——§4.3 agora_board 新增可选 `owner` 参数（`me` = 服务端身份裁决的当前身份）：个人任务队列视角，收敛多 agent 场景的上下文成本与误认领面；边界匹配防名字前缀碰撞。配套：blocked 视图行补渲染认领者（与 in-progress 对齐，owner 过滤依赖行内归属信息）。纯追加，既有调用零改动。
 
 ## 8. 附录：宿主适配器（可选，不属于协议面）
 

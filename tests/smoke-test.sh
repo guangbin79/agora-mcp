@@ -673,6 +673,39 @@ assert n < 600, n
 p.stdin.close()
 PYEOF
 
+echo "===== owner 过滤（个人任务队列，v1.18） ====="
+OUT=$(TITLE="我的活" TC);  MINE=$(echo "$OUT"  | sed -n 's/.*"task":"\(gt-[0-9a-f]*\)".*/\1/p')
+OUT=$(TITLE="别人的活" TC); THEIRS=$(echo "$OUT" | sed -n 's/.*"task":"\(gt-[0-9a-f]*\)".*/\1/p')
+OUT=$(TITLE="我的受阻活" TC); MINEB=$(echo "$OUT" | sed -n 's/.*"task":"\(gt-[0-9a-f]*\)".*/\1/p')
+POST tester@proj --event claimed --task "$MINE" >/dev/null
+POST rival@proj2 --event claimed --task "$THEIRS" >/dev/null
+POST tester@proj --event claimed --task "$MINEB" >/dev/null
+POST tester@proj --event blocked --task "$MINEB" --reason "等依赖" >/dev/null
+grep -q "$MINEB — tester@proj" "$AGORA_HOME/board/blocked.md" \
+  && ok "blocked 行渲染认领者" || fail "blocked 行渲染认领者"
+cd "$PROJ" && python3 - "$PKG/server/agora_mcp.py" "$MINE" "$THEIRS" "$MINEB" <<'PYEOF' && ok "owner 过滤（me/他人/组合）" || fail "owner 过滤（me/他人/组合）"
+import json, subprocess, sys
+srv, mine, theirs, mineb = sys.argv[1:5]
+p = subprocess.Popen(["python3", srv], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+def rpc(m, ps=None, i=[0]):
+    i[0] += 1
+    p.stdin.write(json.dumps({"jsonrpc":"2.0","id":i[0],"method":m,"params":ps or {}})+"\n"); p.stdin.flush()
+    return json.loads(p.stdout.readline())
+rpc("initialize", {})
+def board(**kw):
+    return json.loads(rpc("tools/call", {"name":"agora_board","arguments":kw})["result"]["content"][0]["text"])["board"]
+# owner=me（服务端裁决为 tester@proj）：见我不见他
+me = board(view="in-progress", owner="me")["in-progress"]
+assert mine in me and theirs not in me, me
+# 指定他人：见他不见我
+other = board(view="in-progress", owner="rival@proj2")["in-progress"]
+assert theirs in other and mine not in other, other
+# owner × view=all 组合：blocked 视图同样过滤
+allv = board(view="all", owner="me")
+assert mineb in allv["blocked"] and mine in allv["in-progress"] and theirs not in allv["in-progress"], allv
+p.stdin.close()
+PYEOF
+
 echo
 echo "===== 结果: $PASS 通过, $FAIL 失败 ====="
 rm -rf "$T"

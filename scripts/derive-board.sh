@@ -160,7 +160,7 @@ for tid in sorted(tasks):
         line = f"{tid} — {t['owner']}"
         if tid in last_progress: line += f" — 进展: {last_progress[tid]}"
         cols["in-progress"].append(line)
-    elif t["state"] == "blocked": cols["blocked"].append(tid)
+    elif t["state"] == "blocked": cols["blocked"].append(f"{tid} — {t['owner']}" if t.get("owner") else tid)
     elif t["state"] == "todo":
         unmet = [d for d in task_deps.get(tid, []) if tasks.get(d, {}).get("state") != "done"]
         if unmet: cols["waiting"].append(f"{tid}（等待: {', '.join(unmet)}）")

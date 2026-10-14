@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""agora-mcp —— Git 广场 MCP server（规格 agora-mcp v1.17）
+"""agora-mcp —— Git 广场 MCP server（规格 agora-mcp v1.18）
 零依赖 stdio NDJSON JSON-RPC 实现。薄壳：所有逻辑落到 scripts/。
 """
 import sys, os, json, glob, subprocess, hashlib, re
@@ -54,9 +54,10 @@ TOOLS = [
    "required": ["event"]}},
  {"name": "agora_check_mail", "description": "查收件箱（拉模式；读前自动与远端尽力同步，多机场景默认见新）。",
   "inputSchema": {**T, "properties": {"since": {"type": "string", "description": "水位指针，只返回其后新邮件"}}}},
- {"name": "agora_board", "description": "看板快照（含 parent 计划进度聚合 N/M 完成；读前自动与远端尽力同步）。",
+ {"name": "agora_board", "description": "看板快照（含 parent 计划进度聚合 N/M 完成；读前自动与远端尽力同步）。owner 参数按认领者过滤任务行，owner=me 即服务端裁决的当前身份（个人任务队列）。",
   "inputSchema": {**T, "properties": {
     "view": {"type": "string", "enum": ["todo","waiting","in-progress","blocked","all"]},
+    "owner": {"type": "string", "description": "按认领者过滤（如 kai@proj）；me = 当前身份（服务端按 cwd 裁决）"},
     "project": {"type": "string"}}}},
  {"name": "agora_wiki_read", "description": "读 wiki 页。",
   "inputSchema": {**T, "properties": {"path": {"type": "string"}}, "required": ["path"]}},
@@ -153,10 +154,20 @@ def call(name, a):
     if name == "agora_board":
         soft_sync()
         views = ["todo","waiting","in-progress","blocked"] if a.get("view","all")=="all" else [a["view"]]
+        owner = a.get("owner")
+        if owner == "me":
+            if not ACTOR: return None, need_actor(write=False)
+            owner = ACTOR
         out = {}
         for v in views:
             p = f"{HOME}/board/{v}.md"
-            out[v] = open(p, encoding="utf-8").read() if os.path.exists(p) else ""
+            txt = open(p, encoding="utf-8").read() if os.path.exists(p) else ""
+            if owner and txt:
+                # 任务行形如 "- gt-xxxx — kai@proj — 进展: …"；边界匹配防名字前缀碰撞（kai vs kaito）
+                pat = re.compile(rf"— {re.escape(owner)}(?: —|$)")
+                txt = "".join(l for l in txt.splitlines(keepends=True)
+                              if not l.startswith("- ") or pat.search(l.rstrip("\n")))
+            out[v] = txt
         return {"board": out}, None
     if name == "agora_wiki_read":
         p = a["path"]
@@ -248,7 +259,7 @@ for line in sys.stdin:
     if method == "initialize":
         reply(mid, {"protocolVersion": req.get("params",{}).get("protocolVersion","2025-03-26"),
                     "capabilities": {"tools": {}},
-                    "serverInfo": {"name": "agora-mcp", "version": "agora-mcp v1.17"},
+                    "serverInfo": {"name": "agora-mcp", "version": "agora-mcp v1.18"},
                     "instructions": INSTRUCTIONS})
     elif method == "notifications/initialized" or method == "ping":
         if mid is not None: reply(mid, {})

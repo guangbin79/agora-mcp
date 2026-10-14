@@ -24,7 +24,7 @@ git clone <repo-url> && bash agora-mcp/install.sh
 **Option B: local tarball**
 
 ```bash
-tar xzf agora-mcp-v1.17.tar.gz -C ~ && bash ~/agora-mcp/install.sh
+tar xzf agora-mcp-v1.18.tar.gz -C ~ && bash ~/agora-mcp/install.sh
 ```
 
 Two caveats:
@@ -147,17 +147,17 @@ Optional notify bridge `notify-opencode.sh`: watches the inbox and injects a "yo
 
 **Optional: shared remote + signed commits.** Set `AGORA_REMOTE` (SSH only — `git@host:agora.git`; https is rejected) and `AGORA_SIGN_KEY` when running `init.sh` to enable pull-before-write / push-after-write sync (union merge, push failure never loses events) and SSH-signed mechanical commits (verified by `doctor` against `wiki/allowed_signers`). Details: `docs/Agora接口规格-v1.md` §9.
 
-Run the self-contained test suite (103 assertions: twelve tools, event lifecycle, idempotency window, verify gate, claim conflict, plan rollup, attach evidence chain, concurrency, MCP protocol, true two-machine sync isolation, read-path soft-sync, agora_who roster, machine-scoped dispatch, SSH signing, HTTP read-only window, poll wake-up/watchdog-ladder/housekeeping, notify bridge, dispatch injection defense, incremental derivation, evidence-ref push audit):
+Run the self-contained test suite (105 assertions: twelve tools, event lifecycle, idempotency window, verify gate, claim conflict, plan rollup, attach evidence chain, concurrency, MCP protocol, true two-machine sync isolation, read-path soft-sync, agora_who roster, machine-scoped dispatch, SSH signing, HTTP read-only window, poll wake-up/watchdog-ladder/housekeeping, notify bridge, dispatch injection defense, incremental derivation, evidence-ref push audit, owner-filtered personal queue):
 
 ```bash
 bash tests/smoke-test.sh
 ```
 
-The tarball **is** the git repository (baseline commit + `v1.17` tag included):
+The tarball **is** the git repository (baseline commit + `v1.18` tag included):
 
 ```bash
-tar xzf agora-mcp-v1.17.tar.gz && cd agora-mcp
-git log --oneline   # baseline: agora-mcp v1.17
+tar xzf agora-mcp-v1.18.tar.gz && cd agora-mcp
+git log --oneline   # baseline: agora-mcp v1.18
 git remote add origin git@<your-server>:agora-mcp.git && git push -u origin master --tags
 ```
 
