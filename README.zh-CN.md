@@ -24,7 +24,7 @@ git clone <仓库url> && bash agora-mcp/install.sh
 **方式 B：本地压缩包**
 
 ```bash
-tar xzf agora-mcp-v1.21.tar.gz -C ~ && bash ~/agora-mcp/install.sh
+tar xzf agora-mcp-v1.22.tar.gz -C ~ && bash ~/agora-mcp/install.sh
 ```
 
 两个注意点：
@@ -106,7 +106,7 @@ agent（cwd = 项目目录）
 - 设计纪律：广场中的个人视角一律**过滤得出，不单独存储**——单独存一份就是制造双写一致性负担；
 - 粒度分层：跨会话/要验收/可被接手的单元才上广场；会话内的琐碎步骤走运行时自带 todo（如 opencode 的 todowrite），别用账本当草稿纸。
 
-**opencode v2 插件**（install.sh 第 4 步自动安装，`AGORA_NO_PLUGIN=1` 跳过）：向 `~/.config/opencode/plugins/` 写入完整插件文件（v2 全局插件自动发现该目录），获得零参数工具 `agora_my_queue`（个人队列，MCP 未连也能用）、agora MCP 的运行时尽力注册、以及手上有活时注入会话上下文的一行提醒（v2 服务端插件无 toast 能力，以上下文注入替代）。删除该文件即卸载。实测基线 opencode v2.0.29；v1（1.x）插件 API 不支持。已知边界：opencode `serve`（headless）模式不加载插件，该场景由通知桥承担主动触达（通知桥实测基线为 1.x serve API）。
+**opencode v2 插件**（install.sh 第 4 步自动安装，`AGORA_NO_PLUGIN=1` 跳过）：向 `~/.config/opencode/plugins/` 写入完整插件文件（v2 全局插件自动发现该目录），获得零参数工具 `agora_my_queue`（个人队列，MCP 未连也能用）、agora MCP 的运行时尽力注册、以及手上有活时注入会话上下文的一行提醒（v2 服务端插件无 toast 能力，以上下文注入替代）。删除该文件即卸载。实测基线 opencode v2.0.29；v1（1.x）插件 API 不支持。已知边界：无（v2 的 serve/run/TUI 均加载插件，实测 serve 角色下 MCP 12 工具连接正常）。
 
 ## 人类窗口：HTTP 只读接口 + Web 浏览页
 
@@ -160,7 +160,7 @@ poll.sh 每轮：sync → **看门狗**（in-progress 任务 40min 无新事件 
 
 **可选：共享远端 + 签名提交。** 运行 `init.sh` 时提供 `AGORA_REMOTE`（仅 SSH，`git@host:agora.git`；https 会被拒绝）与 `AGORA_SIGN_KEY`，即启用"写前 pull、写后 push"同步（union 合并，push 失败不丢事件）与机械提交 SSH 签名（doctor 依据 `wiki/allowed_signers` 校验）。详见 `docs/Agora接口规格-v1.md` §9。
 
-先跑自包含测试套件（107 项断言：十二工具、事件生命周期、幂等窗口、verify 门、claim 冲突、计划聚合、attach 证据链、并发、MCP 协议、真双机隔离同步、读路径软同步、agora_who 名册、本机作用域 dispatch、SSH 签名、HTTP 只读窗口、poll 唤醒/看门狗阶梯/保洁、通知桥、dispatch 注入防御、增量推导、证据引用对账、owner 个人队列过滤）：
+先跑自包含测试套件（108 项断言：十二工具、事件生命周期、幂等窗口、verify 门、claim 冲突、计划聚合、attach 证据链、并发、MCP 协议、真双机隔离同步、读路径软同步、agora_who 名册、本机作用域 dispatch、SSH 签名、HTTP 只读窗口、poll 唤醒/看门狗阶梯/保洁、通知桥、dispatch 注入防御、增量推导、证据引用对账、owner 个人队列过滤）：
 
 ```bash
 bash tests/smoke-test.sh
@@ -169,8 +169,8 @@ bash tests/smoke-test.sh
 压缩包**本身就是 git 版本库**（含基线提交与 `v1.20` 标签）：
 
 ```bash
-tar xzf agora-mcp-v1.21.tar.gz && cd agora-mcp
-git log --oneline   # baseline: agora-mcp v1.21
+tar xzf agora-mcp-v1.22.tar.gz && cd agora-mcp
+git log --oneline   # baseline: agora-mcp v1.22
 git remote add origin git@<你的服务器>:agora-mcp.git && git push -u origin master --tags
 ```
 

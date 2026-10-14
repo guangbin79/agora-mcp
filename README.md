@@ -24,7 +24,7 @@ git clone <repo-url> && bash agora-mcp/install.sh
 **Option B: local tarball**
 
 ```bash
-tar xzf agora-mcp-v1.21.tar.gz -C ~ && bash ~/agora-mcp/install.sh
+tar xzf agora-mcp-v1.22.tar.gz -C ~ && bash ~/agora-mcp/install.sh
 ```
 
 Two caveats:
@@ -106,7 +106,7 @@ There is no separate "personal list" module — **your queue is a projection of 
 - Design discipline: personal views in the forum are **always filtered, never stored separately** — a second copy would create a dual-write consistency burden;
 - Layering by granularity: only cross-session / verifiable / handoff-able units belong in the forum; session-scoped scratch steps stay in the runtime's own todo (e.g. opencode's todowrite) — don't use the ledger as scratch paper.
 
-**opencode v2 plugin** (installed by install.sh step 4, skip with `AGORA_NO_PLUGIN=1`): writes the full plugin file into `~/.config/opencode/plugins/` (auto-discovered by v2), giving you the zero-arg `agora_my_queue` tool (personal queue — works even when MCP is disconnected), best-effort runtime MCP registration, and a one-line queue reminder injected into the session context when you have open tasks (v2 server plugins have no toast API, so context injection takes its place). Delete the file to uninstall. Verified against opencode v2.0.29; the v1 (1.x) plugin API is not supported. Known boundary: opencode `serve` (headless) mode does not load plugins — the notify bridge covers proactive delivery there (the bridge's verified baseline is the 1.x serve API).
+**opencode v2 plugin** (installed by install.sh step 4, skip with `AGORA_NO_PLUGIN=1`): writes the full plugin file into `~/.config/opencode/plugins/` (auto-discovered by v2), giving you the zero-arg `agora_my_queue` tool (personal queue — works even when MCP is disconnected), best-effort runtime MCP registration, and a one-line queue reminder injected into the session context when you have open tasks (v2 server plugins have no toast API, so context injection takes its place). Delete the file to uninstall. Verified against opencode v2.0.29; the v1 (1.x) plugin API is not supported. Known boundary: none — v2 loads plugins in serve/run/TUI alike (MCP connected with all 12 tools under the serve role in testing).
 
 ## Human window: read-only HTTP API + web page
 
@@ -160,17 +160,17 @@ Optional notify bridge `notify-opencode.sh`: watches the inbox and injects a "yo
 
 **Optional: shared remote + signed commits.** Set `AGORA_REMOTE` (SSH only — `git@host:agora.git`; https is rejected) and `AGORA_SIGN_KEY` when running `init.sh` to enable pull-before-write / push-after-write sync (union merge, push failure never loses events) and SSH-signed mechanical commits (verified by `doctor` against `wiki/allowed_signers`). Details: `docs/Agora接口规格-v1.md` §9.
 
-Run the self-contained test suite (107 assertions: twelve tools, event lifecycle, idempotency window, verify gate, claim conflict, plan rollup, attach evidence chain, concurrency, MCP protocol, true two-machine sync isolation, read-path soft-sync, agora_who roster, machine-scoped dispatch, SSH signing, HTTP read-only window, poll wake-up/watchdog-ladder/housekeeping, notify bridge, dispatch injection defense, incremental derivation, evidence-ref push audit, owner-filtered personal queue):
+Run the self-contained test suite (108 assertions: twelve tools, event lifecycle, idempotency window, verify gate, claim conflict, plan rollup, attach evidence chain, concurrency, MCP protocol, true two-machine sync isolation, read-path soft-sync, agora_who roster, machine-scoped dispatch, SSH signing, HTTP read-only window, poll wake-up/watchdog-ladder/housekeeping, notify bridge, dispatch injection defense, incremental derivation, evidence-ref push audit, owner-filtered personal queue):
 
 ```bash
 bash tests/smoke-test.sh
 ```
 
-The tarball **is** the git repository (baseline commit + `v1.21` tag included):
+The tarball **is** the git repository (baseline commit + `v1.22` tag included):
 
 ```bash
-tar xzf agora-mcp-v1.21.tar.gz && cd agora-mcp
-git log --oneline   # baseline: agora-mcp v1.21
+tar xzf agora-mcp-v1.22.tar.gz && cd agora-mcp
+git log --oneline   # baseline: agora-mcp v1.22
 git remote add origin git@<your-server>:agora-mcp.git && git push -u origin master --tags
 ```
 

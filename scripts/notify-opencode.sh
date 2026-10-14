@@ -1,21 +1,28 @@
 #!/usr/bin/env bash
-# notify-opencode.sh —— 规格 §8.1 通知桥：监听 inbox/ → 向运行中的 opencode 会话注入提醒
+# notify-opencode.sh —— 规格 §8.1 通知桥：监听 inbox/ → 向运行中的 opencode v2 会话注入提醒
 #
 # 用法: nohup bash notify-opencode.sh >/dev/null 2>&1 &   （或 systemd --user）
 #       notify-opencode.sh --once   扫一轮就退（测试/调试）
 # 环境:
-#   AGORA_OPENCODE_URL       opencode TUI server（默认 http://localhost:4096）
+#   AGORA_OPENCODE_URL       opencode v2 server（默认 http://127.0.0.1:4096）
+#   AGORA_OPENCODE_USERNAME  Basic 认证用户名（默认 $OPENCODE_SERVER_USERNAME 或 opencode）
+#   AGORA_OPENCODE_PASSWORD  Basic 认证密码（默认 $OPENCODE_SERVER_PASSWORD）；
+#                            v2 serve 未显式设密码时会生成随机密码打印在启动日志——
+#                            桥无法获知，该情形下注入一律 401 静默跳过。
+#                            要让桥可用：serve 启动时显式 export OPENCODE_SERVER_PASSWORD。
 #   AGORA_NOTIFY_DEBOUNCE_S  同实体去抖秒数（默认 60，持久化在 .git/notify-wm/，重启不重置）
 #   AGORA_NOTIFY_POLL_S      无 inotifywait 时的轮询间隔（默认 5 秒）
 #   AGORA_NOTIFY_MODE        opencode（默认）| desktop（notify-send 桌面通知，零开发兜底）
 # 行为契约（规格 §8.1）：
 #   - 只递提醒不递内容：消息体只含 ref 指针，正文由 agent 主动 agora_check_mail 拉取
 #   - 注入按实体去抖；查不到 sessions.map 映射（会话未在跑）静默跳过
-#   - TUI server 不可达静默跳过，不阻塞、不重试风暴
-#   - MUST NOT 用 HTTP API 创建会话（opencode 已知缺陷：API 会话拿不到 MCP 工具）
+#   - server 不可达/认证失败静默跳过，不阻塞、不重试风暴
+#   - 投递方式 delivery=queue：不打断正在跑的回合，空闲会话入队即唤起
 set -uo pipefail
 AGORA_HOME="${AGORA_HOME:-$HOME/agora}"
-URL="${AGORA_OPENCODE_URL:-http://localhost:4096}"
+URL="${AGORA_OPENCODE_URL:-http://127.0.0.1:4096}"
+OC_USER="${AGORA_OPENCODE_USERNAME:-${OPENCODE_SERVER_USERNAME:-opencode}}"
+OC_PASS="${AGORA_OPENCODE_PASSWORD:-${OPENCODE_SERVER_PASSWORD:-}}"
 DEBOUNCE="${AGORA_NOTIFY_DEBOUNCE_S:-60}"
 POLL_S="${AGORA_NOTIFY_POLL_S:-5}"
 MODE="${AGORA_NOTIFY_MODE:-opencode}"
@@ -36,17 +43,24 @@ notify() { # $1=entity $2=ref
     command -v notify-send >/dev/null 2>&1 && \
       notify-send "Agora 广场" "@$ent 有新消息（$ref），请 agora_check_mail" 2>/dev/null
   else
-    python3 - "$URL" "$sid" "$ref" <<'PY'
-import sys, json, urllib.request
+    OC_USER="$OC_USER" OC_PASS="$OC_PASS" python3 - "$URL" "$sid" "$ref" <<'PY'
+import sys, json, os, base64, urllib.request
 url, sid, ref = sys.argv[1:4]
-body = json.dumps({"parts": [{"type": "text",
-    "text": f"广场有新 @你的消息（{ref}），请 agora_check_mail"}]}).encode()
+body = json.dumps({
+    "text": f"广场有新 @你的消息（{ref}），请 agora_check_mail",
+    "delivery": "queue",
+}).encode()
+headers = {"Content-Type": "application/json"}
+pw = os.environ.get("OC_PASS", "")
+if pw:
+    tok = base64.b64encode(f"{os.environ.get('OC_USER', 'opencode')}:{pw}".encode()).decode()
+    headers["Authorization"] = f"Basic {tok}"
 try:
     urllib.request.urlopen(urllib.request.Request(
-        f"{url}/session/{sid}/message", data=body,
-        headers={"Content-Type": "application/json"}), timeout=5)
+        f"{url}/api/session/{sid}/prompt", data=body,
+        headers=headers), timeout=5)
 except Exception:
-    pass  # 不可达静默跳过
+    pass  # 不可达/认证失败静默跳过
 PY
   fi
   echo "$now" > "$sf"   # 按注入频率去抖：记录尝试即占频

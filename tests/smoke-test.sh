@@ -431,8 +431,9 @@ import sys, http.server
 logf, portf = sys.argv[1], sys.argv[2]
 class H(http.server.BaseHTTPRequestHandler):
     def do_POST(self):
-        n = int(self.headers.get("Content-Length") or 0); self.rfile.read(n)
-        open(logf, "a").write(self.path + "\n")
+        n = int(self.headers.get("Content-Length") or 0); body = self.rfile.read(n).decode()
+        auth = self.headers.get("Authorization") or "-"
+        open(logf, "a").write(self.path + " | auth=" + auth + " | " + body + "\n")
         self.send_response(200); self.end_headers(); self.wfile.write(b"{}")
     def log_message(self, *a): pass
 srv = http.server.HTTPServer(("127.0.0.1", 0), H)
@@ -443,11 +444,13 @@ MOCK_PID=$!
 for i in $(seq 1 20); do [[ -s "$T/mock-port" ]] && break; sleep 0.2; done
 MOCK_PORT=$(cat "$T/mock-port")
 printf '%s tester ses-test %s\n' "$(hostname)" "$(date -Iseconds)" >> "$AGORA_HOME/scripts/sessions.map"
-NB() { AGORA_OPENCODE_URL="http://127.0.0.1:$1" bash "$AGORA_HOME/scripts/notify-opencode.sh" --once; }
+NB() { AGORA_OPENCODE_URL="http://127.0.0.1:$1" AGORA_OPENCODE_PASSWORD=testpw bash "$AGORA_HOME/scripts/notify-opencode.sh" --once; }
 echo "- from:x | ts:y | ref:log/z.md:1 | summary:ack gt-0000" > "$AGORA_HOME/inbox/tester/$(date +%s%N).md"
 NB "$MOCK_PORT"
-grep -q "/session/ses-test/message" "$MOCK_LOG" \
-  && ok "通知桥注入运行中会话（仅提醒）" || fail "通知桥注入运行中会话"
+grep -q "/api/session/ses-test/prompt" "$MOCK_LOG" \
+  && ok "通知桥注入运行中会话（v2 /api prompt 端点）" || fail "通知桥注入运行中会话"
+grep -q '"delivery": "queue"' "$MOCK_LOG" && grep -q "auth=Basic" "$MOCK_LOG" \
+  && ok "通知桥 queue 投递 + Basic 认证" || fail "通知桥 queue 投递 + Basic 认证"
 echo "- from:x | ts:y | ref:log/z.md:2 | summary:ack gt-0000" > "$AGORA_HOME/inbox/tester/$(date +%s%N)n2.md"
 NB "$MOCK_PORT"
 [[ $(grep -c "/session/" "$MOCK_LOG") == 1 ]] && ok "通知桥 60s 去抖" || fail "通知桥 60s 去抖"
