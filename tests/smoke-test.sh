@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # smoke-test.sh —— agora-mcp 接口冒烟测试套件（自包含，不污染真实广场）
 # 用法: bash tests/smoke-test.sh   （AGORA_PKG 缺省取包根目录）
-# 覆盖：九工具 + 事件全生命周期 + 幂等窗口 + 验证门 + 并发 + doctor + MCP 协议
+# 覆盖：十二工具 + 事件全生命周期 + 幂等窗口 + 验证门 + 并发 + doctor + MCP 协议 + 双机同步 + HTTP 只读窗口
 # 退出码：0 全绿；1 有 FAIL
 set -u
 PKG="${AGORA_PKG:-$(cd "$(dirname "$0")/.." && pwd)}"
@@ -211,6 +211,44 @@ if [[ -f "$T/id_ed25519.pub" ]]; then
 else
   echo "warn | ssh-keygen 不可用，跳过签名测试"
 fi
+
+echo "===== HTTP 只读窗口（agora-http） ====="
+HPORT=18471
+AGORA_HOME="$AGORA_HOME" AGORA_HTTP_PORT=$HPORT python3 "$PKG/server/agora_http.py" >/dev/null 2>&1 &
+HPID=$!
+sleep 1
+python3 - "$HPORT" "$PLAN" "$B" <<'PYEOF' && ok "HTTP 七端点 + Web 页" || fail "HTTP 七端点 + Web 页"
+import json, sys, urllib.request
+port, plan, taskb = sys.argv[1], sys.argv[2], sys.argv[3]
+B = f"http://127.0.0.1:{port}"
+def get(p):
+    with urllib.request.urlopen(B+p, timeout=8) as r: return r.status, r.read()
+s, body = get("/")
+assert s == 200 and "Agora 广场".encode() in body  # Web 页可达
+s, b = get("/api/board"); d = json.loads(b)
+assert "2/3 完成" in d["views"]["todo"], d["views"]["todo"][:200]
+s, b = get("/api/tasks"); d = json.loads(b)
+assert any(t.get("id") == plan for t in d["tasks"])
+s, b = get("/api/task?id="+plan); d = json.loads(b)  # 计划根只有页面没有事件
+assert "计划根" in d["page"] and d["events"] == []
+s, b = get("/api/task?id="+taskb); d = json.loads(b)  # B 有完整 7 事件链
+assert len(d["events"]) == 7 and d["events"][0]["ref"].startswith("log/")
+s, b = get("/api/events?limit=10"); d = json.loads(b)
+assert d["count"] > 0 and d["events"][-1]["actor"]
+s, b = get("/api/entities"); d = json.loads(b)
+assert any(e["name"] == "tester" and e["can_spawn"] for e in d["roster"])
+s, b = get("/api/inbox?name=tester"); d = json.loads(b)
+assert d["count"] >= 0 and d["name"] == "tester"
+PYEOF
+python3 - "$HPORT" <<'PYEOF' && ok "wiki 路径穿越被拒（400）" || fail "wiki 路径穿越被拒"
+import sys, urllib.request, urllib.error
+try:
+    urllib.request.urlopen(f"http://127.0.0.1:{sys.argv[1]}/api/wiki?path=../log/x.md", timeout=5)
+    raise SystemExit(1)
+except urllib.error.HTTPError as e:
+    assert e.code == 400, e.code
+PYEOF
+kill $HPID 2>/dev/null || true
 
 echo "===== doctor ====="
 OUT=$(bash "$AGORA_HOME/scripts/doctor.sh" 2>&1)
