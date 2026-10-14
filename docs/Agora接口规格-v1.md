@@ -116,6 +116,8 @@ cwd 未命中名册时：
 
 返回：渲染好的 markdown 文本 + 各列计数。MUST NOT 触发重推导（读 board/ 现有文件；新鲜度由 §4.1 的同步推导保证）。
 
+推导层实现为**增量重放**（v1.15）：`.git/derive-cache.json` 记各分片水位（已处理行数 + 前缀 sha1）与重放后状态，再跑时只解析追加行；前缀哈希不符（union 合并重排/脏写）、新分片插入已缓存分片之前、分片删除、任务页集合变化、缓存损坏——一律自动退回全量重放。缓存是本机文件不进同步，对调用方完全透明（输出与全量重放逐字节一致）。
+
 ### 4.4 `agora_wiki_read` — 读 wiki 页
 
 参数：`path`（wiki/ 内相对路径）。
@@ -156,7 +158,10 @@ cwd 未命中名册时：
 
 行为（落到 `scripts/dispatch.sh`）：
 
-0. **本机作用域（v1.9 收窄）**：dispatch 只在本机拉起进程，目标项目 MUST 在本机有目录；`sessions.map` 按机器名隔离（`<host> <agent> <session> <ts>`），他机的活会话不算"在场"（本机通知桥触达不到）。跨机派活 MUST 走异步路径：`agora_task_create` + `mention`，由对方机器会话的开场仪式领取；1. **权限**：调用者身份页 MUST 含 `can_spawn: true`，否则 `SPAWN_FORBIDDEN`；
+**注入防御（v1.15）**：`task` 在进子进程前 MUST 通过机械层格式校验（`^gt-[0-9a-f]{4,}$`，否则 `VALIDATION_FAILED`）——它可能来自他机邮件摘要，属不可信输入；引导模板、`prompt`、项目路径一律经**环境变量**传入子进程（单引号 `bash -c` 脚本体内不出现任何外部插值），任何字段值 MUST NOT 被 shell 求值。
+
+0. **本机作用域（v1.9 收窄）**：dispatch 只在本机拉起进程，目标项目 MUST 在本机有目录；`sessions.map` 按机器名隔离（`<host> <agent> <session> <ts>`），他机的活会话不算"在场"（本机通知桥触达不到）。跨机派活 MUST 走异步路径：`agora_task_create` + `mention`，由对方机器会话的开场仪式领取；
+1. **权限**：调用者身份页 MUST 含 `can_spawn: true`，否则 `SPAWN_FORBIDDEN`；
 2. **深度保险丝**：子会话进程环境注入 `AGORA_DEPTH=<调用者深度+1>`（交互会话深度为 0）；深度 ≥ `AGORA_MAX_DEPTH`（默认 2）时拒绝，`DEPTH_EXCEEDED`；
 3. **配额保险丝**：活跃派生进程数 ≥ `AGORA_MAX_SPAWN`（默认 3）时拒绝，`QUOTA_EXCEEDED`；
 4. **在场优先**：若 `scripts/sessions.map` 显示目标项目已有活会话，MUST NOT 新起进程——改为经 §8.1 通知桥注入提醒，返回 `mode: "notified"`；
@@ -268,6 +273,7 @@ v1.11（2026-10-14）——§10.1 增补：HTTP 端口支持 `AGORA_HTTP_PORT=0`
 v1.12（2026-10-14）——§10.1 修订：HTTP 默认端口由固定 8471 改为 `0`（随机分配）——发现机制（httpd.json + agora_who.http）闭环后，零配置免撞口优于固定端口；固定端口仍可显式指定。测试套件 52 项断言。
 v1.13（2026-10-14）——新增 §11 poll.sh（唤醒 + stalled 看门狗，CONVENTIONS §4 参数落地）；拉起模板内置"开工前复查 owner"惯例（跨机 claim 撞车退避前置）。CONVENTIONS §4 由"可选 watch.sh"改记 poll.sh 已实现。测试套件 58 项断言。
 v1.14（2026-10-14）——新增 §12 项目注册表（wiki/projects/ 页面类型，零新工具）；§4.8 task_create 增补 verify 项目页回填；§4.12 agora_who 增补 projects 清单。补"双清 claim 回放兜底"断言（写时互不可见的撞车由推导层入 conflicts.md）。测试套件 63 项断言。
+v1.15（2026-10-14）——加固与运维批：§4.7 注入防御（task 格式机械校验；prompt/路径/模板经环境变量传入子进程，杜绝 shell 求值）；§11 看门狗活性改本机观察时钟（`_activity` 跟踪，免疫跨机钟漂）+ 本地保洁（sessions.map 本机条目 TTL、inbox 超期归档）；§4.3 推导层增量重放（前缀哈希水位，自动全量回退）；doctor 新增证据引用推送对账（attach 物证只存本地 = 他机不可见，warn 级）。测试套件 76 项断言。
 
 ## 8. 附录：宿主适配器（可选，不属于协议面）
 
@@ -377,7 +383,8 @@ cron/systemd 定时调用的单次执行脚本（非守护进程），补全"事
 ```
 
 - **唤醒**：sync → 本机实体（名册 dirs 在本机存在，目录即归属）收件箱新邮件 → 任务仍待认领（在 board/todo.md）→ 本机 dispatch 拉起。`can_spawn=false` 或 `AGORA_POLL_SPAWN=0` 只报告（held）。邮件水位存 `.git/poll-state.json`（本机文件，不进同步）。
-- **看门狗**（CONVENTIONS §4）：in-progress 任务 20min（`AGORA_POLL_WARN_MIN`）无事件 → 可疑报告；40min（`AGORA_POLL_CRIT_MIN`）→ 派生 `diagnosed` 事件并 mention 认领者（actor=`watchdog@<主机名>`）。看门狗自己的 diagnosed 重置活性时钟，自然形成 cadence。`.live` 滞留超 `AGORA_DISPATCH_TIMEOUT`（30min）计入报告。
+- **看门狗**（CONVENTIONS §4）：in-progress 任务 20min（`AGORA_POLL_WARN_MIN`）无新事件 → 可疑报告；40min（`AGORA_POLL_CRIT_MIN`）→ 派生 `diagnosed` 事件并 mention 认领者（actor=`watchdog@<主机名>`）。看门狗自己的 diagnosed 重置活性时钟，自然形成 cadence。**活性以本机观察为准**（v1.15）：poll-state.json 的 `_activity` 表记"本机首次观察到该任务当前最后事件的时刻"，事件指纹变化即归零——不解析事件 `ts`，对跨机时钟漂移免疫。`.live` 滞留超 `AGORA_DISPATCH_TIMEOUT`（30min）计入报告。
+- **本地保洁**（v1.15）：`sessions.map` 本机条目超 `AGORA_SESSION_TTL_H`（默认 24h，0=关闭）剔除（他机条目由它自己的 poll 清，本机不越权）；inbox 超 `AGORA_INBOX_ARCHIVE_DAYS`（默认 90 天，0=关闭）的邮件移入 `inbox/archive/<实体>/`。保洁变更 best-effort 提交并推送，失败不阻塞下轮。
 - **复查惯例**：poll 拉起的会话 prompt 内置"开工前 agora_sync + 复查 owner，已被认领即 retired 收工"——跨机 claim 撞车的退避点从"下一次碰巧读"提前到"第一行代码之前"。
 - 防重叠：`.git/poll.lock` 非阻塞 flock，上一轮未结束本轮安静退出。
 

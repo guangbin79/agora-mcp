@@ -315,10 +315,27 @@ import json,sys
 r=json.loads(sys.stdin.read())
 assert r['spawned']==[], r['spawned']
 " && ok "邮件水位不重复派生" || fail "邮件水位不重复派生（$POLL_OUT2）"
-# stalled 看门狗：CRIT_MIN=0 → in-progress 任务立即超时
-AGORA_POLL_CRIT_MIN=0 AGORA_RUNTIME=true bash "$AGORA_HOME/scripts/poll.sh" >/dev/null
+# stalled 看门狗（活性 = 本机观察时钟）：先跑一次建立基线（不得误报），
+# 再把 poll-state 的 since 拨回 1 小时前模拟停滞 → 应派生 diagnosed
+AGORA_RUNTIME=true bash "$AGORA_HOME/scripts/poll.sh" >/dev/null
+cat "$AGORA_HOME"/log/*/watchdog.md 2>/dev/null | grep -q "stalled" \
+  && fail "基线 poll 误报 stalled" || ok "基线 poll 不误报（活性时钟自首次观察起计）"
+python3 - "$AGORA_HOME" <<'PYEOF'
+import json, sys, time
+f = sys.argv[1] + "/.git/poll-state.json"
+s = json.load(open(f))
+assert s.get("_activity"), "无活性跟踪表"
+for t in s["_activity"]: s["_activity"][t]["since"] = time.time() - 3600
+json.dump(s, open(f, "w"))
+PYEOF
+AGORA_RUNTIME=true bash "$AGORA_HOME/scripts/poll.sh" >/dev/null
 cat "$AGORA_HOME"/log/*/watchdog.md 2>/dev/null | grep "event:diagnosed" | grep -q "stalled" \
-  && ok "stalled 看门狗派生 diagnosed" || fail "stalled 看门狗派生 diagnosed"
+  && ok "stalled 看门狗派生 diagnosed（本机观察时钟）" || fail "stalled 看门狗派生 diagnosed"
+# cadence：刚诊断过的任务下轮不重复诊断（diagnosed 事件重建活性时钟）
+W1=$(cat "$AGORA_HOME"/log/*/watchdog.md 2>/dev/null | grep -c "event:diagnosed")
+AGORA_RUNTIME=true bash "$AGORA_HOME/scripts/poll.sh" >/dev/null
+W2=$(cat "$AGORA_HOME"/log/*/watchdog.md 2>/dev/null | grep -c "event:diagnosed")
+[[ "$W1" == "$W2" ]] && ok "看门狗 cadence 不刷屏" || fail "看门狗 cadence 不刷屏（$W1→$W2）"
 # 只报告模式：SPAWN=0 → held 不派生
 OUT=$(TITLE="poll只报告任务" TC); POLLT2=$(echo "$OUT" | sed -n 's/.*"task":"\(gt-[0-9a-f]*\)".*/\1/p')
 POST rival@proj2 --event progress --task "$POLLT2" --mention tester --body "再来一单" >/dev/null
@@ -329,6 +346,40 @@ r=json.loads(sys.stdin.read())
 assert any(h['task']=='$POLLT2' for h in r['held']), r
 assert not any(s['task']=='$POLLT2' for s in r['spawned']), r
 " && ok "POLL_SPAWN=0 只报告不派生" || fail "POLL_SPAWN=0 只报告不派生（$POLL_OUT3）"
+
+echo "===== dispatch 注入防御 ====="
+# 非法 task id（可能来自他机邮件摘要）→ 进 bash -c 前被拒
+bash "$AGORA_HOME/scripts/dispatch.sh" --actor tester@proj --project "$PROJ" --task 'gt-1;id' >/dev/null 2>&1
+[[ $? -eq 2 ]] && ok "dispatch 拒绝非法 task id" || fail "dispatch 拒绝非法 task id"
+# prompt 中的命令替换绝不被执行（env 传数据 + 单引号脚本）
+MARK="$T/pwned-$RANDOM"
+AGORA_RUNTIME=true bash "$AGORA_HOME/scripts/dispatch.sh" --actor tester@proj --project "$PROJ" \
+  --task "$POLLT" --prompt '$(touch '"$MARK"')' >/dev/null 2>&1
+[[ ! -e "$MARK" ]] && ok "dispatch prompt 注入不执行" || fail "dispatch prompt 注入不执行"
+
+echo "===== poll 本地保洁 ====="
+# sessions.map TTL：过期本机条目剔除；他机条目与新本机条目保留
+H=$(hostname)
+printf '# <机器名>  <agent名>  <opencode session id>  <登记时间>\n%s tester ses-old 2026-10-12T10:00:00+00:00\nforeign tester ses-f 2026-10-12T10:00:00+00:00\n%s tester ses-new %s\n' \
+  "$H" "$H" "$(date -Iseconds)" > "$AGORA_HOME/scripts/sessions.map"
+cd "$AGORA_HOME" && git add -A >/dev/null && git commit -qm "seed sessions" >/dev/null
+# inbox 归档：100 天前的邮件（文件名=纳秒时间戳）移入 archive/
+mkdir -p "$AGORA_HOME/inbox/tester"
+echo "- from:x | ts:y | ref:r | summary:ack none" > "$AGORA_HOME/inbox/tester/$(( $(date +%s) - 100*86400 ))000000000.md"
+git add -A >/dev/null && git commit -qm "seed old mail" >/dev/null
+POLL_OUT4=$(AGORA_RUNTIME=true bash "$AGORA_HOME/scripts/poll.sh")
+echo "$POLL_OUT4" | python3 -c "
+import json,sys
+r=json.loads(sys.stdin.read())
+assert r['sessions_reaped']==1, r
+assert r['mails_archived']>=1, r
+" && ok "poll 保洁计数（sessions+归档）" || fail "poll 保洁计数（$POLL_OUT4）"
+! grep -q "ses-old" "$AGORA_HOME/scripts/sessions.map" \
+  && grep -q "ses-new" "$AGORA_HOME/scripts/sessions.map" \
+  && grep -q "ses-f" "$AGORA_HOME/scripts/sessions.map" \
+  && ok "TTL 只清本机过期条目" || fail "TTL 只清本机过期条目"
+ls "$AGORA_HOME/inbox/archive/tester/" 2>/dev/null | grep -q '\.md' \
+  && ok "超期邮件入 archive" || fail "超期邮件入 archive"
 
 echo "===== 项目注册表（wiki/projects） ====="
 # 注册项目页（tester 注册 $PROJ，带默认 verify）
@@ -372,7 +423,36 @@ bash "$AGORA_HOME/scripts/derive-board.sh"
 grep -q "$POLLT2" "$AGORA_HOME/board/conflicts.md" \
   && ok "双清 claim 回放兜底入 conflicts" || fail "双清 claim 回放兜底入 conflicts"
 
+echo "===== 增量推导（derive-cache） ====="
+python3 -c "import json;c=json.load(open('$AGORA_HOME/.git/derive-cache.json'));assert c['v']==1 and c['watermark']" \
+  && ok "增量缓存已建立" || fail "增量缓存已建立"
+S0=$(python3 -c "import json;print(json.load(open('$AGORA_HOME/.git/derive-cache.json'))['stats']['incr'])")
+bash "$AGORA_HOME/scripts/derive-board.sh"
+S1=$(python3 -c "import json;print(json.load(open('$AGORA_HOME/.git/derive-cache.json'))['stats']['incr'])")
+[[ $S1 -gt $S0 ]] && ok "无新事件走增量路径" || fail "无新事件走增量路径（$S0→$S1）"
+rm -rf "$T/board.snap"; cp -r "$AGORA_HOME/board" "$T/board.snap"
+rm "$AGORA_HOME/.git/derive-cache.json"; bash "$AGORA_HOME/scripts/derive-board.sh"
+diff -r "$T/board.snap" "$AGORA_HOME/board" >/dev/null && ok "增量与全量结果一致" || fail "增量与全量结果一致"
+# 前缀被改（union 合并重排/脏写）→ 自动回退全量重放，结果不变
+SHARD=$(ls "$AGORA_HOME"/log/*/*.md | head -1)
+sed -i '1i <!-- tampered -->' "$SHARD" 2>/dev/null
+F0=$(python3 -c "import json;print(json.load(open('$AGORA_HOME/.git/derive-cache.json'))['stats']['full'])")
+bash "$AGORA_HOME/scripts/derive-board.sh"
+F1=$(python3 -c "import json;print(json.load(open('$AGORA_HOME/.git/derive-cache.json'))['stats']['full'])")
+[[ $F1 -gt $F0 ]] && diff -r "$T/board.snap" "$AGORA_HOME/board" >/dev/null \
+  && ok "前缀篡改回退全量且结果一致" || fail "前缀篡改回退全量且结果一致（$F0→$F1）"
+
 echo "===== doctor ====="
+# 证据引用推送对账：PROJ 已有本地 evidence refs（attach 段产生）；配空远端 → warn 但不破 ALL GREEN
+git init -q --bare "$T/proj-remote.git"
+git -C "$PROJ" remote add origin "$T/proj-remote.git" 2>/dev/null || true
+OUT=$(bash "$AGORA_HOME/scripts/doctor.sh" 2>&1)
+echo "$OUT" | grep -q "warn | 未推送的证据引用" && echo "$OUT" | grep -q "ALL GREEN" \
+  && ok "未推送证据 warn 不破 ALL GREEN" || { fail "未推送证据 warn 不破 ALL GREEN"; echo "$OUT"; }
+git -C "$PROJ" push -q origin 'refs/agora/evidence/*' >/dev/null 2>&1
+OUT=$(bash "$AGORA_HOME/scripts/doctor.sh" 2>&1)
+echo "$OUT" | grep -q "ok   | 证据引用推送对账" \
+  && ok "推送后证据对账转 ok" || { fail "推送后证据对账转 ok"; echo "$OUT"; }
 OUT=$(bash "$AGORA_HOME/scripts/doctor.sh" 2>&1)
 echo "$OUT" | grep -q "ALL GREEN" && ok "doctor 全绿" || { fail "doctor 全绿"; echo "$OUT"; }
 

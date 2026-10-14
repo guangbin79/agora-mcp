@@ -132,4 +132,32 @@ else
   warn "提交签名未启用（init.sh 配 AGORA_SIGN_KEY 或放 ~/.ssh/id_ed25519.pub 后重跑 init）"
 fi
 
+# 7. 证据引用推送对账（attach 的物证在项目仓库 refs/agora/evidence/*；只存本地 = 他机不可见）
+#    warn 级：不影响 ALL GREEN；离线/无远端静默跳过
+EV_BAD=$(python3 - <<'PYEOF'
+import glob, os, re, subprocess
+HOME = os.environ["AGORA_HOME"]
+dirs = set()
+for f in glob.glob(f"{HOME}/wiki/entities/*.md") + glob.glob(f"{HOME}/wiki/projects/*.md"):
+    txt = open(f, encoding="utf-8").read()
+    for d in re.findall(r'^\s+-\s+(/\S+)\s*$', txt, re.M) + re.findall(r'^path:\s*(\S+)\s*$', txt, re.M):
+        d = os.path.realpath(os.path.expanduser(d))
+        if os.path.isdir(os.path.join(d, ".git")): dirs.add(d)
+out = []
+for d in sorted(dirs):
+    if subprocess.run(["git", "-C", d, "remote", "get-url", "origin"],
+                      capture_output=True).returncode != 0: continue
+    r = subprocess.run(["timeout", "10", "git", "-C", d, "ls-remote", "origin",
+                        "refs/agora/evidence/*"], capture_output=True, text=True)
+    if r.returncode != 0: continue  # 离线/超时：静默跳过
+    remote = {ln.split()[1] for ln in r.stdout.splitlines() if ln.strip()}
+    local = set(subprocess.run(["git", "-C", d, "for-each-ref", "--format=%(refname)",
+                                "refs/agora/evidence/"], capture_output=True, text=True).stdout.split())
+    missing = local - remote
+    if missing: out.append(f"{d}: {len(missing)} 条证据引用未推送（{sorted(missing)[0]} 等）")
+print("\n".join(out))
+PYEOF
+)
+[[ -z "$EV_BAD" ]] && ok "证据引用推送对账" || warn "未推送的证据引用: $EV_BAD（恢复: 在对应项目仓库 git push origin 'refs/agora/evidence/*'）"
+
 [[ $FAIL -eq 0 ]] && echo "== doctor: ALL GREEN ==" || { echo "== doctor: FAILURES PRESENT =="; exit 1; }

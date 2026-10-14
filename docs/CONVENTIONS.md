@@ -26,8 +26,9 @@
 ## 4. 活性检测参数（poll.sh 已实现，cron 定时调用）
 
 - 派生会话 stalled 阈值：`AGORA_DISPATCH_TIMEOUT` 默认 30 分钟（.live 标记滞留 → poll 报告 stale_live）。
-- 任务 stalled 判定（poll.sh 看门狗）：in-progress 任务 20 分钟（`AGORA_POLL_WARN_MIN`）无事件落账 → 可疑（仅报告）；40 分钟（`AGORA_POLL_CRIT_MIN`）→ 派生 `diagnosed` 事件进诊断队列并 mention 认领者（actor=watchdog@主机名）。看门狗自己的 diagnosed 重置活性时钟，自然形成 40min cadence。
+- 任务 stalled 判定（poll.sh 看门狗）：in-progress 任务 20 分钟（`AGORA_POLL_WARN_MIN`）无新事件 → 可疑（仅报告）；40 分钟（`AGORA_POLL_CRIT_MIN`）→ 派生 `diagnosed` 事件进诊断队列并 mention 认领者（actor=watchdog@主机名）。看门狗自己的 diagnosed 重置活性时钟，自然形成 40min cadence。活性以**本机观察时钟**计（poll-state.json `_activity` 表），不解析事件 ts——对跨机时钟漂移免疫。
 - poll.sh 同时承担**唤醒**：本机实体收件箱新邮件 + 任务仍待认领 → 本机 dispatch 拉起（`AGORA_POLL_SPAWN=0` 只报告）。邮件水位与锁存 `.git/`（本机，不进同步）。
+- poll.sh 兼管**本地保洁**：`sessions.map` 本机条目超 `AGORA_SESSION_TTL_H`（默认 24h）剔除（他机条目各机自清）；inbox 超 `AGORA_INBOX_ARCHIVE_DAYS`（默认 90 天）的邮件移入 `inbox/archive/<实体>/`。保洁变更 best-effort 提交推送。
 
 ## 5. 身份名册规则
 

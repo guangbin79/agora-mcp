@@ -1,25 +1,30 @@
 #!/usr/bin/env bash
 # derive-board.sh —— 推导层：从事件日志重建看板（宣言 §5.3 状态机）
 # 确定性、随时可重跑。board/ 是唯一输出，log/ 是唯一输入。
+#
+# 增量推导（v1.14）：.git/derive-cache.json 记录每分片水位 {n: 已处理行数, h: 前 n 行 sha1}
+# 与重放后的看板状态。再跑时逐分片校验前缀哈希：
+#   - 前缀未变 → 只重放追加行（事件正则解析是大头，读+哈希极快）；
+#   - 前缀变了（union 合并重排、历史被改）、新分片插入到已缓存分片之前、
+#     分片被删、任务页集合变化、缓存损坏 → 自动退回全量重放。
+# 缓存是本机文件（.git/ 内），不进同步；任何可疑一律全量，正确性优先于省速。
 set -euo pipefail
 AGORA_HOME="${AGORA_HOME:-$HOME/agora}"
 cd "$AGORA_HOME"
 
 python3 - <<'PYEOF'
-import os, re, glob, collections
+import os, re, glob, json, hashlib, collections
 
 HOME = os.environ.get("AGORA_HOME", os.path.expanduser("~/agora"))
+CACHE_F = os.path.join(HOME, ".git", "derive-cache.json")
 LINE_RE = re.compile(r'^- seq:\d+ \| ts:\S+ \| actor:(\S+) \| event:(\w+) \| idem:\S+ \| seen:\S+(.*)$')
 KV_RE = re.compile(r'(\w+):((?:[^|]|\|(?!\s*\w+:))*?)(?=\s*\|\s*\w+:|$)')
 
-# 任务全集来自 wiki/tasks（含 deps / parent / title，供 ready 与计划进度计算）
-tasks = {}
-task_deps = {}
-task_parent = {}
-task_title = {}
+# 任务元数据每次全量重读（deps/parent/title 供渲染；页面集合变化 = 缓存失效条件之一，
+# 因为页面缺失期间其事件被状态机跳过，事后补页必须全量重放才能补算）
+task_deps, task_parent, task_title = {}, {}, {}
 for p in sorted(glob.glob(f"{HOME}/wiki/tasks/*.md")):
     tid = os.path.basename(p)[:-3]
-    tasks[tid] = {"state": "todo", "owner": None}
     src = open(p, encoding="utf-8").read()
     dm = re.search(r'^deps:\s*\[([^\]]*)\]', src, re.M)
     task_deps[tid] = [d.strip() for d in dm.group(1).split(",") if d.strip()] if dm else []
@@ -27,28 +32,54 @@ for p in sorted(glob.glob(f"{HOME}/wiki/tasks/*.md")):
     if pm: task_parent[tid] = pm.group(1)
     tm = re.search(r'^title:\s*(.+)', src, re.M)
     task_title[tid] = tm.group(1).strip() if tm else ""
+task_ids = sorted(set(task_deps) | set(task_parent) | set(task_title) |
+                  {os.path.basename(p)[:-3] for p in glob.glob(f"{HOME}/wiki/tasks/*.md")})
 
-conflicts, stall_notes = [], []
-last_progress = {}   # tid -> 最新 progress 摘要（过程信息进看板）
-events = []
-for f in sorted(glob.glob(f"{HOME}/log/*/*.md")):
-    shard = os.path.relpath(f, HOME)
-    for i, line in enumerate(open(f, encoding="utf-8"), 1):
-        m = LINE_RE.match(line.strip())
-        if not m: continue
-        actor, event, rest = m.groups()
-        fields = dict(KV_RE.findall(rest))
-        events.append((shard, i, actor, event, fields))
+def hash_lines(lines):
+    return hashlib.sha1("".join(lines).encode()).hexdigest()
 
-retired = set()
-for shard, i, actor, event, f in events:
+def fresh_state():
+    return ({tid: {"state": "todo", "owner": None} for tid in task_ids},
+            set(), [], [], {})
+
+tasks, retired, conflicts, stall_notes, last_progress = fresh_state()
+wm, stats = {}, {"incr": 0, "full": 0}
+
+cache = None
+try:
+    c = json.load(open(CACHE_F))
+    if c.get("v") == 1 and c.get("task_ids") == task_ids and isinstance(c.get("watermark"), dict):
+        cache = c
+except Exception: pass
+
+shards = sorted(os.path.relpath(f, HOME) for f in glob.glob(f"{HOME}/log/*/*.md"))
+need_full = cache is None
+
+if cache:
+    wm = cache["watermark"]
+    stats = cache.get("stats", stats)
+    if set(wm) - set(shards):
+        need_full = True                      # 分片被删
+    elif wm:
+        hi = max(wm)
+        if any(rel not in wm and rel <= hi for rel in shards):
+            need_full = True                  # 新分片插入已缓存分片之前，权威序被打乱
+    if not need_full:
+        for tid, st in cache.get("tasks", {}).items():
+            if tid in tasks: tasks[tid] = st
+        retired = set(cache.get("retired", []))
+        conflicts = list(cache.get("conflicts", []))
+        stall_notes = list(cache.get("stall_notes", []))
+        last_progress = dict(cache.get("last_progress", {}))
+
+def apply(shard, i, actor, event, f):
     name = actor.split("@")[0]
     if event == "retired":
         retired.add(actor)
         for t in tasks.values():
             if t["owner"] == actor: t.update(state="todo", owner=None)
-        continue
-    if actor in retired: continue
+        return
+    if actor in retired: return
     tid = f.get("task")
     if event == "claimed" and tid in tasks:
         if tasks[tid]["owner"] is None and tasks[tid]["state"] == "todo":
@@ -73,6 +104,47 @@ for shard, i, actor, event, f in events:
         stall_notes.append(f"{tid}: {f.get('conclusion','')}")
     elif event == "progress" and tid:
         last_progress[tid] = (f.get("body") or "")[:60]
+
+def replay_lines(shard, start, lines):
+    for off, line in enumerate(lines, 1):
+        m = LINE_RE.match(line.strip())
+        if not m: continue
+        actor, event, rest = m.groups()
+        apply(shard, start + off, actor, event, dict(KV_RE.findall(rest)))
+
+if need_full:
+    tasks, retired, conflicts, stall_notes, last_progress = fresh_state()
+    wm = {}
+    for rel in shards:
+        lines = open(os.path.join(HOME, rel), encoding="utf-8").read().splitlines(keepends=True)
+        replay_lines(rel, 0, lines)
+        wm[rel] = {"n": len(lines), "h": hash_lines(lines)}
+    stats["full"] += 1
+else:
+    new_wm = {}
+    for rel in shards:
+        lines = open(os.path.join(HOME, rel), encoding="utf-8").read().splitlines(keepends=True)
+        if rel in wm:
+            n, h = wm[rel]["n"], wm[rel]["h"]
+            if len(lines) < n or hash_lines(lines[:n]) != h:
+                need_full = True
+                break
+            if len(lines) > n:
+                replay_lines(rel, n, lines[n:])
+        else:
+            replay_lines(rel, 0, lines)       # 新分片（已保证排在全部缓存分片之后）
+        new_wm[rel] = {"n": len(lines), "h": hash_lines(lines)}
+    if need_full:  # 前缀校验中途失败：状态已被部分污染，从零全量
+        tasks, retired, conflicts, stall_notes, last_progress = fresh_state()
+        new_wm = {}
+        for rel in shards:
+            lines = open(os.path.join(HOME, rel), encoding="utf-8").read().splitlines(keepends=True)
+            replay_lines(rel, 0, lines)
+            new_wm[rel] = {"n": len(lines), "h": hash_lines(lines)}
+        stats["full"] += 1
+    else:
+        stats["incr"] += 1
+    wm = new_wm
 
 def render(title, items):
     out = [f"<!-- derived: do not edit by hand -->\n# {title}\n"]
@@ -123,4 +195,10 @@ open(f"{HOME}/board/blocked.md", "w").write(render("Blocked", cols["blocked"]))
 open(f"{HOME}/board/waiting.md", "w").write(render("Waiting（依赖未满足）", cols["waiting"]))
 if conflicts:
     open(f"{HOME}/board/conflicts.md", "w").write(render("Conflicts (claim_conflict)", conflicts))
+
+os.makedirs(os.path.dirname(CACHE_F), exist_ok=True)
+json.dump({"v": 1, "watermark": wm, "tasks": tasks, "retired": sorted(retired),
+           "conflicts": conflicts, "stall_notes": stall_notes,
+           "last_progress": last_progress, "task_ids": task_ids, "stats": stats},
+          open(CACHE_F, "w"))
 PYEOF

@@ -17,6 +17,9 @@ NAME="${ACTOR%%@*}"
 ENTITY="$AGORA_HOME/wiki/entities/$NAME.md"
 [[ -f "$ENTITY" ]] || fail NOT_REGISTERED "caller not in roster: $NAME"
 
+# 注入防御：TASK 是外部输入（可能来自他机邮件摘要），进 bash -c 前强制格式
+[[ "$TASK" =~ ^gt-[0-9a-f]{4,}$ ]] || fail VALIDATION_FAILED "bad task id: $TASK" 2
+
 # 保险丝 1：权限（身份页 can_spawn: true）
 grep -qE '^can_spawn:[[:space:]]*true' "$ENTITY" || fail SPAWN_FORBIDDEN "$NAME lacks can_spawn" 6
 
@@ -62,9 +65,12 @@ if grep -q "^$(hostname) $CHILD " "$AGORA_HOME/scripts/sessions.map" 2>/dev/null
 fi
 
 BOOT="你是广场派生的一次性工作会话。按开场仪式查收信、看看板；你的任务是 $TASK（读 wiki/tasks/$TASK.md，按 verify 要求验收）。完成后 agora_post(event=done) 并结束。${PROMPT:+ 补充指示：$PROMPT}"
+# 注入防御：PROMPT/PDIR 均不可信（PROMPT 可能来自他机邮件摘要）。一律走 env 传数据 +
+# 单引号脚本，bash -c 体内不出现任何外部插值
 touch "$AGORA_HOME/$LOG.live"
-setsid env AGORA_DEPTH=$NEXT AGORA_HOME="$AGORA_HOME" \
-  bash -c "cd '$PDIR' && $RUNTIME run \"$BOOT\" ; rm -f '$AGORA_HOME/$LOG.live'" \
+setsid env AGORA_DEPTH=$NEXT AGORA_HOME="$AGORA_HOME" AGORA_RUNTIME="$RUNTIME" \
+  AGORA_BOOT="$BOOT" AGORA_PDIR="$PDIR" AGORA_LIVEF="$AGORA_HOME/$LOG.live" \
+  bash -c 'cd "$AGORA_PDIR" && "$AGORA_RUNTIME" run "$AGORA_BOOT" ; rm -f "$AGORA_LIVEF"' \
   >"$AGORA_HOME/$LOG" 2>&1 < /dev/null &
 
 bash "$AGORA_HOME/scripts/post.sh" --actor "$ACTOR" --project "$PROJNAME" --event dispatched \

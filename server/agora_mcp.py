@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""agora-mcp —— Git 广场 MCP server（规格 agora-mcp v1.13）
+"""agora-mcp —— Git 广场 MCP server（规格 agora-mcp v1.14）
 零依赖 stdio NDJSON JSON-RPC 实现。薄壳：所有逻辑落到 scripts/。
 """
 import sys, os, json, glob, subprocess, hashlib, re
@@ -238,7 +238,7 @@ for line in sys.stdin:
     if method == "initialize":
         reply(mid, {"protocolVersion": req.get("params",{}).get("protocolVersion","2025-03-26"),
                     "capabilities": {"tools": {}},
-                    "serverInfo": {"name": "agora-mcp", "version": "agora-mcp v1.13"},
+                    "serverInfo": {"name": "agora-mcp", "version": "agora-mcp v1.14"},
                     "instructions": INSTRUCTIONS})
     elif method == "notifications/initialized" or method == "ping":
         if mid is not None: reply(mid, {})
