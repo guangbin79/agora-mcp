@@ -267,6 +267,7 @@ v1.10（2026-10-14）——新增 §10 HTTP 只读窗口与 Web 浏览页（`ser
 v1.11（2026-10-14）——§10.1 增补：HTTP 端口支持 `AGORA_HTTP_PORT=0` 随机分配；实际端口落 `$AGORA_HOME/.git/httpd.json`（仓库本地运行文件，SIGTERM 即清）；`agora_who` 新增 `http` 字段报告端口（含 pid 活体验证）。测试套件 51 项断言。
 v1.12（2026-10-14）——§10.1 修订：HTTP 默认端口由固定 8471 改为 `0`（随机分配）——发现机制（httpd.json + agora_who.http）闭环后，零配置免撞口优于固定端口；固定端口仍可显式指定。测试套件 52 项断言。
 v1.13（2026-10-14）——新增 §11 poll.sh（唤醒 + stalled 看门狗，CONVENTIONS §4 参数落地）；拉起模板内置"开工前复查 owner"惯例（跨机 claim 撞车退避前置）。CONVENTIONS §4 由"可选 watch.sh"改记 poll.sh 已实现。测试套件 58 项断言。
+v1.14（2026-10-14）——新增 §12 项目注册表（wiki/projects/ 页面类型，零新工具）；§4.8 task_create 增补 verify 项目页回填；§4.12 agora_who 增补 projects 清单。补"双清 claim 回放兜底"断言（写时互不可见的撞车由推导层入 conflicts.md）。测试套件 63 项断言。
 
 ## 8. 附录：宿主适配器（可选，不属于协议面）
 
@@ -379,3 +380,12 @@ cron/systemd 定时调用的单次执行脚本（非守护进程），补全"事
 - **看门狗**（CONVENTIONS §4）：in-progress 任务 20min（`AGORA_POLL_WARN_MIN`）无事件 → 可疑报告；40min（`AGORA_POLL_CRIT_MIN`）→ 派生 `diagnosed` 事件并 mention 认领者（actor=`watchdog@<主机名>`）。看门狗自己的 diagnosed 重置活性时钟，自然形成 cadence。`.live` 滞留超 `AGORA_DISPATCH_TIMEOUT`（30min）计入报告。
 - **复查惯例**：poll 拉起的会话 prompt 内置"开工前 agora_sync + 复查 owner，已被认领即 retired 收工"——跨机 claim 撞车的退避点从"下一次碰巧读"提前到"第一行代码之前"。
 - 防重叠：`.git/poll.lock` 非阻塞 flock，上一轮未结束本轮安静退出。
+
+## 12. 项目注册表（v1.14，schema 级追加，零新工具）
+
+实体页回答"谁在哪"，项目页回答"这是什么、怎么验收"——编排大脑派活前的查阅面。
+
+- **页面类型** `wiki/projects/<名字>.md`（schema 见 AGENTS.md）：`path`（与名册 dirs 对应）、`desc`、`verify`（默认验收命令）、`language` 等。
+- **注册/更新**走既有 `agora_wiki_write`（owner=首次注册者）；**查阅**走 `agora_wiki_read` 或 `agora_who`（v1.14 起返回 `projects` 清单）。
+- **verify 回填**：`agora_task_create` 只给 `project_dir` 时，机械层从匹配项目页回填默认 `verify`；无项目页或无 verify 字段仍按原规则拒绝（`PROJECT_DIR_NEEDS_VERIFY`）。
+- 多机同项目共用一页；跨机可见性由星型同步天然保证。

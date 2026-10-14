@@ -330,6 +330,48 @@ assert any(h['task']=='$POLLT2' for h in r['held']), r
 assert not any(s['task']=='$POLLT2' for s in r['spawned']), r
 " && ok "POLL_SPAWN=0 只报告不派生" || fail "POLL_SPAWN=0 只报告不派生（$POLL_OUT3）"
 
+echo "===== 项目注册表（wiki/projects） ====="
+# 注册项目页（tester 注册 $PROJ，带默认 verify）
+cd "$PROJ" && python3 - "$PKG/server/agora_mcp.py" "$PROJ" <<'PYEOF' && ok "项目页注册" || fail "项目页注册"
+import json, subprocess, sys
+p = subprocess.Popen(["python3", sys.argv[1]], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+def rpc(m, ps=None, i=1):
+    p.stdin.write(json.dumps({"jsonrpc":"2.0","id":i,"method":m,"params":ps or {}})+"\n"); p.stdin.flush()
+    return json.loads(p.stdout.readline())
+rpc("initialize", {})
+r = rpc("tools/call", {"name":"agora_wiki_write","arguments":{"path":"projects/proj.md",
+  "content":f"name: proj\npath: {sys.argv[2]}\ndesc: 测试项目\nverify: grep -q FIXED app.txt\n"}}, 2)
+assert "projects/proj.md" in r["result"]["content"][0]["text"], r
+p.stdin.close()
+PYEOF
+# verify fallback：只给 project_dir，机械层从项目页回填 verify
+OUT=$(TITLE="fallback验收任务" PROJECT_DIR="$PROJ" TC)
+FBT=$(echo "$OUT" | sed -n 's/.*"task":"\(gt-[0-9a-f]*\)".*/\1/p')
+grep -q "^verify: grep -q FIXED app.txt" "$AGORA_HOME/wiki/tasks/$FBT.md" \
+  && ok "verify 从项目页回填" || fail "verify 从项目页回填"
+# fallback 未命中仍拒绝
+TITLE="坏" PROJECT_DIR="$PROJ2" TC 2>/dev/null
+[[ $? -eq 2 ]] && ok "无项目页无 verify 仍被拒(rc=2)" || fail "无项目页无 verify 仍被拒(rc=2)"
+# agora_who 列出项目注册表
+cd "$PROJ" && python3 - "$PKG/server/agora_mcp.py" <<'PYEOF' && ok "agora_who 含项目清单" || fail "agora_who 含项目清单"
+import json, subprocess, sys
+p = subprocess.Popen(["python3", sys.argv[1]], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+def rpc(m, ps=None, i=1):
+    p.stdin.write(json.dumps({"jsonrpc":"2.0","id":i,"method":m,"params":ps or {}})+"\n"); p.stdin.flush()
+    return json.loads(p.stdout.readline())
+rpc("initialize", {})
+r = json.loads(rpc("tools/call", {"name":"agora_who","arguments":{}}, 2)["result"]["content"][0]["text"])
+assert any(pj["name"]=="proj" and pj.get("verify") for pj in r.get("projects",[])), r.get("projects")
+p.stdin.close()
+PYEOF
+# Q1 遗留：双清 claim（写时互不可见）由推导层回放兜底
+POST tester@proj --event claimed --task "$POLLT2" >/dev/null
+printf -- '- seq:1 | ts:%s | actor:intruder@proj2 | event:claimed | idem:zz | seen:[] | task:%s\n' \
+  "$(date --iso-8601=seconds)" "$POLLT2" >> "$AGORA_HOME/log/$(date +%F)/proj2.md"
+bash "$AGORA_HOME/scripts/derive-board.sh"
+grep -q "$POLLT2" "$AGORA_HOME/board/conflicts.md" \
+  && ok "双清 claim 回放兜底入 conflicts" || fail "双清 claim 回放兜底入 conflicts"
+
 echo "===== doctor ====="
 OUT=$(bash "$AGORA_HOME/scripts/doctor.sh" 2>&1)
 echo "$OUT" | grep -q "ALL GREEN" && ok "doctor 全绿" || { fail "doctor 全绿"; echo "$OUT"; }

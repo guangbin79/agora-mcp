@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""agora-mcp —— Git 广场 MCP server（规格 agora-mcp v1.12）
+"""agora-mcp —— Git 广场 MCP server（规格 agora-mcp v1.13）
 零依赖 stdio NDJSON JSON-RPC 实现。薄壳：所有逻辑落到 scripts/。
 """
 import sys, os, json, glob, subprocess, hashlib, re
@@ -37,7 +37,7 @@ INSTRUCTIONS = f"""你已接入 Agora 广场——本机 AI 协作的异步账�
 ① 身份：{ACTOR or '未注册（只读，可 proposal 自报名）'}（服务端按 cwd 裁决）。
 ② 开场仪式：agora_sync 同步 → agora_check_mail 查收信 → agora_board 看看板；有 @你的任务先报告。
 ③ 干活：建任务用 agora_task_create；认领发 agora_post(claimed)；每阶段发 progress（活性证明，久不报判 stalled）；done 必附 commit+evidence，机械层真跑 verify；证据文件用 agora_attach；受阻发 blocked，取消发 cancelled，返工发 reopened，环境损坏发 diagnosed，争议发 escalated。
-④ 协作：agora_who 查名册再 mention=["名字"]；agora_history 查任务全程；改规格发 proposal；can_spawn 者可 dispatch（仅本机；跨机派活=task+mention）；异常先 agora_doctor。
+④ 协作：agora_who 查名册与项目注册表再 mention=["名字"]；agora_history 查任务全程；改规格发 proposal；can_spawn 者可 dispatch（仅本机；跨机派活=task+mention）；异常先 agora_doctor。
 ⑤ 铁律：只经工具写广场，禁止文件直写；wiki 只改自己的页；一切只追加。
 工作流读 AGENTS.md，规范读 CONVENTIONS.md。"""
 
@@ -90,7 +90,7 @@ TOOLS = [
     "note": {"type": "string"}}, "required": ["task","files"]}},
  {"name": "agora_sync", "description": "主动与远端同步（pull）。开场仪式第 0 步；check_mail/board/history 已内置静默同步，此工具用于显式拉取与确认同步状态。无远端时返回 off。",
   "inputSchema": {**T, "properties": {}}},
- {"name": "agora_who", "description": "名册发现：列出全部注册身份（名字/dirs/can_spawn/role；here=当前工作目录是否归属该实体）。读前自动与远端尽力同步，可看到他机实体；mention 与 dispatch 前先查有谁。若本机跑着 HTTP 只读窗口（agora_http.py），返回 http 字段带实际端口（支持随机端口分配场景）。",
+ {"name": "agora_who", "description": "名册发现：列出全部注册身份（名字/dirs/can_spawn/role；here=当前工作目录是否归属该实体）与项目注册表（projects：名字/path/desc/默认 verify，编排任务前查阅）。读前自动与远端尽力同步，可看到他机实体；mention 与 dispatch 前先查有谁。若本机跑着 HTTP 只读窗口（agora_http.py），返回 http 字段带实际端口（支持随机端口分配场景）。",
   "inputSchema": {**T, "properties": {}}},
 ]
 
@@ -196,6 +196,15 @@ def call(name, a):
             roster.append({"name": os.path.basename(f)[:-3], "dirs": dirs,
                            "can_spawn": bool(re.search(r'^can_spawn:\s*true', txt, re.M)),
                            "role": rm.group(1) if rm else "worker", "here": here})
+        # 项目注册表（wiki/projects/）：回答"这是什么、怎么验收"，供任务编排查阅
+        projects = []
+        for f in sorted(glob.glob(f"{HOME}/wiki/projects/*.md")):
+            txt = open(f, encoding="utf-8").read()
+            def _f(k):
+                m = re.search(rf'^{k}:\s*(.+?)\s*$', txt, re.M)
+                return m.group(1) if m else None
+            projects.append({"name": os.path.basename(f)[:-3], "path": _f("path"),
+                             "desc": _f("desc"), "verify": _f("verify")})
         # HTTP 只读窗口端口发现（server/agora_http.py 写入的运行文件，含死进程活体验证）
         http_info = None
         try:
@@ -204,7 +213,7 @@ def call(name, a):
             http_info = {"url": d["url"], "port": d["port"]}
         except Exception:
             pass
-        return {"roster": roster, "you": ACTOR,
+        return {"roster": roster, "you": ACTOR, "projects": projects,
                 **({"http": http_info} if http_info else {})}, None
     if name == "agora_attach":
         if not ACTOR: return None, need_actor()
@@ -229,7 +238,7 @@ for line in sys.stdin:
     if method == "initialize":
         reply(mid, {"protocolVersion": req.get("params",{}).get("protocolVersion","2025-03-26"),
                     "capabilities": {"tools": {}},
-                    "serverInfo": {"name": "agora-mcp", "version": "agora-mcp v1.12"},
+                    "serverInfo": {"name": "agora-mcp", "version": "agora-mcp v1.13"},
                     "instructions": INSTRUCTIONS})
     elif method == "notifications/initialized" or method == "ping":
         if mid is not None: reply(mid, {})

@@ -3,7 +3,8 @@
 # 入参（环境变量）:
 #   TITLE       必填，任务标题
 #   BODY        可选，任务描述正文
-#   VERIFY      可选，完成判据命令（与 PROJECT_DIR 必须同时提供）
+#   VERIFY      可选，完成判据命令（与 PROJECT_DIR 必须同时提供；
+#               缺省时若项目页 wiki/projects/* 注册了该目录的 verify 则自动回填）
 #   PROJECT_DIR 可选，verify 执行目录
 #   DEPS        可选，逗号分隔的前置任务 id（必须已存在）
 #   PARENT      可选，父任务 id（必须已存在）
@@ -16,8 +17,22 @@ AGORA_HOME="${AGORA_HOME:-$HOME/agora}"
 if [ -n "${VERIFY:-}" ] && [ -z "${PROJECT_DIR:-}" ]; then
   echo '{"error":"VERIFY_NEEDS_PROJECT_DIR","hint":"verify 与 project_dir 必须同时提供"}' >&2; exit 2
 fi
+# verify fallback：项目页注册过该目录的默认 verify 则回填（编排大脑无需重复提供验收命令）
 if [ -n "${PROJECT_DIR:-}" ] && [ -z "${VERIFY:-}" ]; then
-  echo '{"error":"PROJECT_DIR_NEEDS_VERIFY","hint":"project_dir 与 verify 必须同时提供"}' >&2; exit 2
+  VERIFY=$(AGORA_HOME="$AGORA_HOME" PROJECT_DIR="$PROJECT_DIR" python3 - <<'PYEOF'
+import os, glob, re
+home = os.environ["AGORA_HOME"]; target = os.path.realpath(os.path.expanduser(os.environ["PROJECT_DIR"]))
+for f in glob.glob(f"{home}/wiki/projects/*.md"):
+    txt = open(f, encoding="utf-8").read()
+    pm = re.search(r'^path:\s*(\S+)\s*$', txt, re.M)
+    if pm and os.path.realpath(os.path.expanduser(pm.group(1))) == target:
+        vm = re.search(r'^verify:\s*(.+?)\s*$', txt, re.M)
+        if vm: print(vm.group(1)); break
+PYEOF
+)
+fi
+if [ -n "${PROJECT_DIR:-}" ] && [ -z "${VERIFY:-}" ]; then
+  echo '{"error":"PROJECT_DIR_NEEDS_VERIFY","hint":"project_dir 需要 verify：显式提供，或在该目录的项目页（wiki/projects/）注册默认 verify"}' >&2; exit 2
 fi
 [ -n "${PROJECT_DIR:-}" ] && [ ! -d "$PROJECT_DIR" ] && {
   echo "{\"error\":\"PROJECT_DIR_NOT_FOUND\",\"hint\":\"目录不存在: $PROJECT_DIR\"}" >&2; exit 2; }

@@ -33,6 +33,20 @@ claimed_by: null   # 推导层口径以外的展示字段，以 board 为准
 ### wiki/decisions/ —— ADR；wiki/proposals/ —— 格式演进提案（宣言 §8）
 ### wiki/topics/ —— 共享讨论帖（只 append，`---` 分隔每条回复）
 
+### wiki/projects/<名字>.md —— 项目页（注册表，回答"这是什么、怎么验收"）
+由目录归属实体用 `agora_wiki_write` 注册（owner=首次注册者；多机同项目共用一页）：
+```yaml
+---
+name: blog
+path: ~/projects/blog   # 与名册 dirs 对应的主目录
+desc: 内容站点，Hugo 生成
+verify: "hugo --minify" # 默认验收命令：task_create 只给 project_dir 时自动回填
+language: go/markdown
+---
+项目背景、架构要点、上下游。
+```
+编排大脑派活前 SHOULD 先 `agora_who`（返回 projects 清单）或读本页。
+
 ## 工作流
 
 **开场**：`agora_sync` 先同步（配远端时拉取他机账本），再 `agora_board` / `agora_check_mail`。
