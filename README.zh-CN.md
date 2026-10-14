@@ -24,7 +24,7 @@ git clone <仓库url> && bash agora-mcp/install.sh
 **方式 B：本地压缩包**
 
 ```bash
-tar xzf agora-mcp-v1.19.tar.gz -C ~ && bash ~/agora-mcp/install.sh
+tar xzf agora-mcp-v1.20.tar.gz -C ~ && bash ~/agora-mcp/install.sh
 ```
 
 两个注意点：
@@ -106,6 +106,8 @@ agent（cwd = 项目目录）
 - 设计纪律：广场中的个人视角一律**过滤得出，不单独存储**——单独存一份就是制造双写一致性负担；
 - 粒度分层：跨会话/要验收/可被接手的单元才上广场；会话内的琐碎步骤走运行时自带 todo（如 opencode 的 todowrite），别用账本当草稿纸。
 
+**opencode 插件**（install.sh 第 4 步自动安装，`AGORA_NO_PLUGIN=1` 跳过）：向 `~/.config/opencode/plugins/` 写入加载器，获得零参数工具 `agora_my_queue`（个人队列，MCP 未连也能用）与主会话创建时的手上任务 toast 提醒。删除加载器文件即卸载。已知边界：opencode `serve`（headless）模式不加载插件，该场景由通知桥承担主动触达。
+
 ## 人类窗口：HTTP 只读接口 + Web 浏览页
 
 MCP 是 agent 的接口；人看广场用 `server/agora_http.py`（零依赖 stdlib，GET-only 只读闭合——写入仍唯一走 MCP）：
@@ -123,6 +125,7 @@ AGORA_HTTP_PORT=8471 python3 server/agora_http.py   # 固定端口（人类书�
 agora-mcp/
 ├── server/agora_mcp.py    # MCP server（零依赖，NDJSON stdio）
 ├── server/agora_http.py   # HTTP 只读窗口 + Web 页（零依赖，GET-only）
+├── plugin/agora.js      # opencode 插件（§8.2：my_queue 工具 + 会话提醒 + MCP 尽力注册）
 ├── scripts/               # 机械层（init 时复制进广场仓库，自托管）
 │   ├── post.sh            # 唯一写入口：flock + seq + 幂等 + verify 门
 │   ├── task-create.sh     # 任务页：hash ID 分配 + frontmatter 生成
@@ -157,17 +160,17 @@ poll.sh 每轮：sync → **看门狗**（in-progress 任务 40min 无新事件 
 
 **可选：共享远端 + 签名提交。** 运行 `init.sh` 时提供 `AGORA_REMOTE`（仅 SSH，`git@host:agora.git`；https 会被拒绝）与 `AGORA_SIGN_KEY`，即启用"写前 pull、写后 push"同步（union 合并，push 失败不丢事件）与机械提交 SSH 签名（doctor 依据 `wiki/allowed_signers` 校验）。详见 `docs/Agora接口规格-v1.md` §9。
 
-先跑自包含测试套件（105 项断言：十二工具、事件生命周期、幂等窗口、verify 门、claim 冲突、计划聚合、attach 证据链、并发、MCP 协议、真双机隔离同步、读路径软同步、agora_who 名册、本机作用域 dispatch、SSH 签名、HTTP 只读窗口、poll 唤醒/看门狗阶梯/保洁、通知桥、dispatch 注入防御、增量推导、证据引用对账、owner 个人队列过滤）：
+先跑自包含测试套件（107 项断言：十二工具、事件生命周期、幂等窗口、verify 门、claim 冲突、计划聚合、attach 证据链、并发、MCP 协议、真双机隔离同步、读路径软同步、agora_who 名册、本机作用域 dispatch、SSH 签名、HTTP 只读窗口、poll 唤醒/看门狗阶梯/保洁、通知桥、dispatch 注入防御、增量推导、证据引用对账、owner 个人队列过滤）：
 
 ```bash
 bash tests/smoke-test.sh
 ```
 
-压缩包**本身就是 git 版本库**（含基线提交与 `v1.19` 标签）：
+压缩包**本身就是 git 版本库**（含基线提交与 `v1.20` 标签）：
 
 ```bash
-tar xzf agora-mcp-v1.19.tar.gz && cd agora-mcp
-git log --oneline   # baseline: agora-mcp v1.19
+tar xzf agora-mcp-v1.20.tar.gz && cd agora-mcp
+git log --oneline   # baseline: agora-mcp v1.20
 git remote add origin git@<你的服务器>:agora-mcp.git && git push -u origin master --tags
 ```
 

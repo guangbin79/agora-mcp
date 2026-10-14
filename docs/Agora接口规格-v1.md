@@ -281,6 +281,7 @@ v1.17（2026-10-14）——编排鲁棒性批：§8.1 通知桥落地（scripts/
 - v1.18（2026-10-14）——审核修复批：§4.3 agora_board 补 waiting 视图（HTTP 窗口同步为四视图）；§4.2 check_mail 的 since 水位比较改"位置匹配优先 + (日期,行号) 数值回退"（修字典序比较在两位行号处的错误，参数货币不变）；post.sh 任务匹配加词边界（修 `task:gt-a` 前缀撞 `task:gt-ab` 造成的假冲突标注/假幂等）；task-create 单行字段禁换行（frontmatter 注入防御）；sync pre 合并失败自动 `merge --abort`（防 MERGING 残留导致冲突标记被下次提交卷入账本）+ doctor 新增"合并中断"检查（--fix 可恢复）；防御纵深全覆盖：init 自举即装 pre-commit hook（此前仅手动 install-hooks.sh），护栏从 log/ 扩至 log/ board/ wiki/（wiki-write 补机械层凭证），.gitattributes 补 sessions.map 与 allowed_signers 的 union 合并；§5 instructions 精简（长 AGORA_HOME 路径下仍 <600 字）；agora_post 描述对齐实现（撞车为 derived 标注 claim_conflict，非错误码）；§4.8 task_create 补同锁看板重推导（opencode v2 实测发现：创建后 board 不新鲜，agent 需 doctor --fix 才见新任务）。测试套件 103 项断言（含 opencode 1.19 真实安装连接与 agent 自主开场仪式回归）。
 - v1.19（2026-10-14）——§4.3 agora_board 新增可选 `owner` 参数（`me` = 服务端身份裁决的当前身份）：个人任务队列视角，收敛多 agent 场景的上下文成本与误认领面；边界匹配防名字前缀碰撞。配套：blocked 视图行补渲染认领者（与 in-progress 对齐，owner 过滤依赖行内归属信息）。纯追加，既有调用零改动。
 - v1.20（2026-10-14）——文档与提示批：§5 instructions ② 补 `owner=me` 个人队列提示（渲染仍 <600 字）；README 增"个人任务队列"用法节，固化设计纪律——广场中的个人视角一律由账本过滤得出，不单独存储。无协议变更。
+- v1.21（2026-10-14）——新增 §8.2 opencode 插件（宿主适配层第二形态：config 钩子尽力注册 MCP、`agora_my_queue` 零参数个人队列工具、主会话创建 toast 提醒）；install.sh 增第 4 步插件加载器安装（`AGORA_NO_PLUGIN=1` 跳过）。原 §8.2「其他宿主」顺延为 §8.3。测试套件 107 项断言。
 
 ## 8. 附录：宿主适配器（可选，不属于协议面）
 
@@ -325,7 +326,17 @@ blog-01      ses_abc123            2026-10-14T10:00:00+08:00
 - 只向 **TUI 正常创建的会话**注入；经 HTTP API 创建的会话当前拿不到 MCP 工具（opencode 已知缺陷），适配器 MUST NOT 用 API 创建会话；
 - 会话内消息注入的到达以 opencode 会话事件流为准，适配器不保证端到端时延。
 
-### 8.2 其他宿主
+### 8.2 opencode 插件（`plugin/agora.js`，v1.21 起随包提供）
+
+宿主适配层的第二形态：opencode 文档化插件接口（hooks 模型）。定位是**引导层薄壳**——广场能力主体仍经 MCP 提供，插件只补三样：
+
+- **config 钩子**：运行时尽力注册 agora MCP server（已有 `mcp.agora` 条目则不覆盖）。注意 opencode 部分入口（如 `mcp list`）不应用插件 config 钩子，注册 MUST 以 install.sh 写入 opencode.json 的条目为准，钩子只做补位；
+- **自定义工具 `agora_my_queue`**：零参数个人任务队列（= `agora_board(owner=me)` 语法糖）。纯文件读取实现（身份裁决规则与 §2.1 相同），MCP 未连接时仍可用，作韧性备份；
+- **event 钩子**：主会话创建（`session.created` 且无 parentID）时 toast 提醒手上任务数；子会话与其他事件静默。完整的主动提醒方案是 §8.1 通知桥，本钩子只兜 TUI 内会话。
+
+安装：install.sh 在 `~/.config/opencode/plugins/` 生成两行加载器（注入 `AGORA_HOME` + 重导出包内插件文件），删除加载器即卸载；`AGORA_NO_PLUGIN=1` 跳过。已知边界：opencode `serve` 模式（headless）当前不加载插件，该模式下的主动触达由 §8.1 通知桥承担。
+
+### 8.3 其他宿主
 
 换 Claude Code 等宿主时，重写适配器的投递段（其会话注入机制不同），监听段与 `sessions.map` 格式 SHOULD 保持不变——宿主差异被隔离在适配器内，协议面与机械层零改动。
 

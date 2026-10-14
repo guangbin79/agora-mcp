@@ -707,6 +707,38 @@ assert mineb in allv["blocked"] and mine in allv["in-progress"] and theirs not i
 p.stdin.close()
 PYEOF
 
+echo "===== opencode 插件（§8.2 宿主适配层） ====="
+if command -v node >/dev/null 2>&1; then
+  # 用桩模块替代 @opencode-ai/plugin（插件只用到 tool() 恒等函数），零网络单测三钩子
+  rm -rf "$T/plug"; mkdir -p "$T/plug/node_modules/@opencode-ai/plugin"
+  printf '{"name":"@opencode-ai/plugin","type":"module","main":"index.js"}' > "$T/plug/node_modules/@opencode-ai/plugin/package.json"
+  printf 'export const tool = (x) => x\n' > "$T/plug/node_modules/@opencode-ai/plugin/index.js"
+  cp "$PKG/plugin/agora.js" "$T/plug/"
+  node --check "$T/plug/agora.js" && ok "插件语法检查" || fail "插件语法检查"
+  AGORA_HOME="$AGORA_HOME" PROJ="$PROJ" MINE="$MINE" MINEB="$MINEB" THEIRS="$THEIRS" node - "$T/plug/agora.js" <<'NODEEOF' && ok "插件队列过滤与钩子行为" || fail "插件队列过滤与钩子行为"
+const path = require("node:path")
+;(async () => {
+  const { AgoraPlugin } = await import(`file://${process.argv[2]}`)
+  const toasts = []
+  const client = { tui: { showToast: async (x) => toasts.push(x) } }
+  const hooks = await AgoraPlugin({ directory: process.env.PROJ, client })
+  const cfg = {}
+  await hooks.config(cfg)
+  if (!cfg.mcp?.agora?.command?.[1]?.endsWith("server/agora_mcp.py")) throw new Error("config hook 未注册 MCP")
+  const out = await hooks.tool.agora_my_queue.execute({}, { directory: process.env.PROJ })
+  const text = typeof out === "string" ? out : out.output
+  if (!text.includes("tester@proj")) throw new Error("身份裁决失败: " + text)
+  if (!text.includes(process.env.MINE) || !text.includes(process.env.MINEB)) throw new Error("自己的活缺失")
+  if (text.includes(process.env.THEIRS)) throw new Error("混入别人的活")
+  await hooks.event({ event: { type: "session.created", properties: { info: {} } } })
+  await hooks.event({ event: { type: "session.created", properties: { info: { parentID: "sub" } } } })
+  if (toasts.length !== 1 || !toasts[0].body.message.includes("tester@proj")) throw new Error("toast 行为错: " + toasts.length)
+})().catch(e => { console.error(e.message); process.exit(1) })
+NODEEOF
+else
+  echo "skip | opencode 插件（无 node）"
+fi
+
 echo
 echo "===== 结果: $PASS 通过, $FAIL 失败 ====="
 rm -rf "$T"
