@@ -23,10 +23,11 @@
 - **格式（MUST）**：压缩后页面 = 首帖原文 + 决策摘要（≤200字，含所有结论性陈述）+ 末三条回复原文；完整原文移入 `raw/topics/<文件名>.<日期>.md`。
 - 压缩动作 MUST 落账（`event:ack`，body 指向归档路径）。
 
-## 4. 活性检测参数（watch/doctor）
+## 4. 活性检测参数（poll.sh 已实现，cron 定时调用）
 
-- 派生会话 stalled 阈值：`AGORA_DISPATCH_TIMEOUT` 默认 30 分钟无事件落账。
-- 交互会话卡死判定（可选 watch.sh）：项目目录 20 分钟无 commit → 可疑；40 分钟 → 派生 `diagnosed` 事件进诊断队列。
+- 派生会话 stalled 阈值：`AGORA_DISPATCH_TIMEOUT` 默认 30 分钟（.live 标记滞留 → poll 报告 stale_live）。
+- 任务 stalled 判定（poll.sh 看门狗）：in-progress 任务 20 分钟（`AGORA_POLL_WARN_MIN`）无事件落账 → 可疑（仅报告）；40 分钟（`AGORA_POLL_CRIT_MIN`）→ 派生 `diagnosed` 事件进诊断队列并 mention 认领者（actor=watchdog@主机名）。看门狗自己的 diagnosed 重置活性时钟，自然形成 40min cadence。
+- poll.sh 同时承担**唤醒**：本机实体收件箱新邮件 + 任务仍待认领 → 本机 dispatch 拉起（`AGORA_POLL_SPAWN=0` 只报告）。邮件水位与锁存 `.git/`（本机，不进同步）。
 
 ## 5. 身份名册规则
 
@@ -55,3 +56,4 @@
 - 读路径（check_mail/board/history）MUST 先做尽力同步（v0.10 起，工具内置 soft_sync）；开场仪式第一步 MUST 是 agora_sync。
 - dispatch MUST 仅派本机实体（sessions.map 机器名列）；跨机派活 MUST 用 task_create + mention 异步流转，MUST NOT 指望远端机器上有对应 session。
 - 跨机协作时 SHOULD 先 agora_who 查名册确认目标实体存在，再 mention。
+- poll 拉起的会话 MUST 开工前先 agora_sync 并复查任务 owner（模板已内置）；发现已被他人认领 MUST 发 retired 收工，一行代码都不写。

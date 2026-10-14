@@ -288,6 +288,48 @@ for i in 1 2 3 4 5 6 7 8 9 10; do [[ -f "$AGORA_HOME/.git/httpd.json" ]] || brea
 # 运行文件绝不能进 git（跨机同步会带错端口）
 git -C "$AGORA_HOME" status --porcelain | grep -q "httpd.json" && fail "运行文件未入库" || ok "运行文件未入库"
 
+echo "===== poll.sh 唤醒与看门狗 ====="
+# 外机实体（目录本机不存在）：mention 不被拾取
+printf -- '---\nname: ghost\ndirs:\n  - /nonexistent-ghost-xyz\ncan_spawn: true\n---\n' > "$AGORA_HOME/wiki/entities/ghost.md"
+cd "$AGORA_HOME" && git add -A >/dev/null && git commit -qm "ghost entity"
+POST rival@proj2 --event progress --task "$C" --mention ghost --body "给他机的活" >/dev/null
+# 本机拾取：rival 派活给 tester（任务未认领、在 todo）
+OUT=$(TITLE="poll唤醒任务" TC); POLLT=$(echo "$OUT" | sed -n 's/.*"task":"\(gt-[0-9a-f]*\)".*/\1/p')
+POST rival@proj2 --event progress --task "$POLLT" --mention tester --body "来接活" >/dev/null
+POLL_OUT=$(AGORA_RUNTIME=true bash "$AGORA_HOME/scripts/poll.sh")
+echo "$POLL_OUT" | python3 -c "
+import json,sys
+r=json.loads(sys.stdin.read())
+assert any(s['task']=='$POLLT' and s.get('mode')=='spawned' for s in r['spawned']), r
+" && ok "poll 拾取本机 mention 并派生" || fail "poll 拾取本机 mention 并派生（$POLL_OUT）"
+echo "$POLL_OUT" | grep -q "复查该任务 owner" && ok "拉起模板内置复查 owner 惯例" || fail "拉起模板内置复查 owner 惯例"
+echo "$POLL_OUT" | python3 -c "
+import json,sys
+r=json.loads(sys.stdin.read())
+assert not any(s['entity']=='ghost' for s in r['spawned']), r['spawned']
+" && ok "外机实体不被拾取" || fail "外机实体不被拾取"
+# 水位：第二次 poll 不重复派生
+POLL_OUT2=$(AGORA_RUNTIME=true bash "$AGORA_HOME/scripts/poll.sh")
+echo "$POLL_OUT2" | python3 -c "
+import json,sys
+r=json.loads(sys.stdin.read())
+assert r['spawned']==[], r['spawned']
+" && ok "邮件水位不重复派生" || fail "邮件水位不重复派生（$POLL_OUT2）"
+# stalled 看门狗：CRIT_MIN=0 → in-progress 任务立即超时
+AGORA_POLL_CRIT_MIN=0 AGORA_RUNTIME=true bash "$AGORA_HOME/scripts/poll.sh" >/dev/null
+cat "$AGORA_HOME"/log/*/watchdog.md 2>/dev/null | grep "event:diagnosed" | grep -q "stalled" \
+  && ok "stalled 看门狗派生 diagnosed" || fail "stalled 看门狗派生 diagnosed"
+# 只报告模式：SPAWN=0 → held 不派生
+OUT=$(TITLE="poll只报告任务" TC); POLLT2=$(echo "$OUT" | sed -n 's/.*"task":"\(gt-[0-9a-f]*\)".*/\1/p')
+POST rival@proj2 --event progress --task "$POLLT2" --mention tester --body "再来一单" >/dev/null
+POLL_OUT3=$(AGORA_POLL_SPAWN=0 AGORA_RUNTIME=true bash "$AGORA_HOME/scripts/poll.sh")
+echo "$POLL_OUT3" | python3 -c "
+import json,sys
+r=json.loads(sys.stdin.read())
+assert any(h['task']=='$POLLT2' for h in r['held']), r
+assert not any(s['task']=='$POLLT2' for s in r['spawned']), r
+" && ok "POLL_SPAWN=0 只报告不派生" || fail "POLL_SPAWN=0 只报告不派生（$POLL_OUT3）"
+
 echo "===== doctor ====="
 OUT=$(bash "$AGORA_HOME/scripts/doctor.sh" 2>&1)
 echo "$OUT" | grep -q "ALL GREEN" && ok "doctor 全绿" || { fail "doctor 全绿"; echo "$OUT"; }
