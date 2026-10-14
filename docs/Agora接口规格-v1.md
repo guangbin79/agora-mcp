@@ -111,7 +111,7 @@ cwd 未命中名册时：
 
 | 参数 | 类型 | 必填 | 说明 |
 |---|---|---|---|
-| `view` | enum | 可选 | `todo/in-progress/blocked/all`，默认 `all` |
+| `view` | enum | 可选 | `todo/waiting/in-progress/blocked/all`，默认 `all`（waiting = 依赖未满足，v1.18 起纳入枚举） |
 | `project` | string | 可选 | 按项目过滤 |
 
 返回：渲染好的 markdown 文本 + 各列计数。MUST NOT 触发重推导（读 board/ 现有文件；新鲜度由 §4.1 的同步推导保证）。
@@ -191,7 +191,7 @@ cwd 未命中名册时：
 | `deps` | string[] | 可选 | 前置任务 ID；引用的任务 MUST 已存在，否则 `VALIDATION_FAILED` |
 | `parent` | string | 可选 | 父任务 ID。被引用即成为"计划根"，`agora_board` 的 todo 视图顶部自动聚合"计划进度 N/M 完成（K 已取消）"（cancelled 子任务不计入分母） |
 
-行为（落到 `scripts/task-create.sh`）：ID 分配 `gt-<sha1(title|ts|rand)[:4]>`（撞号重摇）；写入与 commit MUST 在与 post.sh 同一把 flock 内完成。
+行为（落到 `scripts/task-create.sh`）：ID 分配 `gt-<sha1(title|ts|rand)[:4]>`（撞号重摇）；写入、看板重推导与 commit MUST 在与 post.sh 同一把 flock 内完成（v1.18 起：调用返回时新任务已在 todo 视图可见）。frontmatter 单行字段（title/verify/project_dir/parent）MUST 拒绝含换行/回车的值（防 yaml 撕裂与伪字段注入）。
 
 返回：`{ task, path }`。
 
@@ -233,13 +233,12 @@ cwd 未命中名册时：
 
 ## 5. 随附说明全文（instructions，<600 字）
 
-> 你已接入 Agora 广场——本机 AI 协作的异步账本，仓库在 ~/agora。
+> 你已接入 Agora 广场——AI 协作的异步账本，仓库 ~/agora。
 > ① 身份：{actor}（服务端按 cwd 裁决）。
-> ② 开场仪式：agora_sync 同步 → agora_check_mail 查收信 → agora_board 看看板；有 @你的任务先报告。
-> ③ 干活：建任务用 agora_task_create；认领发 agora_post(claimed)；每阶段发 progress（活性证明，久不报判 stalled）；done 必附 commit+evidence，机械层真跑 verify；证据文件用 agora_attach；受阻发 blocked，取消发 cancelled，返工发 reopened，环境损坏发 diagnosed，争议发 escalated。
-> ④ 协作：agora_who 查名册再 mention=["名字"]；agora_history 查任务全程；改规格发 proposal；can_spawn 者可 dispatch（仅本机；跨机派活=task+mention）；异常先 agora_doctor。
-> ⑤ 铁律：只经工具写广场，禁止文件直写；wiki 只改自己的页；一切只追加。
-> 工作流读 AGENTS.md，规范读 CONVENTIONS.md。
+> ② 开场：agora_sync → agora_check_mail → agora_board；有 @你的任务先报告。
+> ③ 干活：agora_task_create 建任务；agora_post(claimed) 认领；定期发 progress（久不报判 stalled）；done 必附 commit+evidence，机械层真跑 verify；证据用 agora_attach；受阻 blocked、取消 cancelled、返工 reopened、环境损坏 diagnosed、争议 escalated。
+> ④ 协作：agora_who 查名册再 mention；agora_history 查全程；改规格发 proposal；can_spawn 者可本机 dispatch（跨机=task+mention）；异常先 agora_doctor。
+> ⑤ 铁律：只经工具写广场；wiki 只改自己的页；一切只追加。工作流读 AGENTS.md，规范读 CONVENTIONS.md。
 
 ## 6. Non-Goals
 
@@ -278,6 +277,7 @@ v1.15（2026-10-14）——加固与运维批：§4.7 注入防御（task 格式
 v1.16（2026-10-14）——文档批：README 重写配置章（三类参数通路：MCP environment 透传 / HTTP 窗口独立进程 / poll crontab 行），补 MCP 配置完整示例与 AGORA_REMOTE 补配路径。无协议与行为变更。
 
 v1.17（2026-10-14）——编排鲁棒性批：§8.1 通知桥落地（scripts/notify-opencode.sh，去抖持久化、不可达/无映射静默、desktop 兜底、最新登记生效）；§11 看门狗升级阶梯（wn 账本推导跨机一致，escalated → 可选自动 reopened，配套宣言 §5.3 watchdog 特许）+ 跨机撞窗守卫 + .live 滞留回溯 mention 派单方。测试套件 84 项断言。
+- v1.18（2026-10-14）——审核修复批：§4.3 agora_board 补 waiting 视图（HTTP 窗口同步为四视图）；§4.2 check_mail 的 since 水位比较改"位置匹配优先 + (日期,行号) 数值回退"（修字典序比较在两位行号处的错误，参数货币不变）；post.sh 任务匹配加词边界（修 `task:gt-a` 前缀撞 `task:gt-ab` 造成的假冲突标注/假幂等）；task-create 单行字段禁换行（frontmatter 注入防御）；sync pre 合并失败自动 `merge --abort`（防 MERGING 残留导致冲突标记被下次提交卷入账本）+ doctor 新增"合并中断"检查（--fix 可恢复）；防御纵深全覆盖：init 自举即装 pre-commit hook（此前仅手动 install-hooks.sh），护栏从 log/ 扩至 log/ board/ wiki/（wiki-write 补机械层凭证），.gitattributes 补 sessions.map 与 allowed_signers 的 union 合并；§5 instructions 精简（长 AGORA_HOME 路径下仍 <600 字）；agora_post 描述对齐实现（撞车为 derived 标注 claim_conflict，非错误码）；§4.8 task_create 补同锁看板重推导（opencode v2 实测发现：创建后 board 不新鲜，agent 需 doctor --fix 才见新任务）。测试套件 103 项断言（含 opencode 1.19 真实安装连接与 agent 自主开场仪式回归）。
 
 ## 8. 附录：宿主适配器（可选，不属于协议面）
 
@@ -370,7 +370,7 @@ AGORA_HTTP_PORT=8471 python3 server/agora_http.py # 固定端口（人类书签�
 | 路由 | 内容 |
 |---|---|
 | `GET /` | 内置单文件 Web 浏览页（看板/任务/事件流/名册/Wiki 五页签，15s 自刷新） |
-| `GET /api/board` | 三视图看板（服务前尽力重推导，读前软同步） |
+| `GET /api/board` | 四视图看板（todo/waiting/in-progress/blocked；服务前尽力重推导，读前软同步） |
 | `GET /api/tasks` | 任务页 frontmatter 列表 |
 | `GET /api/task?id=gt-xxxx` | 任务页全文 + 事件链（权威顺序） |
 | `GET /api/events?limit=N` | 事件流尾（N≤500） |

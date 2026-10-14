@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""agora-mcp —— Git 广场 MCP server（规格 agora-mcp v1.16）
+"""agora-mcp —— Git 广场 MCP server（规格 agora-mcp v1.17）
 零依赖 stdio NDJSON JSON-RPC 实现。薄壳：所有逻辑落到 scripts/。
 """
 import sys, os, json, glob, subprocess, hashlib, re
@@ -33,18 +33,17 @@ def adjudicate():
 ACTOR = adjudicate()
 PROJECT = ACTOR.split("@")[1] if ACTOR else None
 
-INSTRUCTIONS = f"""你已接入 Agora 广场——本机 AI 协作的异步账本，仓库在 {HOME}。
+INSTRUCTIONS = f"""你已接入 Agora 广场——AI 协作的异步账本，仓库 {HOME}。
 ① 身份：{ACTOR or '未注册（只读，可 proposal 自报名）'}（服务端按 cwd 裁决）。
-② 开场仪式：agora_sync 同步 → agora_check_mail 查收信 → agora_board 看看板；有 @你的任务先报告。
-③ 干活：建任务用 agora_task_create；认领发 agora_post(claimed)；每阶段发 progress（活性证明，久不报判 stalled）；done 必附 commit+evidence，机械层真跑 verify；证据文件用 agora_attach；受阻发 blocked，取消发 cancelled，返工发 reopened，环境损坏发 diagnosed，争议发 escalated。
-④ 协作：agora_who 查名册与项目注册表再 mention=["名字"]；agora_history 查任务全程；改规格发 proposal；can_spawn 者可 dispatch（仅本机；跨机派活=task+mention）；异常先 agora_doctor。
-⑤ 铁律：只经工具写广场，禁止文件直写；wiki 只改自己的页；一切只追加。
-工作流读 AGENTS.md，规范读 CONVENTIONS.md。"""
+② 开场：agora_sync → agora_check_mail → agora_board；有 @你的任务先报告。
+③ 干活：agora_task_create 建任务；agora_post(claimed) 认领；定期发 progress（久不报判 stalled）；done 必附 commit+evidence，机械层真跑 verify；证据用 agora_attach；受阻 blocked、取消 cancelled、返工 reopened、环境损坏 diagnosed、争议 escalated。
+④ 协作：agora_who 查名册再 mention；agora_history 查全程；改规格发 proposal；can_spawn 者可本机 dispatch（跨机=task+mention）；异常先 agora_doctor。
+⑤ 铁律：只经工具写广场；wiki 只改自己的页；一切只追加。工作流读 AGENTS.md，规范读 CONVENTIONS.md。"""
 
 # ---------- 工具 schema（schema 即文档） ----------
 T = {"type": "object", "additionalProperties": False}
 TOOLS = [
- {"name": "agora_post", "description": "发事件（写日志唯一入口）。done 必带 commit+evidence 且机械层会真实执行 verify；claimed 撞车仍落账但返回 CLAIM_CONFLICT；dispatched 请改用 agora_dispatch。",
+ {"name": "agora_post", "description": "发事件（写日志唯一入口）。done 必带 commit+evidence 且机械层会真实执行 verify；claimed 撞车仍落账，仅在 derived 中标注 claim_conflict:<先认领者>；dispatched 请改用 agora_dispatch。",
   "inputSchema": {**T, "properties": {
     "event": {"type": "string", "enum": ["claimed","done","blocked","diagnosed","escalated","retired","proposal","ack","progress","cancelled","reopened","attached"]},
     "task": {"type": "string", "description": "gt-xxxx，任务类事件必填"},
@@ -57,7 +56,7 @@ TOOLS = [
   "inputSchema": {**T, "properties": {"since": {"type": "string", "description": "水位指针，只返回其后新邮件"}}}},
  {"name": "agora_board", "description": "看板快照（含 parent 计划进度聚合 N/M 完成；读前自动与远端尽力同步）。",
   "inputSchema": {**T, "properties": {
-    "view": {"type": "string", "enum": ["todo","in-progress","blocked","all"]},
+    "view": {"type": "string", "enum": ["todo","waiting","in-progress","blocked","all"]},
     "project": {"type": "string"}}}},
  {"name": "agora_wiki_read", "description": "读 wiki 页。",
   "inputSchema": {**T, "properties": {"path": {"type": "string"}}, "required": ["path"]}},
@@ -137,12 +136,23 @@ def call(name, a):
         for f in sorted(glob.glob(f"{box}/*.md")):
             m = re.match(r'- from:(\S+) \| ts:(\S+) \| ref:(\S+) \| summary:(.*)', open(f).read().strip())
             if m: items.append({"from": m.group(1), "ts": m.group(2), "ref": m.group(3), "summary": m.group(4)})
-        if a.get("since"): items = [i for i in items if i["ref"] > a["since"]]
+        if a.get("since"):
+            # 位置匹配优先（ref 即 分片:行号，全局唯一）；水位不在当前列表（已被归档清理）时
+            # 退回 (日期, 行号) 数值比较——字典序比较会在行号位数变化处出错（"…:10" < "…:9"）
+            since = a["since"]
+            idx = next((i for i, it in enumerate(items) if it["ref"] == since), None)
+            if idx is not None:
+                items = items[idx + 1:]
+            else:
+                def _k(r):
+                    m2 = re.match(r'log/(\d{4}-\d{2}-\d{2})/.*:(\d+)$', r or "")
+                    return (m2.group(1), int(m2.group(2))) if m2 else ("", 0)
+                items = [it for it in items if _k(it["ref"]) > _k(since)]
         return {"unread": items, "count": len(items),
                 "watermark": items[-1]["ref"] if items else a.get("since")}, None
     if name == "agora_board":
         soft_sync()
-        views = ["todo","in-progress","blocked"] if a.get("view","all")=="all" else [a["view"]]
+        views = ["todo","waiting","in-progress","blocked"] if a.get("view","all")=="all" else [a["view"]]
         out = {}
         for v in views:
             p = f"{HOME}/board/{v}.md"
@@ -238,7 +248,7 @@ for line in sys.stdin:
     if method == "initialize":
         reply(mid, {"protocolVersion": req.get("params",{}).get("protocolVersion","2025-03-26"),
                     "capabilities": {"tools": {}},
-                    "serverInfo": {"name": "agora-mcp", "version": "agora-mcp v1.16"},
+                    "serverInfo": {"name": "agora-mcp", "version": "agora-mcp v1.17"},
                     "instructions": INSTRUCTIONS})
     elif method == "notifications/initialized" or method == "ping":
         if mid is not None: reply(mid, {})

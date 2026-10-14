@@ -81,7 +81,7 @@ if [[ -z "$IDEM" ]]; then
   IDEM=$(printf '%s' "$ACTOR|$EVENT|$TASK|$COMMIT|$EVIDENCE|$CONCLUSION|$REASON|$BODY|$MENTION|$TARGET|$CHILD" | sha1sum | cut -c1-8)
 fi
 if [[ -n "$TASK" ]]; then
-  LAST_EV=$(grep -F "actor:$ACTOR " "$SHARD" 2>/dev/null | grep -F "task:$TASK" | tail -1 || true)
+  LAST_EV=$(grep -F "actor:$ACTOR " "$SHARD" 2>/dev/null | grep -E 'task:'"$TASK"'( \||$)' | tail -1 || true)
 else
   LAST_EV=$(grep -F "actor:$ACTOR " "$SHARD" 2>/dev/null | tail -1 || true)
 fi
@@ -114,7 +114,7 @@ REF="log/$(date +%F)/$PROJECT.md:$(grep -c '^- seq:' "$SHARD")"
 # claim 冲突检测（账本是事实：仍落账，只标注 derived）
 # 跨分片检索：任务可能被其他项目的 actor 认领，只看本分片会漏报（§3.4 副作用可见性）
 if [[ "$EVENT" == claimed ]]; then
-  FIRST=$(cat "$AGORA_HOME"/log/*/*.md 2>/dev/null | grep -F "task:$TASK" | grep 'event:claimed' | head -1 | sed -n 's/.*actor:\([^ |]*\).*/\1/p' || true)
+  FIRST=$(cat "$AGORA_HOME"/log/*/*.md 2>/dev/null | grep -E 'task:'"$TASK"'( \||$)' | grep 'event:claimed' | head -1 | sed -n 's/.*actor:\([^ |]*\).*/\1/p' || true)
   if [[ -n "$FIRST" && "$FIRST" != "$ACTOR" ]]; then DERIVED+=("claim_conflict:$FIRST"); fi
 fi
 

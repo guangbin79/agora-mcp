@@ -78,7 +78,7 @@ def api(path, q):
     if path == "/api/board":
         rederive()
         return {"views": {v: read(f"{HOME}/board/{v}.md")
-                          for v in ("todo", "in-progress", "blocked")}}
+                          for v in ("todo", "waiting", "in-progress", "blocked")}}
     if path == "/api/tasks":
         tasks = []
         for f in sorted(glob.glob(f"{HOME}/wiki/tasks/*.md")):

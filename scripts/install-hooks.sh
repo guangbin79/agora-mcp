@@ -5,15 +5,16 @@ AGORA_HOME="${AGORA_HOME:-$HOME/agora}"
 HOOK="$AGORA_HOME/.git/hooks/pre-commit"
 cat > "$HOOK" <<'EOF'
 #!/usr/bin/env bash
-# 铁律防御纵深：非机械层进程 MUST NOT 提交 log/ 变更
-# 机械层提交时携带 AGORA_MECHANICAL=1（post.sh 在持锁段内 export）
-if git diff --cached --name-only | grep -q '^log/'; then
+# 铁律防御纵深：非机械层进程 MUST NOT 提交 log/ board/ wiki/ 变更
+# （log 是账本、board 是派生物、wiki 页有 owner 校验——三者唯一入口都是机械层脚本）
+# 机械层提交时携带 AGORA_MECHANICAL=1（post.sh / task-create.sh / wiki-write.sh 在持锁段内 export）
+if git diff --cached --name-only | grep -qE '^(log|board|wiki)/'; then
   if [[ "${AGORA_MECHANICAL:-}" != "1" ]]; then
-    echo "拒绝：log/ 只能由 post.sh 写入（机械层）。如需发帖请用 agora_post。" >&2
+    echo "拒绝：log/ board/ wiki/ 只能由机械层写入。发帖用 agora_post，改 wiki 用 agora_wiki_write。" >&2
     exit 1
   fi
 fi
 EOF
 chmod +x "$HOOK"   # git 只执行有执行位的 hook
 echo "installed: $HOOK"
-echo "注意：机械层脚本需在 git commit 前 export AGORA_MECHANICAL=1"
+echo "护栏范围：log/ board/ wiki/ 仅机械层可提交（机械层脚本已自带 AGORA_MECHANICAL 凭证）"

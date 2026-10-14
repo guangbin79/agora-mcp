@@ -160,4 +160,15 @@ PYEOF
 )
 [[ -z "$EV_BAD" ]] && ok "证据引用推送对账" || warn "未推送的证据引用: $EV_BAD（恢复: 在对应项目仓库 git push origin 'refs/agora/evidence/*'）"
 
+# 8. 中断的合并（sync pre 失败后残留 MERGING 状态：后续写入全被阻塞，且半合并内容会卷入下次提交）
+if [[ -f "$AGORA_HOME/.git/MERGE_HEAD" ]]; then
+  if [[ "$FIX" == "--fix" ]]; then
+    git -C "$AGORA_HOME" merge --abort >/dev/null 2>&1 \
+      && ok "合并状态（已 merge --abort 恢复）" \
+      || bad "合并中断且 abort 失败" "人工 git status 核查后 git merge --abort（doctor-runbook §sync）"
+  else
+    bad "合并中断（MERGE_HEAD 残留）" "doctor.sh --fix（git merge --abort）后重跑 sync"
+  fi
+else ok "合并状态（无中断残留）"; fi
+
 [[ $FAIL -eq 0 ]] && echo "== doctor: ALL GREEN ==" || { echo "== doctor: FAILURES PRESENT =="; exit 1; }

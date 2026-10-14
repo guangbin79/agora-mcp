@@ -7,6 +7,7 @@
 #   AGORA_SIGN_KEY     SSH 签名公钥路径（缺省 ~/.ssh/id_ed25519.pub，存在即启用提交签名）
 #   AGORA_REQUIRE_SIGN 1 时无签名密钥 = 失败
 set -euo pipefail
+export AGORA_MECHANICAL=1   # 自举即机械层：本脚本的全部提交都过 pre-commit 防线
 AGORA_HOME="${AGORA_HOME:-$HOME/agora}"
 AGORA_PKG="${AGORA_PKG:-$(cd "$(dirname "$0")/.." && pwd)}"
 
@@ -21,7 +22,12 @@ cd "$AGORA_HOME"
 if [[ ! -d .git ]]; then git init -q; fi
 git config user.name agora-admin && git config user.email agora@local
 git config pull.rebase false   # 宣言铁律：禁 rebase
-[[ -f .gitattributes ]] || printf '*.md merge=union\n' > .gitattributes   # 全文本 union 合并：跨机同步的程序化冲突解决
+bash "$AGORA_HOME/scripts/install-hooks.sh" >/dev/null   # 防御纵深随自举装好（幂等覆盖安装）
+# 全文本 union 合并：跨机同步的程序化冲突解决（log/board/wiki 是 .md；sessions.map 与 allowed_signers 是共享可变纯文本）
+touch .gitattributes
+for _pa in '*.md merge=union' 'scripts/sessions.map merge=union' 'wiki/allowed_signers merge=union'; do
+  grep -qxF "$_pa" .gitattributes || printf '%s\n' "$_pa" >> .gitattributes
+done
 [[ -f wiki/decisions/doctor-runbook.md ]] || cat > wiki/decisions/doctor-runbook.md <<'EOF'
 ---
 owner: mayor

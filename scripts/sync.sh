@@ -35,7 +35,10 @@ case "$MODE" in
     # 远端有新提交才合并（--no-rebase：宣言铁律禁 rebase；union 驱动处理同文件追加）
     MERGED=false
     if ! git merge-base --is-ancestor FETCH_HEAD HEAD 2>/dev/null; then
-      git merge --no-edit FETCH_HEAD >/dev/null 2>&1 || hard_fail merge_conflict "union 未覆盖的冲突，查 doctor-runbook §sync"
+      # 失败 MUST 自动 abort：MERGING 残留会让下一次机械提交把冲突标记当合并结果提交入账（账本污染）
+      git merge --no-edit FETCH_HEAD >/dev/null 2>&1 \
+        || { git merge --abort >/dev/null 2>&1 || true
+             hard_fail merge_conflict "union 未覆盖的冲突（已自动 abort 防半合并污染，查 doctor-runbook §sync）"; }
       MERGED=true
     fi
     echo "{\"sync\":\"ok\",\"merged_new\":$MERGED}" ;;

@@ -14,6 +14,12 @@ set -u
 AGORA_HOME="${AGORA_HOME:-$HOME/agora}"
 
 [ -z "${TITLE:-}" ] && { echo '{"error":"TITLE_REQUIRED","hint":"需要 TITLE"}' >&2; exit 2; }
+# frontmatter 单行字段禁止换行/回车（否则撕裂 yaml 头，甚至注入伪字段）
+for v in TITLE VERIFY PROJECT_DIR PARENT; do
+  case "${!v:-}" in
+    *$'\n'*|*$'\r'*) echo "{\"error\":\"VALIDATION_FAILED\",\"hint\":\"$v 不得含换行\"}" >&2; exit 2;;
+  esac
+done
 if [ -n "${VERIFY:-}" ] && [ -z "${PROJECT_DIR:-}" ]; then
   echo '{"error":"VERIFY_NEEDS_PROJECT_DIR","hint":"verify 与 project_dir 必须同时提供"}' >&2; exit 2
 fi
@@ -76,9 +82,10 @@ fi
     echo
     echo "${BODY:-（无描述）}"
   } > "$TASKS_DIR/$TASK_ID.md"
+  bash "$AGORA_HOME/scripts/derive-board.sh" >/dev/null   # 创建与看板重推导同锁完成：返回时新任务已在 todo 可见
   cd "$AGORA_HOME"
   export AGORA_MECHANICAL=1
-  git add "wiki/tasks/$TASK_ID.md"
+  git add "wiki/tasks/$TASK_ID.md" board/
   git commit -q -m "task: create $TASK_ID $TITLE"
   bash "$AGORA_HOME/scripts/sync.sh" post >/dev/null 2>&1 || true
 ) 9>"$AGORA_HOME/.git/post.lock"

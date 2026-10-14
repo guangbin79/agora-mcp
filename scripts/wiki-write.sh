@@ -34,6 +34,7 @@ else
 fi
 
 cd "$AGORA_HOME"; git add -A >/dev/null
+export AGORA_MECHANICAL=1   # pre-commit hook 的机械层凭证（install-hooks.sh）
 git -c user.name="$ACTOR" -c user.email="$ACTOR@local" commit -qm "wiki:$MODE $P by $ACTOR"
 bash "$AGORA_HOME/scripts/sync.sh" post >/dev/null 2>&1 || true
 echo "{\"path\":$(python3 -c 'import json,sys;print(json.dumps(sys.argv[1]))' "$P"),\"commit\":\"$(git rev-parse --short HEAD)\"}"

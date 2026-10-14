@@ -49,7 +49,7 @@ fi
 # 落账：attached 事件（task 类，evidence=<url>@<commit>）
 ARGS=(--actor "$ACTOR" --project "${ACTOR#*@}" --event attached --task "$TASK" --evidence "$URL@$CMT")
 [ -n "${NOTE:-}" ] && ARGS+=(--body "$NOTE")
-OUT=$(bash "$AGORA_HOME/scripts/post.sh" "${ARGS[@]}") || fail POST_FAILED "$OUT" 2
+OUT=$(bash "$AGORA_HOME/scripts/post.sh" "${ARGS[@]}" 2>&1) || fail POST_FAILED "$OUT" 2
 
 printf '{"task":"%s","ref":"%s","url":"%s","commit":"%s"%s}\n' \
   "$TASK" "$REF" "$URL" "$CMT" "${PUSH_WARN:+,\"warn\":\"ref 未推送到远端，证据暂仅本机可达\"}"

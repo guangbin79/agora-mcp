@@ -26,7 +26,7 @@ PROJ2="$T/proj2"; mkdir -p "$PROJ2"; cd "$PROJ2" && git init -q .
 mkdir -p "$AGORA_HOME/wiki/entities"
 printf -- '---\nname: tester\ndirs:\n  - %s\ncan_spawn: true\n---\n' "$PROJ" > "$AGORA_HOME/wiki/entities/tester.md"
 printf -- '---\nname: rival\ndirs:\n  - %s\ncan_spawn: false\n---\n' "$PROJ2" > "$AGORA_HOME/wiki/entities/rival.md"
-cd "$AGORA_HOME" && git add -A && git commit -qm "entities"
+cd "$AGORA_HOME" && git add -A && AGORA_MECHANICAL=1 git commit -qm "entities"
 
 POST() { local who="$1"; shift; bash "$AGORA_HOME/scripts/post.sh" --actor "$who" --project "${who#*@}" "$@"; }
 TC()   { bash "$AGORA_HOME/scripts/task-create.sh"; }
@@ -40,6 +40,7 @@ OUT=$(TITLE="任务B" VERIFY="grep -q FIXED app.txt" PROJECT_DIR="$PROJ" PARENT=
 B=$(echo "$OUT" | sed -n 's/.*"task":"\(gt-[0-9a-f]*\)".*/\1/p')
 OUT=$(TITLE="任务C" TC); C=$(echo "$OUT" | sed -n 's/.*"task":"\(gt-[0-9a-f]*\)".*/\1/p')
 check "任务页已生成" test -f "$AGORA_HOME/wiki/tasks/$A.md"
+grep -q "$C" "$AGORA_HOME/board/todo.md" && ok "task_create 后 todo 即时可见（同锁重推导）" || fail "task_create 后 todo 即时可见（同锁重推导）"
 grep -q "^parent: $PLAN" "$AGORA_HOME/wiki/tasks/$A.md" && ok "parent 写入 frontmatter" || fail "parent 写入 frontmatter"
 TITLE="坏" VERIFY="true" TC 2>/dev/null; [[ $? -eq 2 ]] && ok "verify 缺 project_dir 被拒(rc=2)" || fail "verify 缺 project_dir 被拒(rc=2)"
 TITLE="坏" DEPS="gt-zzzz" TC 2>/dev/null; [[ $? -eq 5 ]] && ok "deps 引用不存在被拒(rc=5)" || fail "deps 引用不存在被拒(rc=5)"
@@ -291,7 +292,7 @@ git -C "$AGORA_HOME" status --porcelain | grep -q "httpd.json" && fail "运行�
 echo "===== poll.sh 唤醒与看门狗 ====="
 # 外机实体（目录本机不存在）：mention 不被拾取
 printf -- '---\nname: ghost\ndirs:\n  - /nonexistent-ghost-xyz\ncan_spawn: true\n---\n' > "$AGORA_HOME/wiki/entities/ghost.md"
-cd "$AGORA_HOME" && git add -A >/dev/null && git commit -qm "ghost entity"
+cd "$AGORA_HOME" && git add -A >/dev/null && AGORA_MECHANICAL=1 git commit -qm "ghost entity"
 POST rival@proj2 --event progress --task "$C" --mention ghost --body "给他机的活" >/dev/null
 # 本机拾取：rival 派活给 tester（任务未认领、在 todo）
 OUT=$(TITLE="poll唤醒任务" TC); POLLT=$(echo "$OUT" | sed -n 's/.*"task":"\(gt-[0-9a-f]*\)".*/\1/p')
@@ -403,11 +404,11 @@ echo "===== poll 本地保洁 ====="
 H=$(hostname)
 printf '# <机器名>  <agent名>  <opencode session id>  <登记时间>\n%s tester ses-old 2026-10-12T10:00:00+00:00\nforeign tester ses-f 2026-10-12T10:00:00+00:00\n%s tester ses-new %s\n' \
   "$H" "$H" "$(date -Iseconds)" > "$AGORA_HOME/scripts/sessions.map"
-cd "$AGORA_HOME" && git add -A >/dev/null && git commit -qm "seed sessions" >/dev/null
+cd "$AGORA_HOME" && git add -A >/dev/null && AGORA_MECHANICAL=1 git commit -qm "seed sessions" >/dev/null
 # inbox 归档：100 天前的邮件（文件名=纳秒时间戳）移入 archive/
 mkdir -p "$AGORA_HOME/inbox/tester"
 echo "- from:x | ts:y | ref:r | summary:ack none" > "$AGORA_HOME/inbox/tester/$(( $(date +%s) - 100*86400 ))000000000.md"
-git add -A >/dev/null && git commit -qm "seed old mail" >/dev/null
+git add -A >/dev/null && AGORA_MECHANICAL=1 git commit -qm "seed old mail" >/dev/null
 POLL_OUT4=$(AGORA_RUNTIME=true bash "$AGORA_HOME/scripts/poll.sh")
 echo "$POLL_OUT4" | python3 -c "
 import json,sys
@@ -538,6 +539,139 @@ echo "$OUT" | grep -q "ok   | 证据引用推送对账" \
   && ok "推送后证据对账转 ok" || { fail "推送后证据对账转 ok"; echo "$OUT"; }
 OUT=$(bash "$AGORA_HOME/scripts/doctor.sh" 2>&1)
 echo "$OUT" | grep -q "ALL GREEN" && ok "doctor 全绿" || { fail "doctor 全绿"; echo "$OUT"; }
+
+echo "===== 审核修复回归（v1.17） ====="
+# --- task-create 单行字段换行防御（frontmatter 注入） ---
+TITLE=$'坏\ntitle: 注入' TC 2>/dev/null; [[ $? -eq 2 ]] && ok "TITLE 换行被拒(rc=2)" || fail "TITLE 换行被拒(rc=2)"
+TITLE="换行verify" VERIFY=$'true\nevil: 1' PROJECT_DIR="$PROJ" TC 2>/dev/null
+[[ $? -eq 2 ]] && ok "VERIFY 换行被拒(rc=2)" || fail "VERIFY 换行被拒(rc=2)"
+
+# --- post.sh 任务词边界：task:gt-x 不得前缀撞 task:gt-x9 ---
+printf -- '---\nid: gt-zzzz\ntitle: 词边界甲\nstatus: open\ndeps: []\n---\n' > "$AGORA_HOME/wiki/tasks/gt-zzzz.md"
+printf -- '---\nid: gt-wwww\ntitle: 词边界乙\nstatus: open\ndeps: []\n---\n' > "$AGORA_HOME/wiki/tasks/gt-wwww.md"
+printf -- '- seq:901 | ts:%s | actor:rival@proj2 | event:claimed | idem:zz1 | seen:r@1 | task:gt-zzzz9\n' \
+  "$(date --iso-8601=seconds)" >> "$AGORA_HOME/log/$(date +%F)/proj2.md"
+OUT=$(POST tester@proj --event claimed --task gt-zzzz)
+echo "$OUT" | grep -q "claim_conflict" && fail "词边界：gt-zzzz 被 gt-zzzz9 误伤" || ok "词边界：gt-zzzz 不被 gt-zzzz9 误伤"
+POST tester@proj --event claimed --task gt-wwww --idem dup9 >/dev/null
+printf -- '- seq:902 | ts:%s | actor:tester@proj | event:claimed | idem:other9 | seen:t@1 | task:gt-wwww9\n' \
+  "$(date --iso-8601=seconds)" >> "$AGORA_HOME/log/$(date +%F)/proj.md"
+OUT=$(POST tester@proj --event claimed --task gt-wwww --idem dup9)   # 中间隔着 gt-wwww9 行，LAST_EV 不得取错
+echo "$OUT" | grep -q '"dedup":true' && ok "词边界：幂等 LAST_EV 不被 gt-wwww9 干扰" || fail "词边界：幂等 LAST_EV 不被 gt-wwww9 干扰"
+
+# --- check_mail since 水位：位置匹配 + (日期,行号) 数值回退 ---
+mkdir -p "$AGORA_HOME/inbox/rival"
+printf -- '- from:a | ts:t | ref:log/2099-01-01/x.md:9 | summary:m9\n'  > "$AGORA_HOME/inbox/rival/1000000000000000001.md"
+printf -- '- from:a | ts:t | ref:log/2099-01-01/x.md:10 | summary:m10\n' > "$AGORA_HOME/inbox/rival/1000000000000000002.md"
+cd "$PROJ" && python3 - "$PKG/server/agora_mcp.py" "$PROJ2" "$AGORA_HOME" <<'PYEOF' && ok "check_mail since 水位语义" || fail "check_mail since 水位语义"
+import json, subprocess, sys, os
+srv, proj2, home = sys.argv[1], sys.argv[2], sys.argv[3]
+env = {**os.environ, "AGORA_HOME": home}
+def spawn(cwd):
+    p = subprocess.Popen(["python3", srv], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, cwd=cwd, env=env)
+    def rpc(m, ps=None, i=[0]):
+        i[0] += 1
+        p.stdin.write(json.dumps({"jsonrpc":"2.0","id":i[0],"method":m,"params":ps or {}})+"\n"); p.stdin.flush()
+        return json.loads(p.stdout.readline())
+    rpc("initialize", {})
+    return p, rpc
+def mail(rpc):
+    return json.loads(rpc("tools/call", {"name":"agora_check_mail","arguments":{}})["result"]["content"][0]["text"])
+def since(rpc, w):
+    return json.loads(rpc("tools/call", {"name":"agora_check_mail","arguments":{"since":w}})["result"]["content"][0]["text"])
+# tester 邮箱：位置匹配
+p1, r1 = spawn(".")
+subprocess.run(["bash", f"{home}/scripts/post.sh", "--actor","tester@proj","--project","proj",
+                "--event","progress","--task","gt-wwww","--mention","tester","--body","水位1"],
+               env=env, capture_output=True)
+m1 = mail(r1); w1 = m1["watermark"]
+assert m1["count"] >= 1 and w1
+assert since(r1, w1)["count"] == 0, "水位即末尾应无新邮件"
+subprocess.run(["bash", f"{home}/scripts/post.sh", "--actor","tester@proj","--project","proj",
+                "--event","progress","--task","gt-wwww","--mention","tester","--body","水位2"],
+               env=env, capture_output=True)
+m3 = since(r1, w1)
+assert m3["count"] == 1 and m3["unread"][0]["summary"].startswith("progress"), m3
+p1.stdin.close()
+# rival 邮箱：水位不在列表（已归档）→ 数值回退；字典序会错杀 ":10"（"1"<"8"）
+p2, r2 = spawn(proj2)
+m4 = since(r2, "log/2099-01-01/x.md:8")
+refs = [i["ref"] for i in m4["unread"] if "2099-01-01" in i["ref"]]
+assert "log/2099-01-01/x.md:9" in refs and "log/2099-01-01/x.md:10" in refs, refs
+p2.stdin.close()
+PYEOF
+
+# --- waiting 视图（MCP 枚举 + all 聚合） ---
+OUT=$(TITLE="等依赖" TC); WD1=$(echo "$OUT" | sed -n 's/.*"task":"\(gt-[0-9a-f]*\)".*/\1/p')
+OUT=$(TITLE="等依赖者" DEPS="$WD1" TC); WD2=$(echo "$OUT" | sed -n 's/.*"task":"\(gt-[0-9a-f]*\)".*/\1/p')
+bash "$AGORA_HOME/scripts/derive-board.sh" >/dev/null
+cd "$PROJ" && python3 - "$PKG/server/agora_mcp.py" "$WD2" <<'PYEOF' && ok "waiting 视图（枚举+all）" || fail "waiting 视图（枚举+all）"
+import json, subprocess, sys
+srv, wd2 = sys.argv[1], sys.argv[2]
+p = subprocess.Popen(["python3", srv], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+def rpc(m, ps=None, i=[0]):
+    i[0] += 1
+    p.stdin.write(json.dumps({"jsonrpc":"2.0","id":i[0],"method":m,"params":ps or {}})+"\n"); p.stdin.flush()
+    return json.loads(p.stdout.readline())
+rpc("initialize", {})
+def board(view):
+    return json.loads(rpc("tools/call", {"name":"agora_board","arguments":{"view":view}})["result"]["content"][0]["text"])["board"]
+w = board("waiting")
+assert wd2 in next(iter(w.values())), w
+a = board("all")
+assert "waiting" in a and wd2 in a["waiting"], list(a)
+p.stdin.close()
+PYEOF
+
+# --- 防御纵深：init 自举装 hook / .gitattributes / 裸提交拦截（独立仓库，不碰主测试仓） ---
+H2="$T/agora2"
+AGORA_HOME="$H2" bash "$PKG/scripts/init.sh" >/dev/null 2>&1
+test -x "$H2/.git/hooks/pre-commit" && ok "init 自举即装 pre-commit hook" || fail "init 自举即装 pre-commit hook"
+grep -qxF 'scripts/sessions.map merge=union' "$H2/.gitattributes" \
+  && grep -qxF 'wiki/allowed_signers merge=union' "$H2/.gitattributes" \
+  && ok ".gitattributes 覆盖共享可变文本" || fail ".gitattributes 覆盖共享可变文本"
+echo x >> "$H2/wiki/decisions/doctor-runbook.md"
+cd "$H2" && git add -A >/dev/null
+git -c user.name=t -c user.email=t@l commit -qm x >/dev/null 2>&1 \
+  && fail "hook 拦截 wiki/ 裸提交" || ok "hook 拦截 wiki/ 裸提交"
+AGORA_MECHANICAL=1 git -c user.name=t -c user.email=t@l commit -qm x >/dev/null 2>&1 \
+  && ok "机械凭证放行" || fail "机械凭证放行"
+
+# --- doctor 合并中断检查（MERGE_HEAD 残留） ---
+git -C "$H2" rev-parse HEAD > "$H2/.git/MERGE_HEAD"
+OUT=$(AGORA_HOME="$H2" bash "$H2/scripts/doctor.sh" 2>&1); RC=$?
+[[ $RC -eq 1 ]] && echo "$OUT" | grep -q "合并中断" && ok "doctor 检出 MERGE_HEAD 残留" || fail "doctor 检出 MERGE_HEAD 残留"
+OUT=$(AGORA_HOME="$H2" bash "$H2/scripts/doctor.sh" --fix 2>&1)
+[[ ! -f "$H2/.git/MERGE_HEAD" ]] && echo "$OUT" | grep -q "ALL GREEN" \
+  && ok "doctor --fix 恢复合并中断" || { fail "doctor --fix 恢复合并中断"; echo "$OUT"; }
+
+# --- wiki-write 权限模型 ---
+bash "$AGORA_HOME/scripts/wiki-write.sh" --actor rival@proj2 --path entities/tester.md --mode replace <<< "篡改" \
+  2>/dev/null; [[ $? -eq 5 ]] && ok "wiki replace owner 不符被拒(rc=5)" || fail "wiki replace owner 不符被拒(rc=5)"
+bash "$AGORA_HOME/scripts/wiki-write.sh" --actor tester@proj --path topics/roadmap.md --mode replace <<< "议题" >/dev/null \
+  && ok "wiki 新建 topics 页" || fail "wiki 新建 topics 页"
+bash "$AGORA_HOME/scripts/wiki-write.sh" --actor rival@proj2 --path topics/roadmap.md --mode append <<< "补充" >/dev/null \
+  && grep -q '\*\*rival@proj2\*\*' "$AGORA_HOME/wiki/topics/roadmap.md" \
+  && ok "topics append 放行（带署名）" || fail "topics append 放行（带署名）"
+bash "$AGORA_HOME/scripts/wiki-write.sh" --actor rival@proj2 --path entities/rival.md --mode append <<< "x" \
+  2>/dev/null; [[ $? -eq 2 ]] && ok "非 topics append 被拒(rc=2)" || fail "非 topics append 被拒(rc=2)"
+
+# --- backup.sh ---
+AGORA_BACKUP_DIR="$T/bak" bash "$AGORA_HOME/scripts/backup.sh" >/dev/null 2>&1
+ls "$T/bak"/agora-*.bundle >/dev/null 2>&1 && ok "backup bundle 生成" || fail "backup bundle 生成"
+
+# --- instructions 长路径预算（spec §5 <600 字） ---
+LONG="$T/$(python3 -c 'print("deep/"*12)')agora"
+mkdir -p "$(dirname "$LONG")"; ln -s "$AGORA_HOME" "$LONG"
+cd "$PROJ" && AGORA_HOME="$LONG" python3 - "$PKG/server/agora_mcp.py" <<'PYEOF' && ok "instructions 长路径仍 <600 字" || fail "instructions 长路径仍 <600 字"
+import json, subprocess, sys
+p = subprocess.Popen(["python3", sys.argv[1]], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+p.stdin.write(json.dumps({"jsonrpc":"2.0","id":1,"method":"initialize","params":{}})+"\n"); p.stdin.flush()
+r = json.loads(p.stdout.readline())
+n = len(r["result"]["instructions"])
+assert n < 600, n
+p.stdin.close()
+PYEOF
 
 echo
 echo "===== 结果: $PASS 通过, $FAIL 失败 ====="
