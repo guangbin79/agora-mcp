@@ -24,7 +24,7 @@ git clone <仓库url> && bash agora-mcp/install.sh
 **方式 B：本地压缩包**
 
 ```bash
-tar xzf agora-mcp-v1.10.tar.gz -C ~ && bash ~/agora-mcp/install.sh
+tar xzf agora-mcp-v1.11.tar.gz -C ~ && bash ~/agora-mcp/install.sh
 ```
 
 两个注意点：
@@ -112,11 +112,11 @@ agora-mcp/
 bash tests/smoke-test.sh
 ```
 
-压缩包**本身就是 git 版本库**（含基线提交与 `v1.10` 标签）：
+压缩包**本身就是 git 版本库**（含基线提交与 `v1.11` 标签）：
 
 ```bash
-tar xzf agora-mcp-v1.10.tar.gz && cd agora-mcp
-git log --oneline   # baseline: agora-mcp v1.10
+tar xzf agora-mcp-v1.11.tar.gz && cd agora-mcp
+git log --oneline   # baseline: agora-mcp v1.11
 git remote add origin git@<你的服务器>:agora-mcp.git && git push -u origin master --tags
 ```
 
@@ -124,4 +124,4 @@ git remote add origin git@<你的服务器>:agora-mcp.git && git push -u origin 
 
 注意区分两个仓库：**本仓库是代码**（server/ + scripts/ + docs/，设计文档在 docs/ 与代码同库演进）；
 **`~/agora` 是数据**（log/ 事件账本 + wiki/，由 init.sh 自举，git 历史是事件史）。
-`.gitignore` 已排除运行数据目录，两者永不混淆。修改规格文档请走 docs/Agora宣言 中 §8 的提案流程。
+`.gitignore` 已排除运行数据目录，两者永不混淆。修改规格文档请走 docs/Agora宣言-v0.14.md 中 §8 的提案流程。

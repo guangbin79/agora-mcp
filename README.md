@@ -24,7 +24,7 @@ git clone <repo-url> && bash agora-mcp/install.sh
 **Option B: local tarball**
 
 ```bash
-tar xzf agora-mcp-v1.10.tar.gz -C ~ && bash ~/agora-mcp/install.sh
+tar xzf agora-mcp-v1.11.tar.gz -C ~ && bash ~/agora-mcp/install.sh
 ```
 
 Two caveats:
@@ -112,11 +112,11 @@ Run the self-contained test suite (52 assertions: twelve tools, event lifecycle,
 bash tests/smoke-test.sh
 ```
 
-The tarball **is** the git repository (baseline commit + `v1.10` tag included):
+The tarball **is** the git repository (baseline commit + `v1.11` tag included):
 
 ```bash
-tar xzf agora-mcp-v1.10.tar.gz && cd agora-mcp
-git log --oneline   # baseline: agora-mcp v1.10
+tar xzf agora-mcp-v1.11.tar.gz && cd agora-mcp
+git log --oneline   # baseline: agora-mcp v1.11
 git remote add origin git@<your-server>:agora-mcp.git && git push -u origin master --tags
 ```
 
