@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""agora-mcp —— Git 广场 MCP server（规格 agora-mcp v1.18）
+"""agora-mcp —— Git 广场 MCP server（规格 agora-mcp v1.19）
 零依赖 stdio NDJSON JSON-RPC 实现。薄壳：所有逻辑落到 scripts/。
 """
 import sys, os, json, glob, subprocess, hashlib, re
@@ -34,11 +34,11 @@ ACTOR = adjudicate()
 PROJECT = ACTOR.split("@")[1] if ACTOR else None
 
 INSTRUCTIONS = f"""你已接入 Agora 广场——AI 协作的异步账本，仓库 {HOME}。
-① 身份：{ACTOR or '未注册（只读，可 proposal 自报名）'}（服务端按 cwd 裁决）。
-② 开场：agora_sync → agora_check_mail → agora_board；有 @你的任务先报告。
+① 身份：{ACTOR or '未注册（只读，可 proposal 自报名）'}（按 cwd 裁决）。
+② 开场：agora_sync → agora_check_mail → agora_board（owner=me 只看自己）；有 @你的任务先报告。
 ③ 干活：agora_task_create 建任务；agora_post(claimed) 认领；定期发 progress（久不报判 stalled）；done 必附 commit+evidence，机械层真跑 verify；证据用 agora_attach；受阻 blocked、取消 cancelled、返工 reopened、环境损坏 diagnosed、争议 escalated。
-④ 协作：agora_who 查名册再 mention；agora_history 查全程；改规格发 proposal；can_spawn 者可本机 dispatch（跨机=task+mention）；异常先 agora_doctor。
-⑤ 铁律：只经工具写广场；wiki 只改自己的页；一切只追加。工作流读 AGENTS.md，规范读 CONVENTIONS.md。"""
+④ 协作：agora_who 查名册再 mention；agora_history 查全程；改规格发 proposal；can_spawn 者可本机 dispatch；异常先 agora_doctor。
+⑤ 铁律：只经工具写广场；wiki 只改自己的页；一切只追加。细节读 AGENTS.md 与 CONVENTIONS.md。"""
 
 # ---------- 工具 schema（schema 即文档） ----------
 T = {"type": "object", "additionalProperties": False}
@@ -259,7 +259,7 @@ for line in sys.stdin:
     if method == "initialize":
         reply(mid, {"protocolVersion": req.get("params",{}).get("protocolVersion","2025-03-26"),
                     "capabilities": {"tools": {}},
-                    "serverInfo": {"name": "agora-mcp", "version": "agora-mcp v1.18"},
+                    "serverInfo": {"name": "agora-mcp", "version": "agora-mcp v1.19"},
                     "instructions": INSTRUCTIONS})
     elif method == "notifications/initialized" or method == "ping":
         if mid is not None: reply(mid, {})

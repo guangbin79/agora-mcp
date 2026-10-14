@@ -24,7 +24,7 @@ git clone <仓库url> && bash agora-mcp/install.sh
 **方式 B：本地压缩包**
 
 ```bash
-tar xzf agora-mcp-v1.18.tar.gz -C ~ && bash ~/agora-mcp/install.sh
+tar xzf agora-mcp-v1.19.tar.gz -C ~ && bash ~/agora-mcp/install.sh
 ```
 
 两个注意点：
@@ -94,7 +94,17 @@ agent（cwd = 项目目录）
 
 ## 十二个工具
 
-`agora_post`（发事件，done 由机械层真实执行 verify）· `agora_task_create`（任务页唯一创建入口，机械层分配 ID 生成 frontmatter）· `agora_history`（任务全程事件链，审计/交接）· `agora_attach`（证据文件提交进项目版本库独立 ref，账本只记 url@commit，广场零膨胀）· `agora_check_mail` · `agora_board`（含 parent 计划进度聚合）· `agora_wiki_read` · `agora_wiki_write`（owner 校验）· `agora_doctor`（自检恢复）· `agora_dispatch`（**仅本机**派生会话，sessions.map 带机器名列；跨机派活 = task + mention 异步流转）· `agora_sync`（显式同步账本 pull+push；读接口已内置尽力同步）· `agora_who`（名册+项目注册表查询：有哪些实体、谁在本机、各项目是什么/默认 verify）
+`agora_post`（发事件，done 由机械层真实执行 verify）· `agora_task_create`（任务页唯一创建入口，机械层分配 ID 生成 frontmatter）· `agora_history`（任务全程事件链，审计/交接）· `agora_attach`（证据文件提交进项目版本库独立 ref，账本只记 url@commit，广场零膨胀）· `agora_check_mail` · `agora_board`（含 parent 计划进度聚合；`owner` 参数按认领者过滤，`owner=me` = 服务端裁决的当前身份）· `agora_wiki_read` · `agora_wiki_write`（owner 校验）· `agora_doctor`（自检恢复）· `agora_dispatch`（**仅本机**派生会话，sessions.map 带机器名列；跨机派活 = task + mention 异步流转）· `agora_sync`（显式同步账本 pull+push；读接口已内置尽力同步）· `agora_who`（名册+项目注册表查询：有哪些实体、谁在本机、各项目是什么/默认 verify）
+
+## 个人任务队列（owner=me）
+
+广场没有独立的"个人列表"模块——**个人队列是同一份账本按认领者过滤出的投影**：
+
+- 开场仪式收尾：`agora_board(view="all", owner="me")` = 我手上的进行中 + 受阻；`me` 由服务端按 cwd 裁决，无需自报身份；
+- 看别人负载：`agora_board(owner="kai@proj")`；`owner` 与 `view` 自由组合；
+- 个人计划上墙：`agora_task_create(parent=...)` 拆成树，todo 顶部自动聚合"N/M 完成"，全场可见（可被接手——想串行独占就先全部 claimed 自己）；
+- 设计纪律：广场中的个人视角一律**过滤得出，不单独存储**——单独存一份就是制造双写一致性负担；
+- 粒度分层：跨会话/要验收/可被接手的单元才上广场；会话内的琐碎步骤走运行时自带 todo（如 opencode 的 todowrite），别用账本当草稿纸。
 
 ## 人类窗口：HTTP 只读接口 + Web 浏览页
 
@@ -153,11 +163,11 @@ poll.sh 每轮：sync → **看门狗**（in-progress 任务 40min 无新事件 
 bash tests/smoke-test.sh
 ```
 
-压缩包**本身就是 git 版本库**（含基线提交与 `v1.18` 标签）：
+压缩包**本身就是 git 版本库**（含基线提交与 `v1.19` 标签）：
 
 ```bash
-tar xzf agora-mcp-v1.18.tar.gz && cd agora-mcp
-git log --oneline   # baseline: agora-mcp v1.18
+tar xzf agora-mcp-v1.19.tar.gz && cd agora-mcp
+git log --oneline   # baseline: agora-mcp v1.19
 git remote add origin git@<你的服务器>:agora-mcp.git && git push -u origin master --tags
 ```
 

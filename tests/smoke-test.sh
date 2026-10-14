@@ -127,6 +127,7 @@ def rpc(m, ps=None, i=1):
     return json.loads(p.stdout.readline())
 r = rpc("initialize", {"protocolVersion":"2025-03-26"})
 assert "instructions" in r["result"] and len(r["result"]["instructions"]) < 600  # 含路径插值后的预算
+assert "owner=me" in r["result"]["instructions"]  # 开场仪式含个人队列提示
 tools = [t["name"] for t in rpc("tools/list", i=2)["result"]["tools"]]
 assert len(tools) == 12, tools
 r = rpc("tools/call", {"name":"agora_task_create","arguments":{"title":"MCP任务","parent":plan}}, 3)

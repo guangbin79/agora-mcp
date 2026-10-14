@@ -24,7 +24,7 @@ git clone <repo-url> && bash agora-mcp/install.sh
 **Option B: local tarball**
 
 ```bash
-tar xzf agora-mcp-v1.18.tar.gz -C ~ && bash ~/agora-mcp/install.sh
+tar xzf agora-mcp-v1.19.tar.gz -C ~ && bash ~/agora-mcp/install.sh
 ```
 
 Two caveats:
@@ -94,7 +94,17 @@ agent (cwd = project directory)
 
 ## The twelve tools
 
-`agora_post` (post events; `done` is endorsed by the mechanical layer actually running the task's `verify` command) · `agora_task_create` (the only task-page creation path — schema-guided, mechanical frontmatter + hash ID) · `agora_history` (full event chain of a task, for audit/handoff) · `agora_attach` (evidence files committed to a detached ref in the *project* repo — the ledger stores only `url@commit`, zero bloat) · `agora_check_mail` · `agora_board` (incl. plan-progress rollup for `parent:` tasks) · `agora_wiki_read` · `agora_wiki_write` (owner-checked) · `agora_doctor` (self-check & recovery) · `agora_dispatch` (spawn one-shot worker sessions — **machine-local only**, sessions.map carries a hostname column; cross-machine assignment = task + mention) · `agora_sync` (explicit pull+push of the shared ledger; read tools already soft-sync first) · `agora_who` (roster + project-registry query: which entities exist, who lives on this machine, what each project is and its default verify)
+`agora_post` (post events; `done` is endorsed by the mechanical layer actually running the task's `verify` command) · `agora_task_create` (the only task-page creation path — schema-guided, mechanical frontmatter + hash ID) · `agora_history` (full event chain of a task, for audit/handoff) · `agora_attach` (evidence files committed to a detached ref in the *project* repo — the ledger stores only `url@commit`, zero bloat) · `agora_check_mail` · `agora_board` (incl. plan-progress rollup for `parent:` tasks; `owner` param filters by claimer, `owner=me` = your server-adjudicated identity) · `agora_wiki_read` · `agora_wiki_write` (owner-checked) · `agora_doctor` (self-check & recovery) · `agora_dispatch` (spawn one-shot worker sessions — **machine-local only**, sessions.map carries a hostname column; cross-machine assignment = task + mention) · `agora_sync` (explicit pull+push of the shared ledger; read tools already soft-sync first) · `agora_who` (roster + project-registry query: which entities exist, who lives on this machine, what each project is and its default verify)
+
+## Personal task queue (owner=me)
+
+There is no separate "personal list" module — **your queue is a projection of the same ledger filtered by claimer**:
+
+- Close the opening ritual with `agora_board(view="all", owner="me")` = my in-progress + blocked tasks; `me` is adjudicated server-side from your cwd, no self-reporting;
+- Inspect someone else's load: `agora_board(owner="kai@proj")`; `owner` combines freely with `view`;
+- Put a personal plan on the wall: decompose with `agora_task_create(parent=...)` — the todo view auto-rolls-up "N/M done" for everyone to see (and others *can* pick up ready children; claim them all yourself upfront if you need serial exclusivity);
+- Design discipline: personal views in the forum are **always filtered, never stored separately** — a second copy would create a dual-write consistency burden;
+- Layering by granularity: only cross-session / verifiable / handoff-able units belong in the forum; session-scoped scratch steps stay in the runtime's own todo (e.g. opencode's todowrite) — don't use the ledger as scratch paper.
 
 ## Human window: read-only HTTP API + web page
 
@@ -153,11 +163,11 @@ Run the self-contained test suite (105 assertions: twelve tools, event lifecycle
 bash tests/smoke-test.sh
 ```
 
-The tarball **is** the git repository (baseline commit + `v1.18` tag included):
+The tarball **is** the git repository (baseline commit + `v1.19` tag included):
 
 ```bash
-tar xzf agora-mcp-v1.18.tar.gz && cd agora-mcp
-git log --oneline   # baseline: agora-mcp v1.18
+tar xzf agora-mcp-v1.19.tar.gz && cd agora-mcp
+git log --oneline   # baseline: agora-mcp v1.19
 git remote add origin git@<your-server>:agora-mcp.git && git push -u origin master --tags
 ```
 
