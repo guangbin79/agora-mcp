@@ -35,15 +35,16 @@ python3 - "$CFG" "$PKG" "$AGORA_HOME" <<'PYEOF'
 import json, sys, os
 cfg_path, pkg, home = sys.argv[1], sys.argv[2], sys.argv[3]
 cfg = json.load(open(cfg_path)) if os.path.exists(cfg_path) else {}
+# opencode v2 规范形态：mcp.servers.<name>，disabled 反向开关
 entry = {
     "type": "local",
     "command": ["python3", os.path.join(pkg, "server", "agora_mcp.py")],
-    "enabled": True,
+    "disabled": False,
 }
 # 非默认位置时把 AGORA_HOME 写进配置，保证 server 运行时找到同一个仓库
 if home != os.path.expanduser("~/agora"):
     entry["environment"] = {"AGORA_HOME": home}
-cfg.setdefault("mcp", {})["agora"] = entry
+cfg.setdefault("mcp", {}).setdefault("servers", {})["agora"] = entry
 json.dump(cfg, open(cfg_path, "w"), ensure_ascii=False, indent=2)
 print(f"written: {cfg_path}")
 PYEOF
@@ -51,18 +52,19 @@ PYEOF
 echo "== 3/5 安装防御 hook"
 AGORA_HOME="$AGORA_HOME" bash "$PKG/scripts/install-hooks.sh" || true
 
-echo "== 4/5 安装 opencode 插件（规格 §8.2 宿主适配层；跳过: AGORA_NO_PLUGIN=1）"
+echo "== 4/5 安装 opencode v2 插件（规格 §8.2 宿主适配层；跳过: AGORA_NO_PLUGIN=1）"
 if [ "${AGORA_NO_PLUGIN:-0}" != "1" ]; then
   PLUGIN_DIR="$HOME/.config/opencode/plugins"
   mkdir -p "$PLUGIN_DIR"
-  # 加载器两行：注入 AGORA_HOME + 重导出包内插件（单源，升级随包走；删除此文件即卸载）
-  cat > "$PLUGIN_DIR/agora.js" <<PLUGIN_EOF
-// 由 agora-mcp install.sh 生成；删除本文件即卸载插件
-process.env.AGORA_HOME ??= "$AGORA_HOME"
-export * from "$PKG/plugin/agora.js"
-export { default } from "$PKG/plugin/agora.js"
-PLUGIN_EOF
-  echo "installed: $PLUGIN_DIR/agora.js（零配置注册 MCP + agora_my_queue 工具 + 会话创建提醒）"
+  # 完整文件落位：env 注入头 + 插件源码拼成独立文件（v2 全局插件自动发现该目录；
+  # 删除此文件即卸载插件）
+  {
+    echo "// 由 agora-mcp install.sh 生成；删除本文件即卸载插件"
+    echo "process.env.AGORA_HOME ??= \"$AGORA_HOME\""
+    echo "process.env.AGORA_PKG ??= \"$PKG\""
+    cat "$PKG/plugin/agora.js"
+  } > "$PLUGIN_DIR/agora.js"
+  echo "installed: $PLUGIN_DIR/agora.js（零配置注册 MCP + agora_my_queue 工具 + 队列上下文注入）"
 fi
 
 echo "== 5/5 冒烟测试（可选跳过: AGORA_SKIP_TEST=1）"
@@ -75,6 +77,6 @@ cat <<EOF
 完成。建议再配一条每日备份 cron：
   0 3 * * * AGORA_HOME=$AGORA_HOME bash $AGORA_HOME/scripts/backup.sh
 
-使用：任意项目目录打开 opencode，会话自动挂载广场工具（插件版额外获得 agora_my_queue 零参数队列与会话创建提醒）。
+使用：任意项目目录打开 opencode，会话自动挂载广场工具（插件版额外获得 agora_my_queue 零参数队列与队列上下文注入）。
 首次使用某项目前，记得在 $AGORA_HOME/wiki/entities/ 登记身份页（dirs 指向项目目录）。
 EOF

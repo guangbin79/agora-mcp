@@ -24,7 +24,7 @@ git clone <仓库url> && bash agora-mcp/install.sh
 **方式 B：本地压缩包**
 
 ```bash
-tar xzf agora-mcp-v1.20.tar.gz -C ~ && bash ~/agora-mcp/install.sh
+tar xzf agora-mcp-v1.21.tar.gz -C ~ && bash ~/agora-mcp/install.sh
 ```
 
 两个注意点：
@@ -106,7 +106,7 @@ agent（cwd = 项目目录）
 - 设计纪律：广场中的个人视角一律**过滤得出，不单独存储**——单独存一份就是制造双写一致性负担；
 - 粒度分层：跨会话/要验收/可被接手的单元才上广场；会话内的琐碎步骤走运行时自带 todo（如 opencode 的 todowrite），别用账本当草稿纸。
 
-**opencode 插件**（install.sh 第 4 步自动安装，`AGORA_NO_PLUGIN=1` 跳过）：向 `~/.config/opencode/plugins/` 写入加载器，获得零参数工具 `agora_my_queue`（个人队列，MCP 未连也能用）与主会话创建时的手上任务 toast 提醒。删除加载器文件即卸载。已知边界：opencode `serve`（headless）模式不加载插件，该场景由通知桥承担主动触达。
+**opencode v2 插件**（install.sh 第 4 步自动安装，`AGORA_NO_PLUGIN=1` 跳过）：向 `~/.config/opencode/plugins/` 写入完整插件文件（v2 全局插件自动发现该目录），获得零参数工具 `agora_my_queue`（个人队列，MCP 未连也能用）、agora MCP 的运行时尽力注册、以及手上有活时注入会话上下文的一行提醒（v2 服务端插件无 toast 能力，以上下文注入替代）。删除该文件即卸载。实测基线 opencode v2.0.29；v1（1.x）插件 API 不支持。已知边界：opencode `serve`（headless）模式不加载插件，该场景由通知桥承担主动触达（通知桥实测基线为 1.x serve API）。
 
 ## 人类窗口：HTTP 只读接口 + Web 浏览页
 
@@ -125,7 +125,7 @@ AGORA_HTTP_PORT=8471 python3 server/agora_http.py   # 固定端口（人类书�
 agora-mcp/
 ├── server/agora_mcp.py    # MCP server（零依赖，NDJSON stdio）
 ├── server/agora_http.py   # HTTP 只读窗口 + Web 页（零依赖，GET-only）
-├── plugin/agora.js      # opencode 插件（§8.2：my_queue 工具 + 会话提醒 + MCP 尽力注册）
+├── plugin/agora.js      # opencode v2 插件（§8.2：my_queue 工具 + 队列上下文注入 + MCP 尽力注册）
 ├── scripts/               # 机械层（init 时复制进广场仓库，自托管）
 │   ├── post.sh            # 唯一写入口：flock + seq + 幂等 + verify 门
 │   ├── task-create.sh     # 任务页：hash ID 分配 + frontmatter 生成
@@ -169,8 +169,8 @@ bash tests/smoke-test.sh
 压缩包**本身就是 git 版本库**（含基线提交与 `v1.20` 标签）：
 
 ```bash
-tar xzf agora-mcp-v1.20.tar.gz && cd agora-mcp
-git log --oneline   # baseline: agora-mcp v1.20
+tar xzf agora-mcp-v1.21.tar.gz && cd agora-mcp
+git log --oneline   # baseline: agora-mcp v1.21
 git remote add origin git@<你的服务器>:agora-mcp.git && git push -u origin master --tags
 ```
 

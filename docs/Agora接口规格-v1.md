@@ -282,14 +282,15 @@ v1.17（2026-10-14）——编排鲁棒性批：§8.1 通知桥落地（scripts/
 - v1.19（2026-10-14）——§4.3 agora_board 新增可选 `owner` 参数（`me` = 服务端身份裁决的当前身份）：个人任务队列视角，收敛多 agent 场景的上下文成本与误认领面；边界匹配防名字前缀碰撞。配套：blocked 视图行补渲染认领者（与 in-progress 对齐，owner 过滤依赖行内归属信息）。纯追加，既有调用零改动。
 - v1.20（2026-10-14）——文档与提示批：§5 instructions ② 补 `owner=me` 个人队列提示（渲染仍 <600 字）；README 增"个人任务队列"用法节，固化设计纪律——广场中的个人视角一律由账本过滤得出，不单独存储。无协议变更。
 - v1.21（2026-10-14）——新增 §8.2 opencode 插件（宿主适配层第二形态：config 钩子尽力注册 MCP、`agora_my_queue` 零参数个人队列工具、主会话创建 toast 提醒）；install.sh 增第 4 步插件加载器安装（`AGORA_NO_PLUGIN=1` 跳过）。原 §8.2「其他宿主」顺延为 §8.3。测试套件 107 项断言。
+- v1.22（2026-10-14）——§8.2 插件移植到 opencode v2（2.0.x）真实插件 API：v1.21 版所针对的「opencode v2」实为 1.x 产品线（1.19.0，@opencode-ai/plugin hooks 模型），术语更正——自本版起 v2 指 2.0.x 产品线（`@opencode/plugin` 的 `Plugin.define` 域模型，v1 插件不兼容）。三处能力映射：config 钩子→`mcp.transform`、`tool()`→`ctx.tool.transform`（JSON Schema 输入）、toast→`session.hook("context")` 队列上下文注入（v2 服务端插件无 toast 能力）。install.sh 插件落位改「env 头 + 源码全文拼接」（re-export 加载器在 v2 下 tool 注册不生效）；opencode.json 的 MCP 条目改 v2 规范形态 `mcp.servers.agora`（`disabled` 反向开关）。§8.1 通知桥标注实测基线为 1.x serve API，v2 端点适配未验证。opencode v2.0.29 实测：插件加载、`agora_my_queue` 被模型调用返回正确队列、MCP 12 工具经 Code Mode 可达。测试套件 107 项断言。
 
 ## 8. 附录：宿主适配器（可选，不属于协议面）
 
 协议对订阅的回答永远是"查收件箱"；实时性是宿主层面的增强。适配器是**协议外的 shim**：可选、可删、失效时广场降级为纯拉模式而功能无损。
 
-### 8.1 opencode v2 通知桥（`scripts/notify-opencode.sh`，v1.17 起随包提供）
+### 8.1 opencode 通知桥（`scripts/notify-opencode.sh`，v1.17 起随包提供）
 
-**原理**：opencode 的 TUI 是本地 HTTP server（默认 `http://localhost:4096`）的客户端，外部进程可经其 REST API 向**运行中的会话**注入消息。适配器不加载进运行时、不依赖插件 API——它只是一个外部脚本。
+**原理**：opencode 的 TUI 是本地 HTTP server 的客户端，外部进程可经其 REST API 向**运行中的会话**注入消息。适配器不加载进运行时、不依赖插件 API——它只是一个外部脚本。**实测基线：opencode 1.x 产品线（1.19.0）的 serve API（`POST /session/<sid>/message`，默认端口 4096）；opencode v2（2.0.x）server API 有破坏性变更，本桥在 v2 下的端点适配尚未验证——v2 环境的在场感由 §8.2 插件的上下文注入承担。**
 
 **运行形态**：常驻（`nohup bash notify-opencode.sh &` 或 systemd --user），有 inotifywait 用 inotify 监听、否则退化为 `AGORA_NOTIFY_POLL_S`（默认 5s）轮询；`--once` 扫一轮即退（测试/调试）。环境：`AGORA_OPENCODE_URL`、`AGORA_NOTIFY_DEBOUNCE_S`（默认 60，去抖记录持久化于 `.git/notify-wm/`，重启不重置）、`AGORA_NOTIFY_MODE=opencode|desktop`（desktop = notify-send 兜底）。sessions.map 同一实体多次登记时**取最新一条**（重新登记即换绑）。
 
@@ -321,20 +322,20 @@ blog-01      ses_abc123            2026-10-14T10:00:00+08:00
 - HTTP 不可达（opencode 未在运行等）MUST 静默跳过，不得阻塞、不得重试风暴；
 - 零开发兜底形态：适配器可配置为只执行 `notify-send` 桌面通知，由人转达。
 
-**已知限制（opencode v2 现状）**：
+**已知限制（opencode 1.x 现状）**：
 
 - 只向 **TUI 正常创建的会话**注入；经 HTTP API 创建的会话当前拿不到 MCP 工具（opencode 已知缺陷），适配器 MUST NOT 用 API 创建会话；
 - 会话内消息注入的到达以 opencode 会话事件流为准，适配器不保证端到端时延。
 
-### 8.2 opencode 插件（`plugin/agora.js`，v1.21 起随包提供）
+### 8.2 opencode 插件（`plugin/agora.js`，v1.21 起随包提供；v1.22 起目标宿主为 opencode v2）
 
-宿主适配层的第二形态：opencode 文档化插件接口（hooks 模型）。定位是**引导层薄壳**——广场能力主体仍经 MCP 提供，插件只补三样：
+宿主适配层的第二形态：opencode **v2**（2.0.x）插件 API（`@opencode/plugin` 的 `Plugin.define({id, setup})` 域模型；v1 的 `@opencode-ai/plugin` hooks 模型不兼容，不支持）。定位是**引导层薄壳**——广场能力主体仍经 MCP 提供，插件只补三样：
 
-- **config 钩子**：运行时尽力注册 agora MCP server（已有 `mcp.agora` 条目则不覆盖）。注意 opencode 部分入口（如 `mcp list`）不应用插件 config 钩子，注册 MUST 以 install.sh 写入 opencode.json 的条目为准，钩子只做补位；
-- **自定义工具 `agora_my_queue`**：零参数个人任务队列（= `agora_board(owner=me)` 语法糖）。纯文件读取实现（身份裁决规则与 §2.1 相同），MCP 未连接时仍可用，作韧性备份；
-- **event 钩子**：主会话创建（`session.created` 且无 parentID）时 toast 提醒手上任务数；子会话与其他事件静默。完整的主动提醒方案是 §8.1 通知桥，本钩子只兜 TUI 内会话。
+- **`mcp.transform`**：运行时尽力注册 agora MCP server（已有 `agora` 条目则不覆盖）。注册 MUST 以 install.sh 写入 opencode.json 的 `mcp.servers.agora` 条目（v2 规范形态，`disabled` 反向开关）为准，变换只做补位；
+- **自定义工具 `agora_my_queue`**：经 `ctx.tool.transform` 注册，零参数个人任务队列（= `agora_board(owner=me)` 语法糖），输入为 JSON Schema 空对象。纯文件读取实现（身份裁决规则与 §2.1 相同），MCP 未连接时仍可用，作韧性备份；
+- **`session.hook("context")`**：裁决到身份且手上有活时，往会话系统上下文注入一行队列提醒（v2 服务端插件没有 toast 能力——toast 在 v2 属于 TUI 插件面；上下文注入是 v2 惯用的在场感补丁）。完整的主动提醒方案是 §8.1 通知桥。
 
-安装：install.sh 在 `~/.config/opencode/plugins/` 生成两行加载器（注入 `AGORA_HOME` + 重导出包内插件文件），删除加载器即卸载；`AGORA_NO_PLUGIN=1` 跳过。已知边界：opencode `serve` 模式（headless）当前不加载插件，该模式下的主动触达由 §8.1 通知桥承担。
+安装：install.sh 把「env 注入头（`AGORA_HOME`/`AGORA_PKG`）+ 插件源码全文」拼接写入 `~/.config/opencode/plugins/agora.js`（v2 全局插件自动发现该目录；必须完整落位——不能用 re-export 加载器，实测转发形态下 tool 注册不生效），删除该文件即卸载；`AGORA_NO_PLUGIN=1` 跳过。实测基线 opencode v2.0.29：run 模式下插件加载、`agora_my_queue` 可被模型调用、MCP 12 工具经 Code Mode（`tools.agora.*`）可达；`opencode mcp list` 偶发显示「No MCP servers configured」而服务端日志实际已 connected，属平台 CLI 显示怪癖。
 
 ### 8.3 其他宿主
 
