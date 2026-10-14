@@ -156,7 +156,7 @@ cwd 未命中名册时：
 
 行为（落到 `scripts/dispatch.sh`）：
 
-1. **权限**：调用者身份页 MUST 含 `can_spawn: true`，否则 `SPAWN_FORBIDDEN`；
+0. **本机作用域（v1.9 收窄）**：dispatch 只在本机拉起进程，目标项目 MUST 在本机有目录；`sessions.map` 按机器名隔离（`<host> <agent> <session> <ts>`），他机的活会话不算"在场"（本机通知桥触达不到）。跨机派活 MUST 走异步路径：`agora_task_create` + `mention`，由对方机器会话的开场仪式领取；1. **权限**：调用者身份页 MUST 含 `can_spawn: true`，否则 `SPAWN_FORBIDDEN`；
 2. **深度保险丝**：子会话进程环境注入 `AGORA_DEPTH=<调用者深度+1>`（交互会话深度为 0）；深度 ≥ `AGORA_MAX_DEPTH`（默认 2）时拒绝，`DEPTH_EXCEEDED`；
 3. **配额保险丝**：活跃派生进程数 ≥ `AGORA_MAX_SPAWN`（默认 3）时拒绝，`QUOTA_EXCEEDED`；
 4. **在场优先**：若 `scripts/sessions.map` 显示目标项目已有活会话，MUST NOT 新起进程——改为经 §8.1 通知桥注入提醒，返回 `mode: "notified"`；
@@ -199,7 +199,6 @@ cwd 未命中名册时：
 返回：`{ task, count, events[] }`——events 按**权威顺序**（shard 文件名序 + shard 内物理行序），每条含 `ref`（`log/<date>/<project>.md:<行号>`，审计定位用）与全部条件字段。用途：审计、复盘、交接。
 
 ### 4.10 `agora_attach` — 证据附件（证据落项目版本库）
-
 证据文件 MUST NOT 进广场仓库（零膨胀）。本工具把文件提交进**当前项目版本库**的独立 ref，账本只记指针——指针带 commit 哈希，git 内容寻址即完整性保证。
 
 | 参数 | 类型 | 必填 | 说明 |
@@ -217,13 +216,23 @@ cwd 未命中名册时：
 
 返回：`{ task, ref, url, commit }`。`done` 的 `evidence` SHOULD 引用此指针（"报告见 <url>@<commit>"）。
 
-## 5. 随附说明全文（instructions，<520 字）
+### 4.11 `agora_sync` — 显式同步（星型协作）
+
+无参数。行为 = `sync.sh pre`：fetch + 必要时 `merge --no-edit`。返回 `{ sync: "ok"|"off", merged_new: bool }`；失败降级为 warn（离线不阻塞）。
+
+**读路径内置同步（v1.9 起）**：`agora_check_mail` / `agora_board` / `agora_history` 在读取前 MUST best-effort pre-pull（失败静默）——多机下"看"之前先"同步"，否则永远只能看到自己写入时顺道拉到的旧世界。开场仪式第 0 步为 `agora_sync`。
+
+### 4.12 `agora_who` — 名册发现
+
+无参数。返回 `{ roster: [{name, dirs, can_spawn, role, here}], you }`——`here` 表示该身份的 dirs 是否覆盖本机 cwd（多机下区分"本机可工作的身份"）。`mention` 与 `dispatch` 前 SHOULD 先查名册。
+
+## 5. 随附说明全文（instructions，<600 字）
 
 > 你已接入 Agora 广场——本机 AI 协作的异步账本，仓库在 ~/agora。
 > ① 身份：{actor}（服务端按 cwd 裁决）。
-> ② 开场仪式：agora_check_mail 查收信 → agora_board 看看板；有 @你的任务先报告。
-> ③ 干活：建任务用 agora_task_create；认领发 agora_post(claimed)；每阶段发 progress（活性证明，久不报判 stalled）；done 必附 commit+evidence，机械层真跑 verify；受阻发 blocked，取消发 cancelled，返工发 reopened，环境损坏发 diagnosed，争议发 escalated。
-> ④ 协作：mention=["名字"] 找人；agora_history 查任务全程；改规格发 proposal；can_spawn 者可 agora_dispatch 派生会话；异常先 agora_doctor。
+> ② 开场仪式：agora_sync 同步 → agora_check_mail 查收信 → agora_board 看看板；有 @你的任务先报告。
+> ③ 干活：建任务用 agora_task_create；认领发 agora_post(claimed)；每阶段发 progress（活性证明，久不报判 stalled）；done 必附 commit+evidence，机械层真跑 verify；证据文件用 agora_attach；受阻发 blocked，取消发 cancelled，返工发 reopened，环境损坏发 diagnosed，争议发 escalated。
+> ④ 协作：agora_who 查名册再 mention=["名字"]；agora_history 查任务全程；改规格发 proposal；can_spawn 者可 dispatch（仅本机；跨机派活=task+mention）；异常先 agora_doctor。
 > ⑤ 铁律：只经工具写广场，禁止文件直写；wiki 只改自己的页；一切只追加。
 > 工作流读 AGENTS.md，规范读 CONVENTIONS.md。
 
@@ -253,6 +262,7 @@ v1.5（2026-10-14）——instructions 补全全部能力的行为钩子（求�
 v1.6（2026-10-14）——新增工具 `agora_task_create`（§4.8，任务页唯一创建入口）与 `agora_history`（§4.9，事件链审计）；事件枚举新增 `cancelled`/`reopened`（任务类）；任务页 schema 新增 `parent`（计划层，看板聚合进度）；§3.2 幂等修订为连续窗口语义（修复 reopened 后相同 idem 的合法迁移被误吞）；CLAIM_CONFLICT 错误码废止，改由 derived 标注（§3.3/§4.1）；claim 冲突检测改为跨分片检索（修复跨项目冲突漏报）；install.sh 增加依赖检查（bash/git/python3/flock/sha1sum/timeout/setsid/GNU date）；新增 tests/smoke-test.sh（24 项断言，install 第 4 步自动执行）。
 v1.7（2026-10-14）——新增 §9 远端同步与提交签名（SSH 强制、pull-before-write/push-after-write、union 合并、SSH 签名验证）；新增 scripts/sync.sh；doctor 新增远端纪律与签名检查；init.sh 骨架幂等化（clone 后补齐）；新增错误码 `SYNC_FAILED`（AGORA_SYNC_REQUIRED=1 时）。
 v1.8（2026-10-14）——新增工具 `agora_attach`（§4.10）与事件 `attached`（任务类，evidence 必填 = url@commit）：证据落项目版本库独立 ref `refs/agora/evidence/<task>`（orphan 链式，临时 index 构建，不碰工作区），广场零膨胀。取代 v1.6 的 attach 暂缓决议。
+v1.9（2026-10-14）——星型协作补全：新增 `agora_sync`（§4.11 显式同步，读路径内置静默 pre-pull）与 `agora_who`（§4.12 名册发现）；§4.7 dispatch 收窄为本机作用域（sessions.map 按机器名隔离），跨机派活定案为 task+mention 异步路径；instructions 更新开场仪式（sync 为第 0 步）。测试套件修复 B 机 env 隔离缺陷（此前双机测试实为单库假绿），45 项断言真双机全绿。
 
 ## 8. 附录：宿主适配器（可选，不属于协议面）
 

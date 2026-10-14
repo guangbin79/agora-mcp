@@ -52,3 +52,6 @@
 - 写路径 MUST 先 pull（flock 内）后 push；push 失败 MUST NOT 丢事件（本地账本优先，derived 标 sync_warn）。
 - 数据仓库 MUST 启用 `*.md merge=union`；LLM MUST NOT 手工解同步冲突（SYNC_CONFLICT 走 doctor-runbook §sync）。
 - 启用签名后，机械提交 MUST 带有效 SSH 签名；公钥 MUST 入 `wiki/allowed_signers`；私钥 MUST NOT 进广场仓库。
+- 读路径（check_mail/board/history）MUST 先做尽力同步（v0.10 起，工具内置 soft_sync）；开场仪式第一步 MUST 是 agora_sync。
+- dispatch MUST 仅派本机实体（sessions.map 机器名列）；跨机派活 MUST 用 task_create + mention 异步流转，MUST NOT 指望远端机器上有对应 session。
+- 跨机协作时 SHOULD 先 agora_who 查名册确认目标实体存在，再 mention。

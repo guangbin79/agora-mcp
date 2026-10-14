@@ -24,7 +24,7 @@ check "init 幂等（再跑一次）" bash "$PKG/scripts/init.sh"
 PROJ="$T/proj"; mkdir -p "$PROJ"; cd "$PROJ" && git init -q . && echo FIXED > app.txt && git add -A && git -c user.name=t -c user.email=t@local commit -qm init
 PROJ2="$T/proj2"; mkdir -p "$PROJ2"; cd "$PROJ2" && git init -q .
 mkdir -p "$AGORA_HOME/wiki/entities"
-printf -- '---\nname: tester\ndirs:\n  - %s\ncan_spawn: false\n---\n' "$PROJ" > "$AGORA_HOME/wiki/entities/tester.md"
+printf -- '---\nname: tester\ndirs:\n  - %s\ncan_spawn: true\n---\n' "$PROJ" > "$AGORA_HOME/wiki/entities/tester.md"
 printf -- '---\nname: rival\ndirs:\n  - %s\ncan_spawn: false\n---\n' "$PROJ2" > "$AGORA_HOME/wiki/entities/rival.md"
 cd "$AGORA_HOME" && git add -A && git commit -qm "entities"
 
@@ -116,7 +116,7 @@ for i in $(seq 1 10); do POST tester@proj --event proposal --body "提案$i" >/d
 S=$(cat "$AGORA_HOME"/log/*/*.md | grep -c "相同提案"); D=$(cat "$AGORA_HOME"/log/*/*.md | grep -c "event:proposal")
 [ "$S" -eq 1 ] && [ "$D" -eq 11 ] && ok "20 并发：相同×10→1，不同×10→10" || fail "20 并发（相同=$S 总=$D，want 1/11）"
 
-echo "===== MCP 协议（九工具 + 权限） ====="
+echo "===== MCP 协议（十二工具 + 权限） ====="
 cd "$PROJ" && python3 - "$PKG/server/agora_mcp.py" "$PLAN" <<'PYEOF' && ok "MCP 全链" || fail "MCP 全链"
 import json, subprocess, sys
 srv, plan = sys.argv[1], sys.argv[2]
@@ -127,7 +127,7 @@ def rpc(m, ps=None, i=1):
 r = rpc("initialize", {"protocolVersion":"2025-03-26"})
 assert "instructions" in r["result"] and len(r["result"]["instructions"]) < 600  # 含路径插值后的预算
 tools = [t["name"] for t in rpc("tools/list", i=2)["result"]["tools"]]
-assert len(tools) == 10, tools
+assert len(tools) == 12, tools
 r = rpc("tools/call", {"name":"agora_task_create","arguments":{"title":"MCP任务","parent":plan}}, 3)
 tid = json.loads(r["result"]["content"][0]["text"])["task"]
 rpc("tools/call", {"name":"agora_post","arguments":{"event":"claimed","task":tid}}, 4)
@@ -167,10 +167,39 @@ AGORA_HOME="$HOME2" AGORA_PKG="$PKG" bash "$PKG/scripts/init.sh" >/dev/null 2>&1
 AGORA_HOME="$T/agora-x" AGORA_PKG="$PKG" AGORA_REMOTE="https://github.com/x/y.git" bash "$PKG/scripts/init.sh" >/dev/null 2>&1
 [[ $? -eq 1 ]] && ok "https 远端被拒(rc=1)" || fail "https 远端被拒(rc=1)"
 # 双机写入：B 发事件 → A 写前 pre-pull 应合并到 B 的事件
-bash "$HOME2/scripts/post.sh" --actor rival@proj2 --project proj2 --event proposal --body "B机的提案" >/dev/null
+AGORA_HOME="$HOME2" bash "$HOME2/scripts/post.sh" --actor rival@proj2 --project proj2 --event proposal --body "B机的提案" >/dev/null
 POST tester@proj --event proposal --body "A机的提案" >/dev/null
 cat "$AGORA_HOME"/log/*/*.md | grep -q "B机的提案" && ok "pre-pull 合并远端事件" || fail "pre-pull 合并远端事件"
 git -C "$REMOTE" log --format=%s 2>/dev/null | grep -q "proposal" && ok "post 后 push 到远端" || fail "post 后 push 到远端"
+# 读路径同步：B 再发一条，A 不写任何东西、只调 agora_sync 就应看到
+AGORA_HOME="$HOME2" bash "$HOME2/scripts/post.sh" --actor rival@proj2 --project proj2 --event proposal --body "B机第二提案" >/dev/null
+SYNCO=$(bash "$AGORA_HOME/scripts/sync.sh" pre)
+echo "$SYNCO" | grep -q '"merged_new":true' && ok "agora_sync 显式拉取（merged_new=true）" || fail "agora_sync 显式拉取（$SYNCO）"
+cat "$AGORA_HOME"/log/*/*.md | grep -q "B机第二提案" && ok "读路径同步后可见他机事件" || fail "读路径同步后可见他机事件"
+# agora_who 名册发现（经 MCP）
+cd "$PROJ" && python3 - "$PKG/server/agora_mcp.py" <<'PYEOF' && ok "agora_who 名册发现" || fail "agora_who 名册发现"
+import json, subprocess, sys
+p = subprocess.Popen(["python3", sys.argv[1]], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+def rpc(m, ps=None, i=1):
+    p.stdin.write(json.dumps({"jsonrpc":"2.0","id":i,"method":m,"params":ps or {}})+"\n"); p.stdin.flush()
+    return json.loads(p.stdout.readline())
+rpc("initialize", {})
+r = json.loads(rpc("tools/call", {"name":"agora_who","arguments":{}}, 2)["result"]["content"][0]["text"])
+names = {e["name"]: e for e in r["roster"]}
+assert r["you"] == "tester@proj" and "rival" in names and names["tester"]["here"] is True and names["rival"]["here"] is False, r
+r2 = json.loads(rpc("tools/call", {"name":"agora_sync","arguments":{}}, 3)["result"]["content"][0]["text"])
+assert r2.get("sync") == "ok", r2
+p.stdin.close()
+PYEOF
+# dispatch 机器隔离：他机的在场记录不触发 notified
+printf '%s tester sess-1 2026-10-14\n' "foreign-host" > "$AGORA_HOME/scripts/sessions.map"
+OUT=$(AGORA_RUNTIME=true bash "$AGORA_HOME/scripts/dispatch.sh" --actor tester@proj --project "$PROJ" --task "$C" 2>&1)
+echo "$OUT" | grep -q '"mode":"spawned"' && ok "他机在场记录被忽略（仍派生）" || fail "他机在场记录被忽略（$OUT）"
+rm -f "$AGORA_HOME"/raw/dispatches/*.live
+printf '%s tester sess-1 2026-10-14\n' "$(hostname)" > "$AGORA_HOME/scripts/sessions.map"
+OUT=$(AGORA_RUNTIME=true bash "$AGORA_HOME/scripts/dispatch.sh" --actor tester@proj --project "$PROJ" --task "$C" 2>&1)
+echo "$OUT" | grep -q '"mode":"notified"' && ok "本机在场降级为通知" || fail "本机在场降级为通知（$OUT）"
+printf '# <机器名>  <agent名>  <opencode session id>  <登记时间>\n' > "$AGORA_HOME/scripts/sessions.map"
 # SSH 签名
 ssh-keygen -q -t ed25519 -N "" -f "$T/id_ed25519" 2>/dev/null
 if [[ -f "$T/id_ed25519.pub" ]]; then

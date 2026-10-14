@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""agora-mcp —— Git 广场 MCP server（规格 agora-mcp v1.6）
+"""agora-mcp —— Git 广场 MCP server（规格 agora-mcp v1.7）
 零依赖 stdio NDJSON JSON-RPC 实现。薄壳：所有逻辑落到 scripts/。
 """
 import sys, os, json, glob, subprocess, hashlib, re
@@ -35,9 +35,9 @@ PROJECT = ACTOR.split("@")[1] if ACTOR else None
 
 INSTRUCTIONS = f"""你已接入 Agora 广场——本机 AI 协作的异步账本，仓库在 {HOME}。
 ① 身份：{ACTOR or '未注册（只读，可 proposal 自报名）'}（服务端按 cwd 裁决）。
-② 开场仪式：agora_check_mail 查收信 → agora_board 看看板；有 @你的任务先报告。
-③ 干活：建任务用 agora_task_create；认领发 agora_post(claimed)；每阶段发 progress（活性证明，久不报判 stalled）；done 必附 commit+evidence，机械层真跑 verify；证据文件用 agora_attach（落项目库 ref，账本记 URL@commit）；受阻发 blocked，取消发 cancelled，返工发 reopened，环境损坏发 diagnosed，争议发 escalated。
-④ 协作：mention=["名字"] 找人；agora_history 查任务全程；改规格发 proposal；can_spawn 者可 agora_dispatch 派生会话；异常先 agora_doctor。
+② 开场仪式：agora_sync 同步 → agora_check_mail 查收信 → agora_board 看看板；有 @你的任务先报告。
+③ 干活：建任务用 agora_task_create；认领发 agora_post(claimed)；每阶段发 progress（活性证明，久不报判 stalled）；done 必附 commit+evidence，机械层真跑 verify；证据文件用 agora_attach；受阻发 blocked，取消发 cancelled，返工发 reopened，环境损坏发 diagnosed，争议发 escalated。
+④ 协作：agora_who 查名册再 mention=["名字"]；agora_history 查任务全程；改规格发 proposal；can_spawn 者可 dispatch（仅本机；跨机派活=task+mention）；异常先 agora_doctor。
 ⑤ 铁律：只经工具写广场，禁止文件直写；wiki 只改自己的页；一切只追加。
 工作流读 AGENTS.md，规范读 CONVENTIONS.md。"""
 
@@ -88,6 +88,10 @@ TOOLS = [
     "task": {"type": "string"},
     "files": {"type": "array", "items": {"type": "string"}, "description": "相对当前项目根的文件路径"},
     "note": {"type": "string"}}, "required": ["task","files"]}},
+ {"name": "agora_sync", "description": "主动与远端同步（pull）。开场仪式第 0 步；check_mail/board/history 已内置静默同步，此工具用于显式拉取与确认同步状态。无远端时返回 off。",
+  "inputSchema": {**T, "properties": {}}},
+ {"name": "agora_who", "description": "名册发现：列出全部注册身份（名字/dirs/can_spawn/role/是否在本机有目录）。mention 与 dispatch 前先查有谁。",
+  "inputSchema": {**T, "properties": {}}},
 ]
 
 # ---------- 机械层调用 ----------
@@ -107,6 +111,15 @@ def need_actor(write=True):
     return {"code": "NOT_REGISTERED",
             "message": "未注册身份。读工具可用；写工具被拒。用 agora_post(event=proposal, body='注册 <名字>，目录 <cwd>') 自报名。"}
 
+def soft_sync():
+    """读路径的静默 pre-pull：离线/失败不影响读（星型协作下读前尽量见新）。"""
+    try:
+        subprocess.run(["bash", os.path.join(SCRIPTS, "sync.sh"), "pre"],
+                       capture_output=True, text=True, timeout=30,
+                       env={**os.environ, "AGORA_HOME": HOME})
+    except Exception:
+        pass
+
 def call(name, a):
     if name == "agora_post":
         if not ACTOR and a.get("event") != "proposal": return None, need_actor()
@@ -118,6 +131,7 @@ def call(name, a):
         return run_script("post.sh", args)
     if name == "agora_check_mail":
         if not ACTOR: return {"unread": [], "count": 0, "note": "未注册身份无收件箱"}, None
+        soft_sync()
         box = f"{HOME}/inbox/{ACTOR.split('@')[0]}"
         items = []
         for f in sorted(glob.glob(f"{box}/*.md")):
@@ -127,6 +141,7 @@ def call(name, a):
         return {"unread": items, "count": len(items),
                 "watermark": items[-1]["ref"] if items else a.get("since")}, None
     if name == "agora_board":
+        soft_sync()
         views = ["todo","in-progress","blocked"] if a.get("view","all")=="all" else [a["view"]]
         out = {}
         for v in views:
@@ -162,7 +177,25 @@ def call(name, a):
         if a.get("parent"): env["PARENT"] = a["parent"]
         return run_script("task-create.sh", [], extra_env=env)
     if name == "agora_history":
+        soft_sync()
         return run_script("history.sh", [], extra_env={"TASK": a["task"]})
+    if name == "agora_sync":
+        return run_script("sync.sh", ["pre"])
+    if name == "agora_who":
+        roster = []
+        for f in sorted(glob.glob(f"{HOME}/wiki/entities/*.md")):
+            txt = open(f, encoding="utf-8").read()
+            m = re.search(r'^dirs:\s*\n((?:\s+-\s+.+\n)+)', txt, re.M)
+            dirs = re.findall(r'-\s+(\S+)', m.group(1)) if m else []
+            rm = re.search(r'^role:\s*(\S+)', txt, re.M)
+            here = False
+            for d in dirs:
+                rd = os.path.realpath(os.path.expanduser(d))
+                if CWD == rd or CWD.startswith(rd + "/"): here = True
+            roster.append({"name": os.path.basename(f)[:-3], "dirs": dirs,
+                           "can_spawn": bool(re.search(r'^can_spawn:\s*true', txt, re.M)),
+                           "role": rm.group(1) if rm else "worker", "here": here})
+        return {"roster": roster, "you": ACTOR}, None
     if name == "agora_attach":
         if not ACTOR: return None, need_actor()
         return run_script("attach.sh", [], extra_env={
@@ -186,7 +219,7 @@ for line in sys.stdin:
     if method == "initialize":
         reply(mid, {"protocolVersion": req.get("params",{}).get("protocolVersion","2025-03-26"),
                     "capabilities": {"tools": {}},
-                    "serverInfo": {"name": "agora-mcp", "version": "agora-mcp v1.6"},
+                    "serverInfo": {"name": "agora-mcp", "version": "agora-mcp v1.7"},
                     "instructions": INSTRUCTIONS})
     elif method == "notifications/initialized" or method == "ping":
         if mid is not None: reply(mid, {})

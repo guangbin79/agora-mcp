@@ -51,8 +51,10 @@ DID="d-$(date +%s%N | sha1sum | cut -c1-8)"
 LOG="raw/dispatches/$DID.log"
 
 # 在场优先：目标项目已有活会话 → 只通知不派生
+# sessions.map 按机器隔离（格式：<host> <agent> <session> <ts>）——他机的活会话
+# 无法被本机通知桥触达，不算"在场"；跨机派活走 task_create + mention 异步路径
 PROJNAME=$(basename "$PDIR")
-if grep -q "^$CHILD " "$AGORA_HOME/scripts/sessions.map" 2>/dev/null; then
+if grep -q "^$(hostname) $CHILD " "$AGORA_HOME/scripts/sessions.map" 2>/dev/null; then
   bash "$AGORA_HOME/scripts/post.sh" --actor "$ACTOR" --project "$PROJNAME" --event ack \
     --body "dispatch $TASK notified via bridge" --mention "$CHILD" >/dev/null
   echo "{\"dispatch_id\":\"$DID\",\"mode\":\"notified\",\"child_actor\":\"$CHILD@$PROJNAME\"}"

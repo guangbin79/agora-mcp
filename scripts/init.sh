@@ -33,7 +33,7 @@ owner: mayor
 - flock 长期不可获取：ps 找持锁进程并 kill；MUST NOT 删除锁文件（锁在 fd 不在文件）。
 - §sync 同步冲突（SYNC_CONFLICT）：union 未覆盖的冲突（如二进制）；人工合并后 push，发 diagnosed 记录。
 EOF
-[[ -f scripts/sessions.map ]] || printf '# <agent名>  <opencode session id>  <登记时间>\n' > scripts/sessions.map
+[[ -f scripts/sessions.map ]] || printf '# <机器名>  <agent名>  <opencode session id>  <登记时间>（多机：仅本机条目算"在场"）\n' > scripts/sessions.map
 git add -A
 git diff --cached --quiet || git commit -qm "init: agora bootstrap (converge)"
 git rev-parse --verify HEAD >/dev/null 2>&1 || git commit -qm "init: agora bootstrap" --allow-empty

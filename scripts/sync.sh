@@ -33,10 +33,12 @@ case "$MODE" in
   pre)
     git fetch origin >/dev/null 2>&1 || hard_fail fetch_failed "网络不可达？事件将只落本地"
     # 远端有新提交才合并（--no-rebase：宣言铁律禁 rebase；union 驱动处理同文件追加）
+    MERGED=false
     if ! git merge-base --is-ancestor FETCH_HEAD HEAD 2>/dev/null; then
       git merge --no-edit FETCH_HEAD >/dev/null 2>&1 || hard_fail merge_conflict "union 未覆盖的冲突，查 doctor-runbook §sync"
+      MERGED=true
     fi
-    echo "{\"sync\":\"ok\"}" ;;
+    echo "{\"sync\":\"ok\",\"merged_new\":$MERGED}" ;;
   post)
     git push origin HEAD >/dev/null 2>&1 || hard_fail push_failed "已本地落账，下次写入前会自动合并重试"
     echo "{\"sync\":\"ok\"}" ;;
