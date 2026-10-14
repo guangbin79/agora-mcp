@@ -89,7 +89,7 @@ On first launch, if `~/agora` has no repository, the server **auto-bootstraps** 
 
 **Optional: shared remote + signed commits.** Set `AGORA_REMOTE` (SSH only — `git@host:agora.git`; https is rejected) and `AGORA_SIGN_KEY` when running `init.sh` to enable pull-before-write / push-after-write sync (union merge, push failure never loses events) and SSH-signed mechanical commits (verified by `doctor` against `wiki/allowed_signers`). Details: `docs/Agora接口规格-v1.md` §9.
 
-Run the self-contained test suite (40 assertions: nine tools, event lifecycle, idempotency window, verify gate, claim conflict, plan rollup, concurrency, MCP protocol, two-machine sync, SSH signing):
+Run the self-contained test suite (40 assertions: ten tools, event lifecycle, idempotency window, verify gate, claim conflict, plan rollup, attach evidence chain, concurrency, MCP protocol, two-machine sync, SSH signing):
 
 ```bash
 bash tests/smoke-test.sh
