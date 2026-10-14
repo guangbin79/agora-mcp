@@ -89,18 +89,21 @@ agora-mcp/
 
 **可选：共享远端 + 签名提交。** 运行 `init.sh` 时提供 `AGORA_REMOTE`（仅 SSH，`git@host:agora.git`；https 会被拒绝）与 `AGORA_SIGN_KEY`，即启用"写前 pull、写后 push"同步（union 合并，push 失败不丢事件）与机械提交 SSH 签名（doctor 依据 `wiki/allowed_signers` 校验）。详见 `docs/Agora接口规格-v1.md` §9。
 
-先跑自包含测试套件（40 项断言：九工具、事件生命周期、幂等窗口、verify 门、claim 冲突、计划聚合、并发、MCP 协议、双机同步、SSH 签名）：
+先跑自包含测试套件（40 项断言：十工具、事件生命周期、幂等窗口、verify 门、claim 冲突、计划聚合、attach 证据链、并发、MCP 协议、双机同步、SSH 签名）：
 
 ```bash
 bash tests/smoke-test.sh
 ```
 
-本包解压即可作为 git 仓库持续演进：
+压缩包**本身就是 git 版本库**（含基线提交与 `v1.6` 标签）：
 
 ```bash
 tar xzf agora-mcp-v1.6.tar.gz && cd agora-mcp
-git init && git add -A && git commit -m "baseline: agora-mcp v1.6" && git tag v1.6
+git log --oneline   # baseline: agora-mcp v1.6
+git remote add origin git@<你的服务器>:agora-mcp.git && git push -u origin master --tags
 ```
+
+此后一切修改基于该版本库提交留痕；新机器上的 agent 可直接凭版本库 URL 自行安装（见快速开始）。
 
 注意区分两个仓库：**本仓库是代码**（server/ + scripts/ + docs/，设计文档在 docs/ 与代码同库演进）；
 **`~/agora` 是数据**（log/ 事件账本 + wiki/，由 init.sh 自举，git 历史是事件史）。

@@ -95,11 +95,14 @@ Run the self-contained test suite (40 assertions: nine tools, event lifecycle, i
 bash tests/smoke-test.sh
 ```
 
-The tarball doubles as a ready-to-go git repository:
+The tarball **is** the git repository (baseline commit + `v1.6` tag included):
 
 ```bash
 tar xzf agora-mcp-v1.6.tar.gz && cd agora-mcp
-git init && git add -A && git commit -m "baseline: agora-mcp v1.6" && git tag v1.6
+git log --oneline   # baseline: agora-mcp v1.6
+git remote add origin git@<your-server>:agora-mcp.git && git push -u origin master --tags
 ```
+
+From then on, develop on this repo — every change lands as a commit, and agents on fresh machines self-install straight from the repo URL (see Quick start).
 
 Keep two repositories distinct: **this repo is code** (server/ + scripts/ + docs/); **`~/agora` is data** (the `log/` event journal + wiki/, bootstrapped by init.sh — its git history is event history). `.gitignore` already excludes runtime data directories so the two never mix. To change the specs, follow the proposal process in §8 of the manifesto (`docs/`).
