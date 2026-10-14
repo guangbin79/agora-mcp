@@ -24,7 +24,7 @@ git clone <仓库url> && bash agora-mcp/install.sh
 **方式 B：本地压缩包**
 
 ```bash
-tar xzf agora-mcp-v1.15.tar.gz -C ~ && bash ~/agora-mcp/install.sh
+tar xzf agora-mcp-v1.16.tar.gz -C ~ && bash ~/agora-mcp/install.sh
 ```
 
 两个注意点：
@@ -123,7 +123,8 @@ agora-mcp/
 │   ├── wiki-write.sh      # wiki 写入（owner 校验）
 │   ├── dispatch.sh        # 本机派生（权限/深度/配额/落账；sessions.map 机器名列）
 │   ├── sync.sh            # 星型同步：写前 pull / 写后 push（仅 SSH，union 合并）
-│   ├── poll.sh            # 唤醒+看门狗+保洁：mention 拾取本机派生、stalled 派生 diagnosed、sessions/inbox 清理（cron 调用）
+│   ├── poll.sh            # 唤醒+看门狗+保洁：mention 拾取本机派生、stalled 诊断/升级/回池、sessions/inbox 清理（cron 调用）
+│   ├── notify-opencode.sh # 通知桥：inbox 监听 → 注入运行中的 opencode 会话（规格 §8.1，可选常驻）
 │   ├── init.sh            # 自举（幂等）
 │   ├── install-hooks.sh   # 防御纵深 pre-commit
 │   └── backup.sh          # git bundle 备份（建议 cron）
@@ -138,23 +139,25 @@ agora-mcp/
 crontab -e → */5 * * * * AGORA_HOME=~/agora bash ~/agora/scripts/poll.sh
 ```
 
-poll.sh 每轮：sync → **看门狗**（in-progress 任务 40min 无新事件 → 派生 diagnosed 并 mention 认领者；活性以本机观察时钟计，免疫跨机钟漂）→ **mention 拾取**（@本机实体的新邮件 + 任务未认领 → 本机 dispatch 拉起，拉起模板内置"开工前复查 owner"惯例）→ **本地保洁**（sessions.map 本机条目 24h TTL、inbox 90 天归档）。`AGORA_POLL_SPAWN=0` 只报告不派生。详见规格 §11。
+poll.sh 每轮：sync → **看门狗**（in-progress 任务 40min 无新事件 → 派生 diagnosed 并 mention 认领者；活性以本机观察时钟计，免疫跨机钟漂；连续诊断无响应 → escalated 升级 mention 认领者+dispatcher，`AGORA_WATCHDOG_AUTO_REOPEN=1` 时进一步自动回池）→ **mention 拾取**（@本机实体的新邮件 + 任务未认领 → 本机 dispatch 拉起，拉起模板内置"开工前复查 owner"惯例）→ **本地保洁**（sessions.map 本机条目 24h TTL、inbox 90 天归档）→ **滞留提醒**（.live 超期回溯 mention 派单方）。`AGORA_POLL_SPAWN=0` 只报告不派生。详见规格 §11。
+
+可选常驻通知桥 `notify-opencode.sh`：监听 inbox，向运行中的 opencode 会话实时注入"有信"提醒（60s 去抖、不可达静默），让 notified 模式真正实时。详见规格 §8.1。
 
 ## 作为代码仓库持续开发
 
 **可选：共享远端 + 签名提交。** 运行 `init.sh` 时提供 `AGORA_REMOTE`（仅 SSH，`git@host:agora.git`；https 会被拒绝）与 `AGORA_SIGN_KEY`，即启用"写前 pull、写后 push"同步（union 合并，push 失败不丢事件）与机械提交 SSH 签名（doctor 依据 `wiki/allowed_signers` 校验）。详见 `docs/Agora接口规格-v1.md` §9。
 
-先跑自包含测试套件（76 项断言：十二工具、事件生命周期、幂等窗口、verify 门、claim 冲突、计划聚合、attach 证据链、并发、MCP 协议、真双机隔离同步、读路径软同步、agora_who 名册、本机作用域 dispatch、SSH 签名、HTTP 只读窗口、poll 唤醒/看门狗/保洁、dispatch 注入防御、增量推导、证据引用对账）：
+先跑自包含测试套件（84 项断言：十二工具、事件生命周期、幂等窗口、verify 门、claim 冲突、计划聚合、attach 证据链、并发、MCP 协议、真双机隔离同步、读路径软同步、agora_who 名册、本机作用域 dispatch、SSH 签名、HTTP 只读窗口、poll 唤醒/看门狗阶梯/保洁、通知桥、dispatch 注入防御、增量推导、证据引用对账）：
 
 ```bash
 bash tests/smoke-test.sh
 ```
 
-压缩包**本身就是 git 版本库**（含基线提交与 `v1.15` 标签）：
+压缩包**本身就是 git 版本库**（含基线提交与 `v1.16` 标签）：
 
 ```bash
-tar xzf agora-mcp-v1.15.tar.gz && cd agora-mcp
-git log --oneline   # baseline: agora-mcp v1.15
+tar xzf agora-mcp-v1.16.tar.gz && cd agora-mcp
+git log --oneline   # baseline: agora-mcp v1.16
 git remote add origin git@<你的服务器>:agora-mcp.git && git push -u origin master --tags
 ```
 
@@ -162,4 +165,4 @@ git remote add origin git@<你的服务器>:agora-mcp.git && git push -u origin 
 
 注意区分两个仓库：**本仓库是代码**（server/ + scripts/ + docs/，设计文档在 docs/ 与代码同库演进）；
 **`~/agora` 是数据**（log/ 事件账本 + wiki/，由 init.sh 自举，git 历史是事件史）。
-`.gitignore` 已排除运行数据目录，两者永不混淆。修改规格文档请走 docs/Agora宣言-v0.18.md 中 §8 的提案流程。
+`.gitignore` 已排除运行数据目录，两者永不混淆。修改规格文档请走 docs/Agora宣言-v0.19.md 中 §8 的提案流程。

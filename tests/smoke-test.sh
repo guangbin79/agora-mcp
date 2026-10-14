@@ -336,6 +336,47 @@ W1=$(cat "$AGORA_HOME"/log/*/watchdog.md 2>/dev/null | grep -c "event:diagnosed"
 AGORA_RUNTIME=true bash "$AGORA_HOME/scripts/poll.sh" >/dev/null
 W2=$(cat "$AGORA_HOME"/log/*/watchdog.md 2>/dev/null | grep -c "event:diagnosed")
 [[ "$W1" == "$W2" ]] && ok "看门狗 cadence 不刷屏" || fail "看门狗 cadence 不刷屏（$W1→$W2）"
+
+# 升级阶梯（ESCALATE_AFTER=1）：diagnosed → escalated →（AUTO_REOPEN=1）reopened 回池
+OUT=$(TITLE="升级阶梯任务" TC); LADT=$(echo "$OUT" | sed -n 's/.*"task":"\(gt-[0-9a-f]*\)".*/\1/p')
+POST tester@proj --event claimed --task "$LADT" >/dev/null
+AGORA_RUNTIME=true bash "$AGORA_HOME/scripts/poll.sh" >/dev/null   # 建立活性基线
+seed_old() { python3 - "$AGORA_HOME" "$LADT" <<'PYEOF'
+import json, sys, time
+f = sys.argv[1] + "/.git/poll-state.json"
+s = json.load(open(f))
+e = s.get("_activity", {}).get(sys.argv[2])
+assert e, "无活性跟踪条目"
+e["since"] = time.time() - 3600
+json.dump(s, open(f, "w"))
+PYEOF
+}
+seed_old; AGORA_WATCHDOG_ESCALATE_AFTER=1 AGORA_RUNTIME=true bash "$AGORA_HOME/scripts/poll.sh" >/dev/null
+cat "$AGORA_HOME"/log/*/watchdog.md | grep "event:diagnosed" | grep -q "$LADT" \
+  || { fail "阶梯第 1 级 diagnosed"; }
+# 每次 fire 后看门狗把跟踪条目标记为待采纳；先跑一轮采纳新事件复位时钟，再播种再 fire
+AGORA_RUNTIME=true bash "$AGORA_HOME/scripts/poll.sh" >/dev/null
+seed_old; AGORA_WATCHDOG_ESCALATE_AFTER=1 AGORA_RUNTIME=true bash "$AGORA_HOME/scripts/poll.sh" >/dev/null
+cat "$AGORA_HOME"/log/*/watchdog.md | grep "event:escalated" | grep -q "$LADT" \
+  && ok "stalled 升级阶梯：escalated" || fail "stalled 升级阶梯：escalated"
+AGORA_RUNTIME=true bash "$AGORA_HOME/scripts/poll.sh" >/dev/null
+seed_old; AGORA_WATCHDOG_ESCALATE_AFTER=1 AGORA_WATCHDOG_AUTO_REOPEN=1 AGORA_RUNTIME=true bash "$AGORA_HOME/scripts/poll.sh" >/dev/null
+grep -q "^- $LADT" "$AGORA_HOME/board/todo.md" \
+  && ok "watchdog 自动回池（reopened → todo）" || fail "watchdog 自动回池（reopened → todo）"
+
+# .live 滞留：超期 → 回溯 dispatched 事件 mention 派单方（每个 did 只提醒一次）
+OUT=$(TITLE="stale-live任务" TC); SLT=$(echo "$OUT" | sed -n 's/.*"task":"\(gt-[0-9a-f]*\)".*/\1/p')
+POST tester@proj --event claimed --task "$SLT" >/dev/null
+DID_TEST="d-staletest"
+POST tester@proj --event dispatched --task "$SLT" --target "$PROJ" --child tester --run "raw/dispatches/$DID_TEST.log" >/dev/null
+touch -d "1 hour ago" "$AGORA_HOME/raw/dispatches/$DID_TEST.live"
+AGORA_RUNTIME=true bash "$AGORA_HOME/scripts/poll.sh" >/dev/null
+cat "$AGORA_HOME"/log/*/watchdog.md | grep "event:diagnosed" | grep -q ".live 滞留" \
+  && ok "stale .live 提醒派单方" || fail "stale .live 提醒派单方"
+N1=$(cat "$AGORA_HOME"/log/*/watchdog.md | grep -c ".live 滞留")
+AGORA_RUNTIME=true bash "$AGORA_HOME/scripts/poll.sh" >/dev/null
+N2=$(cat "$AGORA_HOME"/log/*/watchdog.md | grep -c ".live 滞留")
+[[ "$N1" == "$N2" ]] && ok "stale .live 不重复提醒" || fail "stale .live 不重复提醒（$N1→$N2）"
 # 只报告模式：SPAWN=0 → held 不派生
 OUT=$(TITLE="poll只报告任务" TC); POLLT2=$(echo "$OUT" | sed -n 's/.*"task":"\(gt-[0-9a-f]*\)".*/\1/p')
 POST rival@proj2 --event progress --task "$POLLT2" --mention tester --body "再来一单" >/dev/null
@@ -381,6 +422,48 @@ assert r['mails_archived']>=1, r
 ls "$AGORA_HOME/inbox/archive/tester/" 2>/dev/null | grep -q '\.md' \
   && ok "超期邮件入 archive" || fail "超期邮件入 archive"
 
+echo "===== 通知桥（notify-opencode.sh，规格 §8.1） ====="
+MOCK_LOG="$T/mock-http.log"; : > "$MOCK_LOG"
+python3 - "$MOCK_LOG" "$T/mock-port" >/dev/null 2>&1 <<'PYEOF' &
+import sys, http.server
+logf, portf = sys.argv[1], sys.argv[2]
+class H(http.server.BaseHTTPRequestHandler):
+    def do_POST(self):
+        n = int(self.headers.get("Content-Length") or 0); self.rfile.read(n)
+        open(logf, "a").write(self.path + "\n")
+        self.send_response(200); self.end_headers(); self.wfile.write(b"{}")
+    def log_message(self, *a): pass
+srv = http.server.HTTPServer(("127.0.0.1", 0), H)
+open(portf, "w").write(str(srv.server_address[1]))
+srv.serve_forever()
+PYEOF
+MOCK_PID=$!
+for i in $(seq 1 20); do [[ -s "$T/mock-port" ]] && break; sleep 0.2; done
+MOCK_PORT=$(cat "$T/mock-port")
+printf '%s tester ses-test %s\n' "$(hostname)" "$(date -Iseconds)" >> "$AGORA_HOME/scripts/sessions.map"
+NB() { AGORA_OPENCODE_URL="http://127.0.0.1:$1" bash "$AGORA_HOME/scripts/notify-opencode.sh" --once; }
+echo "- from:x | ts:y | ref:log/z.md:1 | summary:ack gt-0000" > "$AGORA_HOME/inbox/tester/$(date +%s%N).md"
+NB "$MOCK_PORT"
+grep -q "/session/ses-test/message" "$MOCK_LOG" \
+  && ok "通知桥注入运行中会话（仅提醒）" || fail "通知桥注入运行中会话"
+echo "- from:x | ts:y | ref:log/z.md:2 | summary:ack gt-0000" > "$AGORA_HOME/inbox/tester/$(date +%s%N)n2.md"
+NB "$MOCK_PORT"
+[[ $(grep -c "/session/" "$MOCK_LOG") == 1 ]] && ok "通知桥 60s 去抖" || fail "通知桥 60s 去抖"
+# TUI server 不可达：静默跳过，不报错不退出非零
+printf '%s loner ses-x %s\n' "$(hostname)" "$(date -Iseconds)" >> "$AGORA_HOME/scripts/sessions.map"
+mkdir -p "$AGORA_HOME/inbox/loner"
+echo "- from:x | ts:y | ref:r | summary:ack gt-0000" > "$AGORA_HOME/inbox/loner/$(date +%s%N).md"
+NB 1
+[[ $? -eq 0 && $(grep -c "/session/" "$MOCK_LOG") == 1 ]] \
+  && ok "通知桥不可达静默跳过" || fail "通知桥不可达静默跳过"
+# 无 sessions.map 映射的实体：静默跳过
+mkdir -p "$AGORA_HOME/inbox/ghost2"
+echo "- from:x | ts:y | ref:r | summary:ack gt-0000" > "$AGORA_HOME/inbox/ghost2/$(date +%s%N).md"
+NB "$MOCK_PORT"
+[[ $(grep -c "/session/" "$MOCK_LOG") == 1 ]] \
+  && ok "无映射实体静默跳过" || fail "无映射实体静默跳过"
+kill $MOCK_PID 2>/dev/null || true
+
 echo "===== 项目注册表（wiki/projects） ====="
 # 注册项目页（tester 注册 $PROJ，带默认 verify）
 cd "$PROJ" && python3 - "$PKG/server/agora_mcp.py" "$PROJ" <<'PYEOF' && ok "项目页注册" || fail "项目页注册"
@@ -424,7 +507,7 @@ grep -q "$POLLT2" "$AGORA_HOME/board/conflicts.md" \
   && ok "双清 claim 回放兜底入 conflicts" || fail "双清 claim 回放兜底入 conflicts"
 
 echo "===== 增量推导（derive-cache） ====="
-python3 -c "import json;c=json.load(open('$AGORA_HOME/.git/derive-cache.json'));assert c['v']==1 and c['watermark']" \
+python3 -c "import json;c=json.load(open('$AGORA_HOME/.git/derive-cache.json'));assert c['v']==2 and c['watermark']" \
   && ok "增量缓存已建立" || fail "增量缓存已建立"
 S0=$(python3 -c "import json;print(json.load(open('$AGORA_HOME/.git/derive-cache.json'))['stats']['incr'])")
 bash "$AGORA_HOME/scripts/derive-board.sh"

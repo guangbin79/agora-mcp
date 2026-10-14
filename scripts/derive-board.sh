@@ -48,7 +48,7 @@ wm, stats = {}, {"incr": 0, "full": 0}
 cache = None
 try:
     c = json.load(open(CACHE_F))
-    if c.get("v") == 1 and c.get("task_ids") == task_ids and isinstance(c.get("watermark"), dict):
+    if c.get("v") == 2 and c.get("task_ids") == task_ids and isinstance(c.get("watermark"), dict):
         cache = c
 except Exception: pass
 
@@ -93,8 +93,10 @@ def apply(shard, i, actor, event, f):
         if tasks[tid]["owner"] in (None, actor) and tasks[tid]["state"] != "done":
             tasks[tid].update(state="cancelled", owner=None)
     elif event == "reopened" and tid in tasks:
-        # 任何非 in-progress 状态可重开（done 重开 = 返工；cancelled 重开 = 恢复）
-        if tasks[tid]["state"] != "in-progress":
+        # 任何非 in-progress 状态可重开（done 重开 = 返工；cancelled 重开 = 恢复）；
+        # in-progress 仅 watchdog@* 可重开（CONVENTIONS §4 升级阶梯的自动回池，
+        # 宣言 §5.3 v0.19 起）
+        if tasks[tid]["state"] != "in-progress" or actor.startswith("watchdog@"):
             tasks[tid].update(state="todo", owner=None)
     elif event == "verify_failed" and tid in tasks:
         pass  # 保持 in-progress（宣言 §5.3）
@@ -197,7 +199,7 @@ if conflicts:
     open(f"{HOME}/board/conflicts.md", "w").write(render("Conflicts (claim_conflict)", conflicts))
 
 os.makedirs(os.path.dirname(CACHE_F), exist_ok=True)
-json.dump({"v": 1, "watermark": wm, "tasks": tasks, "retired": sorted(retired),
+json.dump({"v": 2, "watermark": wm, "tasks": tasks, "retired": sorted(retired),
            "conflicts": conflicts, "stall_notes": stall_notes,
            "last_progress": last_progress, "task_ids": task_ids, "stats": stats},
           open(CACHE_F, "w"))

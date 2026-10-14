@@ -4,10 +4,14 @@
 # 职责：
 #   ① sync（见到全网最新账本）
 #   ② stalled 看门狗（CONVENTIONS §4）：in-progress 任务 20min 无新事件=可疑（仅报告），
-#      40min=派生 diagnosed 事件进诊断队列并 mention 认领者；看门狗自己的 diagnosed
-#      事件会重置该任务的活性时钟（自然形成 40min cadence，不刷屏）。
+#      40min=派生 diagnosed 事件进诊断队列并 mention 认领者。
 #      活性判定只看"本机首次观察到当前最后事件的时刻"（poll-state.json 的
-#      _activity 跟踪表），不解析事件 ts —— 对跨机时钟漂移免疫
+#      _activity 跟踪表），不解析事件 ts —— 对跨机时钟漂移免疫。
+#      升级阶梯（账本推导，跨机一致）：同一任务连续 wn 条看门狗诊断无响应 →
+#      wn 达 AGORA_WATCHDOG_ESCALATE_AFTER（默认 3）→ escalated 并 mention 认领者+
+#      dispatcher；再之后 AGORA_WATCHDOG_AUTO_REOPEN=1（默认关）则 reopened 回池，
+#      否则保持安静（不再刷屏）。发诊断前先 sync 再见一次账本，他机已处理则采信复位
+#      （跨机撞窗守卫）
 #   ③ mention 拾取：本机实体（名册 dirs 在本机存在）的收件箱有新邮件且任务仍待认领
 #      （在 board/todo.md 中）→ 本机 dispatch 拉起；拉起模板内置"开工前复查 owner"惯例
 #   ④ 本地保洁：sessions.map 本机条目超 TTL（默认 24h）剔除；inbox 超期邮件
@@ -16,7 +20,9 @@
 # 状态：.git/poll-state.json（per-entity 邮件水位 + per-task 活性跟踪）与
 #       .git/poll.lock —— 本机文件，不进同步
 # 环境：AGORA_POLL_SPAWN=0 只报告不派生；AGORA_POLL_WARN_MIN=20；AGORA_POLL_CRIT_MIN=40；
-#       AGORA_DISPATCH_TIMEOUT=30（.live 标记滞留报告阈值，分钟）；
+#       AGORA_WATCHDOG_ESCALATE_AFTER=3（连续诊断升级阈值）；AGORA_WATCHDOG_AUTO_REOPEN=1
+#       时 escalated 之后任务自动 reopened 回池（默认关，保持人工）；
+#       AGORA_DISPATCH_TIMEOUT=30（.live 标记滞留阈值，分钟；滞留超阈值 mention 派单方一次）；
 #       AGORA_SESSION_TTL_H=24（本机 sessions.map 条目存活小时数，0=不清）；
 #       AGORA_INBOX_ARCHIVE_DAYS=90（邮件归档阈值天数，0=不归档）
 # 用法：crontab -e → */5 * * * * AGORA_HOME=~/agora bash ~/agora/scripts/poll.sh
@@ -55,20 +61,27 @@ def run(script, args):
                           env={**os.environ, "AGORA_HOME": HOME})
 
 def task_last_refs():
-    """task -> 其最后事件的内容指纹（shard 名序 + 物理行序 = 权威序，与 derive 一致）。"""
+    """task -> (指纹, event, actor, wn)。wn = 该任务尾部连续看门狗诊断条数
+    （账本推导的升级阶梯计数，跨机一致，任何真实活动即归零）。"""
     refs = {}
     for f in sorted(glob.glob(f"{HOME}/log/*/*.md")):
         rel = os.path.relpath(f, HOME)
         with open(f, encoding="utf-8") as fh:
             for i, line in enumerate(fh, 1):
                 m = re.search(r'\| task:(gt-[0-9a-f]+)\b', line)
-                if m:
-                    h = hashlib.sha1(line.encode()).hexdigest()[:16]
-                    refs[m.group(1)] = f"{rel}:{i}:{h}"
+                if not m: continue
+                ev = re.search(r'\| event:(\w+)', line)
+                ac = re.search(r'\| actor:(\S+)', line)
+                ev, ac = (ev.group(1) if ev else ""), (ac.group(1) if ac else "")
+                h = hashlib.sha1(line.encode()).hexdigest()[:16]
+                wn = 0
+                if ev in ("diagnosed", "escalated") and ac.startswith("watchdog@"):
+                    wn = (refs.get(m.group(1)) or (None, "", "", 0))[3] + 1
+                refs[m.group(1)] = (f"{rel}:{i}:{h}", ev, ac, wn)
     return refs
 
-report = {"poll": "ok", "host": HOST, "stalled": [], "suspicious": [],
-          "spawned": [], "held": [], "stale_live": 0,
+report = {"poll": "ok", "host": HOST, "stalled": [], "suspicious": [], "escalated": [],
+          "reopened": [], "spawned": [], "held": [], "stale_live": 0,
           "sessions_reaped": 0, "mails_archived": 0}
 
 now = time.time()
@@ -91,29 +104,94 @@ live_tasks = {t for t, _ in inprog}
 for t in list(act):  # 已离开 in-progress 的任务清出跟踪表，状态文件不膨胀
     if t not in live_tasks: del act[t]
 
+ESCALATE_AFTER = int(os.environ.get("AGORA_WATCHDOG_ESCALATE_AFTER", "3"))
+AUTO_REOPEN = os.environ.get("AGORA_WATCHDOG_AUTO_REOPEN", "0") == "1"
+
+def task_dispatcher(task):
+    p = f"{HOME}/wiki/tasks/{task}.md"
+    if os.path.exists(p):
+        m = re.search(r'^dispatcher:\s*(\S+)', open(p, encoding="utf-8").read(), re.M)
+        if m: return m.group(1)
+    return None
+
 for task, owner in inprog:
-    ref = refs.get(task, "none")  # 无事件（仅任务页）也纳入跟踪，自首次观察起计时
+    cur = refs.get(task)
+    fp = cur[0] if cur else "none"  # 无事件（仅任务页）也纳入跟踪，自首次观察起计时
     e = act.get(task)
-    if not isinstance(e, dict) or e.get("last_ref") != ref:
-        e = {"last_ref": ref, "since": now}   # 初见 / 有新事件：活性时钟归零
+    if not isinstance(e, dict) or e.get("last_ref") != fp:
+        e = {"last_ref": fp, "since": now}   # 初见 / 有新事件：活性时钟归零
         act[task] = e
     age = (now - float(e.get("since", now))) / 60
-    if age > CRIT:
+    if age <= CRIT:
+        if age > WARN:
+            report["suspicious"].append({"task": task, "owner": owner, "age_min": int(age)})
+        continue
+    # 跨机撞窗守卫：发诊断前再见一次全网账本；任务有了新事件（他机看门狗/认领者
+    # 已处理）→ 采信并复位，不重复落账
+    run("sync.sh", ["pre"])
+    cur2 = task_last_refs().get(task)
+    fp2 = cur2[0] if cur2 else "none"
+    if fp2 != fp:
+        act[task] = {"last_ref": fp2, "since": now}
+        continue
+    wn = cur2[3] if cur2 else 0  # 尾部连续看门狗诊断条数（含 escalated）
+    disp = task_dispatcher(task)
+    mention = owner
+    if disp and disp != owner: mention = f"{owner},{disp}"
+    if wn < ESCALATE_AFTER:
         r = run("post.sh", ["--actor", WATCHDOG, "--project", "watchdog",
                             "--event", "diagnosed", "--task", task,
-                            "--conclusion", f"stalled: 任务 {task} 已 {int(age)}min 无新事件落账（阈值 {CRIT}min，本机观察时钟），认领者 {owner}",
+                            "--conclusion", f"stalled: 任务 {task} 已 {int(age)}min 无新事件落账（阈值 {CRIT}min，本机观察时钟），认领者 {owner}（第 {wn+1} 次诊断）",
                             "--mention", owner])
         if r.returncode == 0:
             act[task] = {"last_ref": None, "since": now}  # 复位：下轮拾取 diagnosed 新事件重建时钟
         report["stalled"].append({"task": task, "owner": owner, "age_min": int(age),
-                                  "ok": r.returncode == 0})
-    elif age > WARN:
-        report["suspicious"].append({"task": task, "owner": owner, "age_min": int(age)})
+                                  "diag": wn + 1, "ok": r.returncode == 0})
+    elif wn == ESCALATE_AFTER:
+        r = run("post.sh", ["--actor", WATCHDOG, "--project", "watchdog",
+                            "--event", "escalated", "--task", task,
+                            "--conclusion", f"stalled 升级：任务 {task} 连续 {wn} 次诊断无响应（认领者 {owner} 可能已死/掉线），请介入或重新分配",
+                            "--mention", mention])
+        if r.returncode == 0:
+            act[task] = {"last_ref": None, "since": now}
+        report["escalated"].append({"task": task, "owner": owner, "ok": r.returncode == 0})
+    elif AUTO_REOPEN:
+        r = run("post.sh", ["--actor", WATCHDOG, "--project", "watchdog",
+                            "--event", "reopened", "--task", task,
+                            "--reason", f"watchdog 自动回池：escalated 后仍无响应（AGORA_WATCHDOG_AUTO_REOPEN=1）",
+                            "--mention", disp or owner])
+        if r.returncode == 0:
+            act.pop(task, None)  # 回池后离开 in-progress，移出跟踪
+        report["reopened"].append({"task": task, "owner": owner, "ok": r.returncode == 0})
+    # else：已 escalated 且未开自动回池 —— 保持安静，不刷屏
 
-# .live 滞留（派生会话超时不退）
+# .live 滞留（派生会话超时不退）：计数 + 回溯 dispatched 事件 mention 派单方（每个 did 一次）
+live_notified = state.setdefault("_live_notified", {})
 for f in glob.glob(f"{HOME}/raw/dispatches/*.live"):
-    if (now - os.path.getmtime(f)) / 60 > LIVE_TIMEOUT:
-        report["stale_live"] += 1
+    age_min = (now - os.path.getmtime(f)) / 60
+    if age_min <= LIVE_TIMEOUT: continue
+    report["stale_live"] += 1
+    did = os.path.basename(f)[:-5]
+    if did in live_notified: continue
+    disp, dtask = None, None
+    for lf in sorted(glob.glob(f"{HOME}/log/*/*.md")):
+        for line in open(lf, encoding="utf-8"):
+            if did in line and "| event:dispatched" in line:
+                am = re.search(r'\| actor:(\S+)', line)
+                tm = re.search(r'\| task:(gt-[0-9a-f]+)', line)
+                if am: disp = am.group(1).split("@")[0]
+                if tm: dtask = tm.group(1)
+    if disp and dtask and dtask in live_tasks:
+        r = run("post.sh", ["--actor", WATCHDOG, "--project", "watchdog",
+                            "--event", "diagnosed", "--task", dtask,
+                            "--conclusion", f"派生会话 {did} 超 {int(age_min)}min 未退（.live 滞留，子会话或已死/卡死），派单方 {disp} 请核查后 kill 并 rm 标记",
+                            "--mention", disp])
+        if r.returncode == 0:
+            report["stale_live_notified"] = report.get("stale_live_notified", 0) + 1
+    live_notified[did] = now  # 无论是否提醒都只记一次（防轮轮重复）
+live_now = {os.path.basename(f)[:-5] for f in glob.glob(f"{HOME}/raw/dispatches/*.live")}
+for d in list(live_notified):
+    if d not in live_now: del live_notified[d]  # .live 已清，移出通知记录
 
 # ---------- ③ mention 拾取（目录存在性 = 机器归属；水位 = 邮件文件名，定宽时间戳字典序可比） ----------
 def local_dirs(f):

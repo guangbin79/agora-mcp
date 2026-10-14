@@ -277,13 +277,17 @@ v1.15（2026-10-14）——加固与运维批：§4.7 注入防御（task 格式
 
 v1.16（2026-10-14）——文档批：README 重写配置章（三类参数通路：MCP environment 透传 / HTTP 窗口独立进程 / poll crontab 行），补 MCP 配置完整示例与 AGORA_REMOTE 补配路径。无协议与行为变更。
 
+v1.17（2026-10-14）——编排鲁棒性批：§8.1 通知桥落地（scripts/notify-opencode.sh，去抖持久化、不可达/无映射静默、desktop 兜底、最新登记生效）；§11 看门狗升级阶梯（wn 账本推导跨机一致，escalated → 可选自动 reopened，配套宣言 §5.3 watchdog 特许）+ 跨机撞窗守卫 + .live 滞留回溯 mention 派单方。测试套件 84 项断言。
+
 ## 8. 附录：宿主适配器（可选，不属于协议面）
 
 协议对订阅的回答永远是"查收件箱"；实时性是宿主层面的增强。适配器是**协议外的 shim**：可选、可删、失效时广场降级为纯拉模式而功能无损。
 
-### 8.1 opencode v2 通知桥（`scripts/notify-opencode.sh`）
+### 8.1 opencode v2 通知桥（`scripts/notify-opencode.sh`，v1.17 起随包提供）
 
 **原理**：opencode 的 TUI 是本地 HTTP server（默认 `http://localhost:4096`）的客户端，外部进程可经其 REST API 向**运行中的会话**注入消息。适配器不加载进运行时、不依赖插件 API——它只是一个外部脚本。
+
+**运行形态**：常驻（`nohup bash notify-opencode.sh &` 或 systemd --user），有 inotifywait 用 inotify 监听、否则退化为 `AGORA_NOTIFY_POLL_S`（默认 5s）轮询；`--once` 扫一轮即退（测试/调试）。环境：`AGORA_OPENCODE_URL`、`AGORA_NOTIFY_DEBOUNCE_S`（默认 60，去抖记录持久化于 `.git/notify-wm/`，重启不重置）、`AGORA_NOTIFY_MODE=opencode|desktop`（desktop = notify-send 兜底）。sessions.map 同一实体多次登记时**取最新一条**（重新登记即换绑）。
 
 **数据流**：
 
@@ -385,7 +389,8 @@ cron/systemd 定时调用的单次执行脚本（非守护进程），补全"事
 ```
 
 - **唤醒**：sync → 本机实体（名册 dirs 在本机存在，目录即归属）收件箱新邮件 → 任务仍待认领（在 board/todo.md）→ 本机 dispatch 拉起。`can_spawn=false` 或 `AGORA_POLL_SPAWN=0` 只报告（held）。邮件水位存 `.git/poll-state.json`（本机文件，不进同步）。
-- **看门狗**（CONVENTIONS §4）：in-progress 任务 20min（`AGORA_POLL_WARN_MIN`）无新事件 → 可疑报告；40min（`AGORA_POLL_CRIT_MIN`）→ 派生 `diagnosed` 事件并 mention 认领者（actor=`watchdog@<主机名>`）。看门狗自己的 diagnosed 重置活性时钟，自然形成 cadence。**活性以本机观察为准**（v1.15）：poll-state.json 的 `_activity` 表记"本机首次观察到该任务当前最后事件的时刻"，事件指纹变化即归零——不解析事件 `ts`，对跨机时钟漂移免疫。`.live` 滞留超 `AGORA_DISPATCH_TIMEOUT`（30min）计入报告。
+- **看门狗**（CONVENTIONS §4）：in-progress 任务 20min（`AGORA_POLL_WARN_MIN`）无新事件 → 可疑报告；40min（`AGORA_POLL_CRIT_MIN`）→ 派生 `diagnosed` 事件并 mention 认领者（actor=`watchdog@<主机名>`）。**活性以本机观察为准**（v1.15）：poll-state.json 的 `_activity` 表记"本机首次观察到该任务当前最后事件的时刻"，事件指纹变化即归零——不解析事件 `ts`，对跨机时钟漂移免疫。
+- **升级阶梯**（v1.17）：阶梯计数 `wn` = 该任务**尾部连续看门狗诊断条数**，从账本推导（任何真实活动即归零），跨机一致、无状态。`wn` 达 `AGORA_WATCHDOG_ESCALATE_AFTER`（默认 3）→ 改发 `escalated` 并 mention 认领者 + dispatcher；再之后若 `AGORA_WATCHDOG_AUTO_REOPEN=1`（默认关）→ `reopened` 回池（宣言 §5.3 的 watchdog 特许），否则保持安静不刷屏。**跨机撞窗守卫**：发诊断/升级前先 `sync pre` 再见一次账本，任务有新事件（他机看门狗或认领者已处理）则采信复位，不重复落账。`.live` 滞留超 `AGORA_DISPATCH_TIMEOUT`（30min）：回溯 `dispatched` 事件找到派单方与任务，任务仍在进行则 `diagnosed` 并 mention 派单方（每个 dispatch 只提醒一次，记录于 poll-state.json `_live_notified`）。
 - **本地保洁**（v1.15）：`sessions.map` 本机条目超 `AGORA_SESSION_TTL_H`（默认 24h，0=关闭）剔除（他机条目由它自己的 poll 清，本机不越权）；inbox 超 `AGORA_INBOX_ARCHIVE_DAYS`（默认 90 天，0=关闭）的邮件移入 `inbox/archive/<实体>/`。保洁变更 best-effort 提交并推送，失败不阻塞下轮。
 - **复查惯例**：poll 拉起的会话 prompt 内置"开工前 agora_sync + 复查 owner，已被认领即 retired 收工"——跨机 claim 撞车的退避点从"下一次碰巧读"提前到"第一行代码之前"。
 - 防重叠：`.git/poll.lock` 非阻塞 flock，上一轮未结束本轮安静退出。

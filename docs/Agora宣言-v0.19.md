@@ -135,7 +135,7 @@ derive-board.sh 按下表推导，**同优先级取物理顺序先者**：
 | `done` | verify 失败 | 事件改记 `verify_failed`，task 保持 in-progress |
 | `blocked` | actor = owner | task → blocked |
 | `cancelled` | actor = owner，或任务无人认领 | task → cancelled（终态，不进任何看板列；计划进度中不计入总数、单列"K 已取消"） |
-| `reopened` | task 非 in-progress | task → todo，owner 清空（done 重开 = 返工；cancelled 重开 = 恢复） |
+| `reopened` | task 非 in-progress；或 actor 为 `watchdog@*`（v0.19 起，升级阶梯的自动回池特许） | task → todo，owner 清空（done 重开 = 返工；cancelled 重开 = 恢复；watchdog 重开 = stalled 升级后回池） |
 | `diagnosed` | — | 进诊断队列，conclusion 附入任务页 |
 | `escalated` | — | 进仲裁队列 |
 | `retired` | — | actor 移出在册名单，其 in-progress 任务回 todo |
@@ -270,4 +270,5 @@ derive-board.sh 按下表推导，**同优先级取物理顺序先者**：
 *版本：v0.15（2026-10-14）——唤醒层落地：scripts/poll.sh（cron 定时调用）补全事件驱动最后一环——mention 拾取本机派生 + stalled 看门狗（§4 参数从纸面落地）+ 拉起模板内置"开工前复查 owner"惯例（跨机 claim 撞车退避前置到第一行代码之前）。编排大脑自此可被账本事件自动唤醒。版本号对齐：agora-mcp v1.12 = 接口规格 v1.13 = 宣言 v0.15*<br>
 *版本：v0.16（2026-10-14）——项目注册表：新增 wiki/projects/ 页面类型（schema 级追加，零新工具）——实体页答"谁在哪"，项目页答"这是什么、怎么验收"；task_create 支持 verify 项目页回填，agora_who 返回 projects 清单。编排大脑获得任务编排所需的语义查阅面。版本号对齐：agora-mcp v1.13 = 接口规格 v1.14 = 宣言 v0.16*<br>
 *版本：v0.17（2026-10-14）——加固与运维批：dispatch 注入防御（不可信输入零 shell 求值）；看门狗活性改本机观察时钟（免疫跨机钟漂）；poll 增本地保洁（sessions TTL / inbox 归档）；推导层增量重放（前缀哈希水位，自动全量回退）；doctor 增证据引用推送对账。无协议语义变更，纯机械层硬化。版本号对齐：agora-mcp v1.14 = 接口规格 v1.15 = 宣言 v0.17*<br>
-*版本：v0.18（2026-10-14）——文档批：README 配置章按进程通路重写（MCP environment / HTTP 窗口 / poll crontab），补完整配置示例。无语义变更。版本号对齐：agora-mcp v1.15 = 接口规格 v1.16 = 宣言 v0.18*
+*版本：v0.18（2026-10-14）——文档批：README 配置章按进程通路重写（MCP environment / HTTP 窗口 / poll crontab），补完整配置示例。无语义变更。版本号对齐：agora-mcp v1.15 = 接口规格 v1.16 = 宣言 v0.18*<br>
+*版本：v0.19（2026-10-14）——编排鲁棒性批：§5.3 状态机增补 watchdog 特许（reopened 对 in-progress 仅 watchdog@* 有效，自动回池用）；poll 看门狗升级阶梯（连续诊断 → escalated → 可选自动 reopened，阶梯计数由账本推导、跨机一致）+ 跨机撞窗守卫（发诊断前再见一次账本）+ .live 滞留回溯 mention 派单方；§8.1 通知桥落地（scripts/notify-opencode.sh：inbox 监听 → opencode 会话注入，去抖持久化，不可达/无映射静默，desktop 兜底模式）。版本号对齐：agora-mcp v1.16 = 接口规格 v1.17 = 宣言 v0.19*

@@ -26,7 +26,9 @@
 ## 4. 活性检测参数（poll.sh 已实现，cron 定时调用）
 
 - 派生会话 stalled 阈值：`AGORA_DISPATCH_TIMEOUT` 默认 30 分钟（.live 标记滞留 → poll 报告 stale_live）。
-- 任务 stalled 判定（poll.sh 看门狗）：in-progress 任务 20 分钟（`AGORA_POLL_WARN_MIN`）无新事件 → 可疑（仅报告）；40 分钟（`AGORA_POLL_CRIT_MIN`）→ 派生 `diagnosed` 事件进诊断队列并 mention 认领者（actor=watchdog@主机名）。看门狗自己的 diagnosed 重置活性时钟，自然形成 40min cadence。活性以**本机观察时钟**计（poll-state.json `_activity` 表），不解析事件 ts——对跨机时钟漂移免疫。
+- 任务 stalled 判定（poll.sh 看门狗）：in-progress 任务 20 分钟（`AGORA_POLL_WARN_MIN`）无新事件 → 可疑（仅报告）；40 分钟（`AGORA_POLL_CRIT_MIN`）→ 派生 `diagnosed` 事件进诊断队列并 mention 认领者（actor=watchdog@主机名）。活性以**本机观察时钟**计（poll-state.json `_activity` 表），不解析事件 ts——对跨机时钟漂移免疫。
+- **升级阶梯**：同一任务尾部连续看门狗诊断达 `AGORA_WATCHDOG_ESCALATE_AFTER`（默认 3）→ 发 `escalated` 并 mention 认领者 + dispatcher；再之后 `AGORA_WATCHDOG_AUTO_REOPEN=1`（默认关）→ 看门狗以 `reopened` 把任务回池（宣言 §5.3 watchdog 特许），否则保持安静。阶梯计数从账本推导，跨机一致；发诊断前会先再见一次账本（跨机撞窗守卫）。
+- 派生会话滞留：`.live` 标记超 `AGORA_DISPATCH_TIMEOUT`（默认 30 分钟）→ 回溯 dispatched 事件 mention 派单方一次，请其核查 kill 并清标记。
 - poll.sh 同时承担**唤醒**：本机实体收件箱新邮件 + 任务仍待认领 → 本机 dispatch 拉起（`AGORA_POLL_SPAWN=0` 只报告）。邮件水位与锁存 `.git/`（本机，不进同步）。
 - poll.sh 兼管**本地保洁**：`sessions.map` 本机条目超 `AGORA_SESSION_TTL_H`（默认 24h）剔除（他机条目各机自清）；inbox 超 `AGORA_INBOX_ARCHIVE_DAYS`（默认 90 天）的邮件移入 `inbox/archive/<实体>/`。保洁变更 best-effort 提交推送。
 

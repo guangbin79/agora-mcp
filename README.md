@@ -24,7 +24,7 @@ git clone <repo-url> && bash agora-mcp/install.sh
 **Option B: local tarball**
 
 ```bash
-tar xzf agora-mcp-v1.15.tar.gz -C ~ && bash ~/agora-mcp/install.sh
+tar xzf agora-mcp-v1.16.tar.gz -C ~ && bash ~/agora-mcp/install.sh
 ```
 
 Two caveats:
@@ -123,7 +123,8 @@ agora-mcp/
 │   ├── wiki-write.sh      # wiki writes (owner check)
 │   ├── dispatch.sh        # machine-local spawn (permission/depth/quota/ledger fuses; hostname column in sessions.map)
 │   ├── sync.sh            # star sync: pull-before-write / push-after-write (SSH only, union merge)
-│   ├── poll.sh            # wake-up + watchdog + housekeeping: mention pickup spawns locally, stalled tasks get diagnosed, sessions/inbox cleanup (cron-driven)
+│   ├── poll.sh            # wake-up + watchdog ladder + housekeeping: mention pickup spawns locally, stalled tasks get diagnosed/escalated/reopened, sessions/inbox cleanup (cron-driven)
+│   ├── notify-opencode.sh # notify bridge: watches inbox, injects into running opencode sessions (spec §8.1, optional daemon)
 │   ├── init.sh            # bootstrap (idempotent)
 │   ├── install-hooks.sh   # pre-commit defense in depth
 │   └── backup.sh          # git bundle backup (cron recommended)
@@ -138,23 +139,25 @@ On first launch, if `~/agora` has no repository, the server **auto-bootstraps** 
 crontab -e → */5 * * * * AGORA_HOME=~/agora bash ~/agora/scripts/poll.sh
 ```
 
-Each poll round: sync → **watchdog** (in-progress tasks with no new events for 40min get a `diagnosed` event and the owner is mentioned; activity is tracked on a local observation clock, immune to cross-machine clock skew) → **mention pickup** (new mail for a *local* entity + unclaimed task → local dispatch, with the "re-check owner before writing any code" rule baked into the spawn prompt) → **housekeeping** (24h TTL on this machine's sessions.map entries, 90-day inbox archival). `AGORA_POLL_SPAWN=0` for report-only mode. Details: spec §11.
+Each poll round: sync → **watchdog** (in-progress tasks with no new events for 40min get a `diagnosed` event and the owner is mentioned; activity is tracked on a local observation clock, immune to cross-machine clock skew; repeated unanswered diagnoses escalate to `escalated` mentioning owner+dispatcher, and with `AGORA_WATCHDOG_AUTO_REOPEN=1` the task is auto-reopened back to the pool) → **mention pickup** (new mail for a *local* entity + unclaimed task → local dispatch, with the "re-check owner before writing any code" rule baked into the spawn prompt) → **housekeeping** (24h TTL on this machine's sessions.map entries, 90-day inbox archival) → **stale-session nudge** (overdue .live markers trace back and mention the dispatcher once). `AGORA_POLL_SPAWN=0` for report-only mode. Details: spec §11.
+
+Optional notify bridge `notify-opencode.sh`: watches the inbox and injects a "you have mail" nudge into running opencode sessions in real time (60s debounce, silently skips when unreachable), making `notified` mode truly real-time. Details: spec §8.1.
 
 ## Developing from this repo
 
 **Optional: shared remote + signed commits.** Set `AGORA_REMOTE` (SSH only — `git@host:agora.git`; https is rejected) and `AGORA_SIGN_KEY` when running `init.sh` to enable pull-before-write / push-after-write sync (union merge, push failure never loses events) and SSH-signed mechanical commits (verified by `doctor` against `wiki/allowed_signers`). Details: `docs/Agora接口规格-v1.md` §9.
 
-Run the self-contained test suite (76 assertions: twelve tools, event lifecycle, idempotency window, verify gate, claim conflict, plan rollup, attach evidence chain, concurrency, MCP protocol, true two-machine sync isolation, read-path soft-sync, agora_who roster, machine-scoped dispatch, SSH signing, HTTP read-only window, poll wake-up/watchdog/housekeeping, dispatch injection defense, incremental derivation, evidence-ref push audit):
+Run the self-contained test suite (84 assertions: twelve tools, event lifecycle, idempotency window, verify gate, claim conflict, plan rollup, attach evidence chain, concurrency, MCP protocol, true two-machine sync isolation, read-path soft-sync, agora_who roster, machine-scoped dispatch, SSH signing, HTTP read-only window, poll wake-up/watchdog-ladder/housekeeping, notify bridge, dispatch injection defense, incremental derivation, evidence-ref push audit):
 
 ```bash
 bash tests/smoke-test.sh
 ```
 
-The tarball **is** the git repository (baseline commit + `v1.15` tag included):
+The tarball **is** the git repository (baseline commit + `v1.16` tag included):
 
 ```bash
-tar xzf agora-mcp-v1.15.tar.gz && cd agora-mcp
-git log --oneline   # baseline: agora-mcp v1.15
+tar xzf agora-mcp-v1.16.tar.gz && cd agora-mcp
+git log --oneline   # baseline: agora-mcp v1.16
 git remote add origin git@<your-server>:agora-mcp.git && git push -u origin master --tags
 ```
 
