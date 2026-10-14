@@ -181,6 +181,7 @@ const $=s=>document.querySelector(s);
 const esc=s=>s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
 function md(src){
   let s=esc(src);
+  s=s.replace(/&lt;!--[\s\S]*?--&gt;/g,"");  // 剥离派生标记注释
   s=s.replace(/```([\s\S]*?)```/g,(m,c)=>"<pre>"+c+"</pre>");
   s=s.split("\n").map(l=>{
     if(l.startsWith("### "))return"<h3>"+inline(l.slice(4))+"</h3>";
@@ -214,8 +215,10 @@ async function load(){
 async function loadBoard(){
   const d=await api("/api/board");
   const names={todo:"Todo（ready）","in-progress":"进行中",blocked:"受阻"};
+  const count=v=>(v.match(/^- .+/gm)||[]).filter(l=>!l.includes("（空）")&&!l.startsWith("- **")).length;
+  const stripH1=v=>v.replace(/^<!--[\s\S]*?-->\s*/,"").replace(/^# [^\n]*\n/,"");  // 卡片已有标题，去掉 md 自带 H1
   $("#view").innerHTML=Object.entries(d.views).map(([k,v])=>
-    `<div class="card"><h2>${names[k]}<span class="badge">${(v.match(/^- /gm)||[]).length}</span></h2><div class="md">${md(v)}</div></div>`).join("");
+    `<div class="card"><h2>${names[k]}<span class="badge">${count(v)}</span></h2><div class="md">${md(stripH1(v))}</div></div>`).join("");
   stamp();
 }
 async function loadTasks(){
