@@ -529,7 +529,7 @@ rm -rf "$T/board.snap"; cp -r "$AGORA_HOME/board" "$T/board.snap"
 rm "$AGORA_HOME/.git/derive-cache.json"; bash "$AGORA_HOME/scripts/derive-board.sh"
 diff -r "$T/board.snap" "$AGORA_HOME/board" >/dev/null && ok "增量与全量结果一致" || fail "增量与全量结果一致"
 # 前缀被改（union 合并重排/脏写）→ 自动回退全量重放，结果不变
-SHARD=$(ls "$AGORA_HOME"/log/*/*.md | head -1)
+SHARD=$(LC_ALL=C ls "$AGORA_HOME"/log/*/*.md | head -1)
 sed -i '1i <!-- tampered -->' "$SHARD" 2>/dev/null
 F0=$(python3 -c "import json;print(json.load(open('$AGORA_HOME/.git/derive-cache.json'))['stats']['full'])")
 bash "$AGORA_HOME/scripts/derive-board.sh"
