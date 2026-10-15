@@ -833,6 +833,20 @@ assert 'orch' in done.get('mention',''), done.get('mention')
 " && ok "done 事件自动 @派单方（mention 含 orch）" || fail "done 事件 mention 未含派单方 orch"
 ! grep -q "event:verify_failed" "$AH4"/log/*/*.md && ok "全链无 verify_failed" || fail "全链无 verify_failed"
 grep -q '^dispatcher: orch' "$AH4/wiki/tasks/$XT.md" && ok "任务页 frontmatter 标注 dispatcher:orch" || fail "任务页 frontmatter 缺 dispatcher:orch"
+# ④ 尾引号标量类 verify 回归：verify 值语义含尾部双引号（旧 s/"$// 剥离致 bash -c 不闭合引号，此验证类永不可过门）
+echo ANS > "$TARGET/f.txt"
+OUT=$(TITLE="尾引号verify任务" VERIFY='test "$(cat f.txt)" = "ANS"' PROJECT_DIR="$TARGET" AGORA_HOME="$AH4" bash "$AH4/scripts/task-create.sh")
+XT2=$(echo "$OUT" | sed -n 's/.*"task":"\(gt-[0-9a-f]*\)".*/\1/p')
+AGORA_HOME="$AH4" bash "$AH4/scripts/post.sh" --actor worker@target --project target --event claimed --task "$XT2" >/dev/null
+AGORA_HOME="$AH4" bash "$AH4/scripts/post.sh" --actor worker@target --project target --event done --task "$XT2" --commit HEAD --evidence "通过" >/dev/null
+TASK="$XT2" AGORA_HOME="$AH4" bash "$AH4/scripts/history.sh" | python3 -c "
+import json,sys
+evs=[e['event'] for e in json.load(sys.stdin)['events']]
+assert evs==['claimed','done'], evs
+" && ok "尾引号标量 verify 类 done 过门（成对剥离后原样透传）" || fail "尾引号标量 verify 类 done 未过门（verify_failed）"
+# ⑤ history.sh 免导出 AGORA_HOME：shell 直调方（无 server env）不再 KeyError
+env -u AGORA_HOME TASK="$XT" bash "$AH4/scripts/history.sh" | python3 -c "import json,sys; json.load(sys.stdin)" \
+  && ok "history.sh 未导出 AGORA_HOME 仍出合法 JSON（默认导出）" || fail "history.sh 未导出 AGORA_HOME 时 KeyError"
 rm -rf "$H4"
 
 echo
