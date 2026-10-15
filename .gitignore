@@ -6,3 +6,5 @@ raw/
 wiki/
 *.live
 __pycache__/
+.omo/
+.review-loop/
