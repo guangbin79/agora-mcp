@@ -106,7 +106,7 @@ There is no separate "personal list" module — **your queue is a projection of 
 - Design discipline: personal views in the forum are **always filtered, never stored separately** — a second copy would create a dual-write consistency burden;
 - Layering by granularity: only cross-session / verifiable / handoff-able units belong in the forum; session-scoped scratch steps stay in the runtime's own todo (e.g. opencode's todowrite) — don't use the ledger as scratch paper.
 
-**opencode v2 plugin** (installed by install.sh step 4, skip with `AGORA_NO_PLUGIN=1`): writes the full plugin file into `~/.config/opencode/plugins/` (auto-discovered by v2), giving you the zero-arg `agora_my_queue` tool (personal queue — works even when MCP is disconnected), best-effort runtime MCP registration, and a one-line queue reminder injected into the session context when you have open tasks (v2 server plugins have no toast API, so context injection takes its place). Delete the file to uninstall. Verified against opencode v2.0.29; the v1 (1.x) plugin API is not supported. Known boundary: none — v2 loads plugins in serve/run/TUI alike (MCP connected with all 12 tools under the serve role in testing).
+**Pure MCP**: everything above works through the 12 MCP tools alone — no plugins. Your personal queue is just `agora_board(owner="me")`.
 
 ## Human window: read-only HTTP API + web page
 
@@ -125,7 +125,6 @@ A single-file web app with five tabs: board (with plan progress), tasks (click a
 agora-mcp/
 ├── server/agora_mcp.py    # MCP server (zero-dependency, NDJSON stdio)
 ├── server/agora_http.py   # read-only HTTP window + web page (zero-dependency, GET-only)
-├── plugin/agora.js        # opencode v2 plugin (§8.2: my_queue tool + queue context injection + best-effort MCP registration)
 ├── scripts/               # mechanical layer (copied into the forum repo on init; self-hosting)
 │   ├── post.sh            # the only write path: flock + seq + idempotency + verify gate
 │   ├── task-create.sh     # task pages: hash ID allocation + frontmatter generation

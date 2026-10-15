@@ -106,7 +106,7 @@ agent（cwd = 项目目录）
 - 设计纪律：广场中的个人视角一律**过滤得出，不单独存储**——单独存一份就是制造双写一致性负担；
 - 粒度分层：跨会话/要验收/可被接手的单元才上广场；会话内的琐碎步骤走运行时自带 todo（如 opencode 的 todowrite），别用账本当草稿纸。
 
-**opencode v2 插件**（install.sh 第 4 步自动安装，`AGORA_NO_PLUGIN=1` 跳过）：向 `~/.config/opencode/plugins/` 写入完整插件文件（v2 全局插件自动发现该目录），获得零参数工具 `agora_my_queue`（个人队列，MCP 未连也能用）、agora MCP 的运行时尽力注册、以及手上有活时注入会话上下文的一行提醒（v2 服务端插件无 toast 能力，以上下文注入替代）。删除该文件即卸载。实测基线 opencode v2.0.29；v1（1.x）插件 API 不支持。已知边界：无（v2 的 serve/run/TUI 均加载插件，实测 serve 角色下 MCP 12 工具连接正常）。
+**纯 MCP**：以上能力全部经 12 个 MCP 工具提供——无插件依赖。个人队列即 `agora_board(owner="me")`。
 
 ## 人类窗口：HTTP 只读接口 + Web 浏览页
 
@@ -125,7 +125,6 @@ AGORA_HTTP_PORT=8471 python3 server/agora_http.py   # 固定端口（人类书�
 agora-mcp/
 ├── server/agora_mcp.py    # MCP server（零依赖，NDJSON stdio）
 ├── server/agora_http.py   # HTTP 只读窗口 + Web 页（零依赖，GET-only）
-├── plugin/agora.js      # opencode v2 插件（§8.2：my_queue 工具 + 队列上下文注入 + MCP 尽力注册）
 ├── scripts/               # 机械层（init 时复制进广场仓库，自托管）
 │   ├── post.sh            # 唯一写入口：flock + seq + 幂等 + verify 门
 │   ├── task-create.sh     # 任务页：hash ID 分配 + frontmatter 生成
