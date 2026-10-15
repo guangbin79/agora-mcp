@@ -51,8 +51,8 @@ done
 DERIVED=()
 if [[ "$EVENT" == done ]]; then
   TASK_PAGE="$AGORA_HOME/wiki/tasks/$TASK.md"
-  VERIFY=$(grep -m1 '^verify:' "$TASK_PAGE" | sed 's/^verify:[[:space:]]*//; s/^"//; s/"$//' || true)
-  PROJDIR=$(grep -m1 '^project_dir:' "$TASK_PAGE" | sed 's/^project_dir:[[:space:]]*//; s/^"//; s/"$//' || true)
+  VERIFY=$(grep -m1 '^verify:' "$TASK_PAGE" | sed 's/^verify:[[:space:]]*//; s/^"\(.*\)"$/\1/' || true)
+  PROJDIR=$(grep -m1 '^project_dir:' "$TASK_PAGE" | sed 's/^project_dir:[[:space:]]*//; s/^"\(.*\)"$/\1/' || true)
   [[ -z "$VERIFY" ]] && fail VALIDATION_FAILED "task $TASK has no verify: command"
   VERIFY_OUT=$(cd "${PROJDIR:-$AGORA_HOME}" && timeout "${AGORA_VERIFY_TIMEOUT:-300}" bash -c "$VERIFY" 2>&1 | tail -c 2048) && RC=0 || RC=$?
   if [[ $RC -ne 0 ]]; then
