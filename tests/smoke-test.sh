@@ -677,6 +677,33 @@ assert n < 600, n
 p.stdin.close()
 PYEOF
 
+# --- instructions v1.24 断言：⑤跨仓条 + ⑥碰撞修复 + 预算（复用上方长路径夹具 LONG） ---
+cd "$PROJ" && AGORA_HOME="$LONG" python3 - "$PKG/server/agora_mcp.py" "$T/ins.txt" <<'PYEOF'
+import json, subprocess, sys
+p = subprocess.Popen(["python3", sys.argv[1]], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+p.stdin.write(json.dumps({"jsonrpc":"2.0","id":1,"method":"initialize","params":{}})+"\n"); p.stdin.flush()
+ins = json.loads(p.stdout.readline())["result"]["instructions"]
+open(sys.argv[2], "w", encoding="utf-8").write(ins)
+print(f"instructions 长路径渲染长度 = {len(ins)}（预算 <600）")
+p.stdin.close()
+PYEOF
+LEN=$(python3 -c "import sys; print(len(open(sys.argv[1], encoding='utf-8').read()))" "$T/ins.txt" 2>/dev/null)
+[ -n "$LEN" ] && [ "$LEN" -lt 600 ] && ok "instructions 长路径渲染 <600（实测 ${LEN} 字）" || fail "instructions 长路径渲染 <600（实测 ${LEN:-无} 字）"
+grep -q "跨仓" "$T/ins.txt" && grep -q "实体页" "$T/ins.txt" && grep -q "topics/delegation" "$T/ins.txt" && grep -q "广场仓 docs/AGENTS.md" "$T/ins.txt" \
+  && ok "instructions 含跨仓关键词（跨仓/实体页/topics/delegation/广场仓 docs/AGENTS.md）" || fail "instructions 含跨仓关键词（跨仓/实体页/topics/delegation/广场仓 docs/AGENTS.md）"
+! grep -q "细节读 AGENTS.md" "$T/ins.txt" && ok "instructions 无旧碰撞文本「细节读 AGENTS.md」" || fail "instructions 无旧碰撞文本「细节读 AGENTS.md」"
+cd "$PROJ" && AGORA_HOME="$LONG" python3 - "$PKG/server/agora_mcp.py" <<'PYEOF' && ok "agora_dispatch 描述含「跨仓委托的标准路径」定位句" || fail "agora_dispatch 描述含「跨仓委托的标准路径」定位句"
+import json, subprocess, sys
+p = subprocess.Popen(["python3", sys.argv[1]], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+p.stdin.write(json.dumps({"jsonrpc":"2.0","id":1,"method":"initialize","params":{}})+"\n"); p.stdin.flush()
+json.loads(p.stdout.readline())
+p.stdin.write(json.dumps({"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}})+"\n"); p.stdin.flush()
+tools = json.loads(p.stdout.readline())["result"]["tools"]
+d = next(t for t in tools if t["name"] == "agora_dispatch")["description"]
+assert d.startswith("跨仓委托的标准路径："), d
+p.stdin.close()
+PYEOF
+
 echo "===== owner 过滤（个人任务队列，v1.18） ====="
 OUT=$(TITLE="我的活" TC);  MINE=$(echo "$OUT"  | sed -n 's/.*"task":"\(gt-[0-9a-f]*\)".*/\1/p')
 OUT=$(TITLE="别人的活" TC); THEIRS=$(echo "$OUT" | sed -n 's/.*"task":"\(gt-[0-9a-f]*\)".*/\1/p')

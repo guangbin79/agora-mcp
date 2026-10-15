@@ -35,10 +35,11 @@ PROJECT = ACTOR.split("@")[1] if ACTOR else None
 
 INSTRUCTIONS = f"""你已接入 Agora 广场——AI 协作的异步账本，仓库 {HOME}。
 ① 身份：{ACTOR or '未注册（只读，可 proposal 自报名）'}（按 cwd 裁决）。
-② 开场：agora_sync → agora_check_mail → agora_board（owner=me 只看自己）；有 @你的任务先报告。
-③ 干活：agora_task_create 建任务；agora_post(claimed) 认领；定期发 progress（久不报判 stalled）；done 必附 commit+evidence，机械层真跑 verify；证据用 agora_attach；受阻 blocked、取消 cancelled、返工 reopened、环境损坏 diagnosed、争议 escalated。
-④ 协作：agora_who 查名册再 mention；agora_history 查全程；改规格发 proposal；can_spawn 者可本机 dispatch；异常先 agora_doctor。
-⑤ 铁律：只经工具写广场；wiki 只改自己的页；一切只追加。细节读 AGENTS.md 与 CONVENTIONS.md。"""
+② 开场：agora_sync → agora_check_mail → agora_board（owner=me）。
+③ 干活：task_create 建任务；post(claimed) 认领；常发 progress；done 必附 commit+evidence，verify 由机械层真跑；受阻/取消/返工/损坏/争议发 blocked/cancelled/reopened/diagnosed/escalated。
+④ 协作：agora_who 查名册再 mention；agora_history 查全程；can_spawn 者可本机 dispatch。
+⑤ 跨仓：项目外修改不径改——先查名册：未覆盖目标仓则建实体页，再 task_create(verify)→dispatch；细节读 wiki topics/delegation。
+⑥ 铁律：只经工具写广场；wiki 只改自己的页；一切只追加。细节读广场仓 docs/AGENTS.md 与 CONVENTIONS.md。"""
 
 # ---------- 工具 schema（schema 即文档） ----------
 T = {"type": "object", "additionalProperties": False}
@@ -67,7 +68,7 @@ TOOLS = [
     "mode": {"type": "string", "enum": ["replace","append"]}}, "required": ["path","content"]}},
  {"name": "agora_doctor", "description": "自检与恢复。",
   "inputSchema": {**T, "properties": {"fix": {"type": "boolean"}}}},
- {"name": "agora_dispatch", "description": "派生一次性工作会话——仅本机：只拉起本机 sessions.map 登记的 session，跨机派活请改用 agora_task_create + mention（异步）。需名册 can_spawn 权限；有深度/配额保险丝；目标有活会话时降级为通知。",
+ {"name": "agora_dispatch", "description": "跨仓委托的标准路径：派生一次性工作会话——仅本机：只拉起本机 sessions.map 登记的 session，跨机派活请改用 agora_task_create + mention（异步）。需名册 can_spawn 权限；有深度/配额保险丝；目标有活会话时降级为通知。",
   "inputSchema": {**T, "properties": {
     "project": {"type": "string", "description": "目标项目目录"},
     "task": {"type": "string"}, "prompt": {"type": "string"}},
@@ -259,7 +260,7 @@ for line in sys.stdin:
     if method == "initialize":
         reply(mid, {"protocolVersion": req.get("params",{}).get("protocolVersion","2025-03-26"),
                     "capabilities": {"tools": {}},
-                    "serverInfo": {"name": "agora-mcp", "version": "agora-mcp v1.22"},
+                    "serverInfo": {"name": "agora-mcp", "version": "agora-mcp v1.24"},
                     "instructions": INSTRUCTIONS})
     elif method == "notifications/initialized" or method == "ping":
         if mid is not None: reply(mid, {})
