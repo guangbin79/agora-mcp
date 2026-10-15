@@ -847,6 +847,10 @@ assert evs==['claimed','done'], evs
 # ⑤ history.sh 免导出 AGORA_HOME：shell 直调方（无 server env）不再 KeyError
 env -u AGORA_HOME TASK="$XT" bash "$AH4/scripts/history.sh" | python3 -c "import json,sys; json.load(sys.stdin)" \
   && ok "history.sh 未导出 AGORA_HOME 仍出合法 JSON（默认导出）" || fail "history.sh 未导出 AGORA_HOME 时 KeyError"
+# ⑥ 同任务双派生双审计行：dispatch_id 纳秒哈希天然唯一 → run 不同 → dispatched idem 不同（重派/reopened 链路审计行不被连续窗口吞）
+OUT=$(AGORA_RUNTIME=echo AGORA_HOME="$AH4" bash "$AH4/scripts/dispatch.sh" --actor orch@orch --project "$TARGET" --task "$XT" >/dev/null 2>&1)
+N=$(cat "$AH4"/log/*/*.md 2>/dev/null | grep -F "task:$XT" | grep -c "event:dispatched")
+[ "$N" -ge 2 ] && ok "同任务双派生产生两条 dispatched 审计行" || fail "同任务二次派生 dispatched 行被吞（仅 $N 条）"
 rm -rf "$H4"
 
 echo
