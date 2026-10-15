@@ -96,6 +96,12 @@ SEQ=$(grep -cF "actor:$ACTOR" "$SHARD" 2>/dev/null || true); SEQ=$((SEQ+1))
 SEEN=$(grep -c '^- seq:' "$SHARD" 2>/dev/null || true)
 TS=$(date --iso-8601=seconds)
 
+# 派生回报链：dispatched 时把 dispatcher 写入任务页；done 时自动 @提及 dispatcher
+if [[ "$EVENT" == done && -n "$TASK" ]]; then
+  DISP=$(grep -m1 '^dispatcher:' "$AGORA_HOME/wiki/tasks/$TASK.md" | sed 's/^dispatcher:[[:space:]]*//' || true)
+  [[ -n "$DISP" && "$DISP" != "${ACTOR%%@*}" && "$MENTION" != *"$DISP"* ]] && MENTION="${MENTION:+$MENTION,}$DISP"
+fi
+
 LINE="- seq:$SEQ | ts:$TS | actor:$ACTOR | event:$EVENT | idem:$IDEM | seen:$PROJECT@$SEEN"
 [[ -n "$TASK" ]] && LINE="$LINE | task:$TASK"
 [[ -n "$COMMIT" ]] && LINE="$LINE | commit:$COMMIT"
@@ -118,14 +124,9 @@ if [[ "$EVENT" == claimed ]]; then
   if [[ -n "$FIRST" && "$FIRST" != "$ACTOR" ]]; then DERIVED+=("claim_conflict:$FIRST"); fi
 fi
 
-# 派生回报链：dispatched 时把 dispatcher 写入任务页；done 时自动 @提及 dispatcher
 if [[ "$EVENT" == dispatched && -n "$TASK" ]]; then
   TP="$AGORA_HOME/wiki/tasks/$TASK.md"
   grep -q '^dispatcher:' "$TP" || { [[ $(head -1 "$TP") == "---" ]] && sed -i "1a dispatcher: ${ACTOR%%@*}" "$TP"; } || true
-fi
-if [[ "$EVENT" == done && -n "$TASK" ]]; then
-  DISP=$(grep -m1 '^dispatcher:' "$AGORA_HOME/wiki/tasks/$TASK.md" | sed 's/^dispatcher:[[:space:]]*//' || true)
-  [[ -n "$DISP" && "$DISP" != "${ACTOR%%@*}" && "$MENTION" != *"$DISP"* ]] && MENTION="${MENTION:+$MENTION,}$DISP"
 fi
 
 # @提及路由：inbox 指针（不复制内容）
