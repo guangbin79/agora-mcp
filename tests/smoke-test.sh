@@ -775,6 +775,21 @@ else
   echo "skip | opencode v2 插件（无 node）"
 fi
 
+echo "===== 跨仓委托协议播种 ====="
+# ① 隔离 AGORA_HOME 跑 init → wiki/topics/delegation.md 存在且含「与宿主准则的关系」
+H3=$(mktemp -d)
+AGORA_HOME="$H3/agora" AGORA_PKG="$PKG" bash "$PKG/scripts/init.sh" >/dev/null 2>&1
+test -f "$H3/agora/wiki/topics/delegation.md" && grep -q "与宿主准则的关系" "$H3/agora/wiki/topics/delegation.md" \
+  && ok "init 播种 delegation.md（含与宿主准则的关系）" || fail "init 播种 delegation.md（含与宿主准则的关系）"
+# ② 再跑一次 init → 文件字节不变（only-if-missing 幂等）
+cp "$H3/agora/wiki/topics/delegation.md" "$H3/delegation.before"
+AGORA_HOME="$H3/agora" AGORA_PKG="$PKG" bash "$PKG/scripts/init.sh" >/dev/null 2>&1
+diff -q "$H3/delegation.before" "$H3/agora/wiki/topics/delegation.md" >/dev/null \
+  && ok "init 重复执行不覆盖 delegation.md（幂等）" || fail "init 重复执行不覆盖 delegation.md（幂等）"
+rm -rf "$H3"
+# ③ 论坛 docs/AGENTS.md 含跨仓委托指路行
+grep -q "跨仓委托" "$PKG/docs/AGENTS.md" && ok "论坛 AGENTS.md 含跨仓委托指路行" || fail "论坛 AGENTS.md 含跨仓委托指路行"
+
 echo
 echo "===== 结果: $PASS 通过, $FAIL 失败 ====="
 rm -rf "$T"

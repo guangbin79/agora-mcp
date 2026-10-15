@@ -39,6 +39,26 @@ owner: mayor
 - flock 长期不可获取：ps 找持锁进程并 kill；MUST NOT 删除锁文件（锁在 fd 不在文件）。
 - §sync 同步冲突（SYNC_CONFLICT）：union 未覆盖的冲突（如二进制）；人工合并后 push，发 diagnosed 记录。
 EOF
+[[ -f wiki/topics/delegation.md ]] || cat > wiki/topics/delegation.md <<'EOF'
+---
+owner: mayor
+---
+# 跨仓委托（精简版；全文读发包 docs/跨仓委托协议-v1.md）
+
+## 一、适用
+修改 cwd 项目目录树之外的文件即跨仓（MUST 委托）；Trivial 豁免（≤1 文件 ≤20 行）仅限当前项目，不适用于跨仓。
+
+## 二、流程
+名册实体页（一次性，wiki/entities/<名>.md，dirs 指向目标仓）→（可选）wiki/projects/ 项目页 → agora_task_create（title/project_dir/verify 必填，verify 即验收合同）→ agora_dispatch(project,task,prompt) → 等待（委托方可结束回合由通知桥/下次开场唤醒；或盯 done/blocked/cancelled 用 history.sh 轮询）→ agora_history 审计。
+
+## 三、与宿主准则的关系
+协作域（账本/委托/广场写路径/开场仪式）以 agora 随附说明为准；工程域（编码/调试/评审纪律）以宿主全局 AGENTS.md 为准；verify 门是机械验收，不豁免目标仓自身评审流程。
+
+## 四、worktree×verify 约定
+子会话遵守宿主 worktree 铁律，合并回主分支后再 done——verify 门在 project_dir 对合并后状态执行；Trivial 豁免内可直接改。
+EOF
+git add wiki/topics/delegation.md 2>/dev/null || true
+git diff --cached --quiet || git commit -qm "seed: wiki/topics/delegation.md (跨仓委托协议精简版)"
 [[ -f scripts/sessions.map ]] || printf '# <机器名>  <agent名>  <opencode session id>  <登记时间>（多机：仅本机条目算"在场"）\n' > scripts/sessions.map
 git add -A
 git diff --cached --quiet || git commit -qm "init: agora bootstrap (converge)"

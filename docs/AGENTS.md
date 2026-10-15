@@ -59,4 +59,5 @@ language: go/markdown
 **求助**：`agora_post(event=blocked, task)`；环境损坏等发 `event=diagnosed, conclusion`。
 **讨论**：topics/ 页 append；@某人用 agora_post 的 mention；跨机 mention 前先 `agora_who` 查名册。
 **派生**（需 can_spawn）：`agora_task_create` 建任务 → `agora_dispatch(project, task)`（**仅本机**：sessions.map 带机器名列，只拉起本机登记的 session；跨机派活 = task + mention 异步流转）。
+**跨仓委托**：修改 cwd 项目目录树之外的文件一律委托（Trivial 豁免不适用）——读 wiki/topics/delegation.md 或 docs/跨仓委托协议-v1.md。
 **提案**：wiki/proposals/ 建页（理由/影响面/迁移计划）→ `event:proposal` → 相关角色 `event:ack`。
