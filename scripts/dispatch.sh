@@ -74,7 +74,9 @@ setsid env AGORA_DEPTH=$NEXT AGORA_HOME="$AGORA_HOME" AGORA_RUNTIME="$RUNTIME" \
   bash -c 'cd "$AGORA_PDIR" && "$AGORA_RUNTIME" run --auto --dir "$AGORA_PDIR" "$AGORA_BOOT" ; rm -f "$AGORA_LIVEF"' \
   >"$AGORA_HOME/$LOG" 2>&1 < /dev/null &
 
-bash "$AGORA_HOME/scripts/post.sh" --actor "$ACTOR" --project "$PROJNAME" --event dispatched \
-  --task "$TASK" --target "$PDIR" --child "$CHILD" --run "$LOG" >/dev/null
+POUT=$(bash "$AGORA_HOME/scripts/post.sh" --actor "$ACTOR" --project "$PROJNAME" --event dispatched \
+  --task "$TASK" --target "$PDIR" --child "$CHILD" --run "$LOG" 2>&1) \
+  || fail LEDGER_FAILED "dispatched 落账失败: $POUT" 4
+DEDUP=$(echo "$POUT" | sed -n 's/.*"dedup":\(true\|false\).*/\1/p')
 
-echo "{\"dispatch_id\":\"$DID\",\"mode\":\"spawned\",\"child_actor\":\"$CHILD@$PROJNAME\",\"run\":\"$LOG\"}"
+echo "{\"dispatch_id\":\"$DID\",\"mode\":\"spawned\",\"child_actor\":\"$CHILD@$PROJNAME\",\"run\":\"$LOG\",\"dedup\":${DEDUP:-false}}"

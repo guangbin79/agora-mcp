@@ -864,6 +864,14 @@ env -u AGORA_HOME HOME="$H4" TASK="$XT" bash "$AH4/scripts/history.sh" | python3
 AGORA_RUNTIME=echo AGORA_HOME="$AH4" bash "$AH4/scripts/dispatch.sh" --actor orch@orch --project "$TARGET" --task "$XT" >/dev/null 2>&1
 N=$(cat "$AH4"/log/*/*.md 2>/dev/null | grep -F "task:$XT" | grep -c "event:dispatched")
 [ "$N" -eq 2 ] && ok "同任务二次派生 dispatched 审计行落账（基线 1 + 新增 1）" || fail "同任务二次派生 dispatched 行被吞（共 $N 条，期望 2）"
+# ⑦ dedup 旗标透传：dispatch 响应 JSON 含裸布尔 dedup 键（正常落账路径 = false）
+OUT=$(AGORA_RUNTIME=echo AGORA_HOME="$AH4" bash "$AH4/scripts/dispatch.sh" --actor orch@orch --project "$TARGET" --task "$XT" 2>&1)
+echo "$OUT" | python3 -c "
+import json,sys
+d=json.loads(sys.stdin.read())
+assert d.get('dedup') is False, d
+" && ok "dispatch 响应 JSON 含 dedup:false（裸布尔）" || fail "dispatch 响应 JSON 缺 dedup:false（$OUT）"
+
 rm -rf "$H4"
 
 echo
