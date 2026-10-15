@@ -797,6 +797,44 @@ rm -rf "$H3"
 # ③ 论坛 docs/AGENTS.md 含跨仓委托指路行
 grep -q "跨仓委托" "$PKG/docs/AGENTS.md" && ok "论坛 AGENTS.md 含跨仓委托指路行" || fail "论坛 AGENTS.md 含跨仓委托指路行"
 
+echo "===== 跨仓委托链（stub runtime 全链路账本断言） ====="
+# 隔离临时论坛 + 双项目双实体：派单方 orch@orch（can_spawn:true）→ 目标项目 target（名册解析子身份 worker@target）
+H4=$(mktemp -d); AH4="$H4/agora"
+AGORA_HOME="$AH4" AGORA_PKG="$PKG" bash "$PKG/scripts/init.sh" >/dev/null 2>&1
+ORCH="$H4/orch"; mkdir -p "$ORCH"
+TARGET="$H4/target"; mkdir -p "$TARGET"; cd "$TARGET" && git init -q . && echo FIXED > app.txt \
+  && git add -A && git -c user.name=t -c user.email=t@local commit -qm init
+mkdir -p "$AH4/wiki/entities"
+printf -- '---\nname: orch\ndirs:\n  - %s\ncan_spawn: true\n---\n' "$ORCH" > "$AH4/wiki/entities/orch.md"
+printf -- '---\nname: worker\ndirs:\n  - %s\ncan_spawn: false\n---\n' "$TARGET" > "$AH4/wiki/entities/worker.md"
+(cd "$AH4" && git add -A && AGORA_MECHANICAL=1 git commit -qm entities >/dev/null)
+# task-create 指向目标项目：verify 门将由机械层在该目录真实执行（目标项目已预置 FIXED）
+OUT=$(TITLE="跨仓交付任务" VERIFY="grep -q FIXED app.txt" PROJECT_DIR="$TARGET" AGORA_HOME="$AH4" bash "$AH4/scripts/task-create.sh")
+XT=$(echo "$OUT" | sed -n 's/.*"task":"\(gt-[0-9a-f]*\)".*/\1/p')
+# ① stub 拉起（AGORA_RUNTIME=echo）：mode=spawned，子身份按名册目录前缀解析
+OUT=$(AGORA_RUNTIME=echo AGORA_HOME="$AH4" bash "$AH4/scripts/dispatch.sh" --actor orch@orch --project "$TARGET" --task "$XT" 2>&1)
+echo "$OUT" | grep -q '"mode":"spawned"' && ok "dispatch stub 返回 mode:spawned" || fail "dispatch stub 返回 mode:spawned（$OUT）"
+echo "$OUT" | grep -q '"child_actor":"worker@target"' && ok "dispatch 名册解析子身份 worker@target" || fail "dispatch 名册解析子身份 worker@target（$OUT）"
+# ② 子会话照协议回报：claimed → done（verify 门真实执行 grep -q FIXED app.txt）
+AGORA_HOME="$AH4" bash "$AH4/scripts/post.sh" --actor worker@target --project target --event claimed --task "$XT" >/dev/null
+AGORA_HOME="$AH4" bash "$AH4/scripts/post.sh" --actor worker@target --project target --event done --task "$XT" --commit HEAD --evidence "通过" >/dev/null \
+  && ok "子会话 done 通过 verify 门" || fail "子会话 done 通过 verify 门"
+# ③ 账本断言：事件序列 / done 自动 @派单方 / 全链无 verify_failed / 任务页 dispatcher 标注（规格 §4.7 第 7 条）
+H=$(TASK="$XT" AGORA_HOME="$AH4" bash "$AH4/scripts/history.sh")
+echo "$H" | python3 -c "
+import json,sys
+evs=[e['event'] for e in json.load(sys.stdin)['events']]
+assert evs==['dispatched','claimed','done'], evs
+" && ok "委托链事件序列 dispatched→claimed→done" || fail "委托链事件序列异常（非 dispatched→claimed→done）"
+echo "$H" | python3 -c "
+import json,sys
+done=[e for e in json.load(sys.stdin)['events'] if e['event']=='done'][0]
+assert 'orch' in done.get('mention',''), done.get('mention')
+" && ok "done 事件自动 @派单方（mention 含 orch）" || fail "done 事件 mention 未含派单方 orch"
+! grep -q "event:verify_failed" "$AH4"/log/*/*.md && ok "全链无 verify_failed" || fail "全链无 verify_failed"
+grep -q '^dispatcher: orch' "$AH4/wiki/tasks/$XT.md" && ok "任务页 frontmatter 标注 dispatcher:orch" || fail "任务页 frontmatter 缺 dispatcher:orch"
+rm -rf "$H4"
+
 echo
 echo "===== 结果: $PASS 通过, $FAIL 失败 ====="
 rm -rf "$T"
