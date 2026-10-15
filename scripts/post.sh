@@ -7,6 +7,8 @@ set -euo pipefail
 AGORA_HOME="${AGORA_HOME:-$HOME/agora}"
 LOCK_WAIT="${AGORA_LOCK_WAIT:-5}"
 
+# 机械层确定性：跨分片检索/glob 序不受宿主 locale 影响（collation 硬化，T1 存量发现）
+export LC_ALL=C
 # ---------- 参数解析 ----------
 ACTOR=""; PROJECT=""; EVENT=""; TASK=""; COMMIT=""; EVIDENCE=""
 CONCLUSION=""; REASON=""; BODY=""; MENTION=""; IDEM=""; TARGET=""; CHILD=""; RUN=""
