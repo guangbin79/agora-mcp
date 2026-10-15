@@ -4,7 +4,7 @@
 # 输出：{"task":"gt-xxxx","count":N,"events":[...事件...]}
 # 顺序保证：shard 文件名（日期）排序 + shard 内物理行序 = 权威顺序
 set -u
-AGORA_HOME="${AGORA_HOME:-$HOME/agora}"
+AGORA_HOME="${AGORA_HOME:-$HOME/agora}"; export AGORA_HOME
 [ -z "${TASK:-}" ] && { echo '{"error":"TASK_REQUIRED"}' >&2; exit 2; }
 
 cd "$AGORA_HOME"
