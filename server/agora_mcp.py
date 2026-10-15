@@ -174,9 +174,9 @@ def call(name, a):
         p = a["path"]
         if ".." in p or p.startswith("/"): return None, {"code":"VALIDATION_FAILED","message":"path escapes wiki/"}
         fp = f"{HOME}/wiki/{p}"
-        if not os.path.exists(fp) and not p.endswith(".md"):
+        if not os.path.isfile(fp) and not p.endswith(".md"):
             fp = f"{HOME}/wiki/{p}.md"  # 扩展名归一：topics/delegation 亦可读（T6 发现的人机学缝隙）
-        if not os.path.exists(fp): return None, {"code":"VALIDATION_FAILED","message":"not found"}
+        if not os.path.isfile(fp): return None, {"code":"VALIDATION_FAILED","message":"not found"}
         return {"path": p, "content": open(fp, encoding="utf-8").read()}, None
     if name == "agora_wiki_write":
         if not ACTOR: return None, need_actor()

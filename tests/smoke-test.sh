@@ -677,6 +677,12 @@ def rpc(m, ps=None, i=1):
 rpc("initialize", {})
 r = rpc("tools/call", {"name":"agora_wiki_read","arguments":{"path":"topics/delegation"}}, 2)
 assert "与宿主准则的关系" in r["result"]["content"][0]["text"], r
+r = rpc("tools/call", {"name":"agora_wiki_read","arguments":{"path":"topics/delegation.md"}}, 3)
+assert "与宿主准则的关系" in r["result"]["content"][0]["text"], r
+r = rpc("tools/call", {"name":"agora_wiki_read","arguments":{"path":"topics"}}, 4)
+assert json.loads(r["result"]["content"][0]["text"]).get("code") == "VALIDATION_FAILED", r
+r = rpc("tools/call", {"name":"agora_wiki_read","arguments":{"path":"../entities/tester"}}, 5)
+assert json.loads(r["result"]["content"][0]["text"]).get("code") == "VALIDATION_FAILED", r
 p.stdin.close()
 PYEOF
 
@@ -865,7 +871,7 @@ AGORA_RUNTIME=echo AGORA_HOME="$AH4" bash "$AH4/scripts/dispatch.sh" --actor orc
 N=$(cat "$AH4"/log/*/*.md 2>/dev/null | grep -F "task:$XT" | grep -c "event:dispatched")
 [ "$N" -eq 2 ] && ok "同任务二次派生 dispatched 审计行落账（基线 1 + 新增 1）" || fail "同任务二次派生 dispatched 行被吞（共 $N 条，期望 2）"
 # ⑦ dedup 旗标透传：dispatch 响应 JSON 含裸布尔 dedup 键（正常落账路径 = false）
-OUT=$(AGORA_RUNTIME=echo AGORA_HOME="$AH4" bash "$AH4/scripts/dispatch.sh" --actor orch@orch --project "$TARGET" --task "$XT" 2>&1)
+OUT=$(AGORA_RUNTIME=echo AGORA_HOME="$AH4" bash "$AH4/scripts/dispatch.sh" --actor orch@orch --project "$TARGET" --task "$XT")
 echo "$OUT" | python3 -c "
 import json,sys
 d=json.loads(sys.stdin.read())

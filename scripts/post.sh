@@ -8,6 +8,7 @@ AGORA_HOME="${AGORA_HOME:-$HOME/agora}"
 LOCK_WAIT="${AGORA_LOCK_WAIT:-5}"
 
 # 机械层确定性：跨分片检索/glob 序不受宿主 locale 影响（collation 硬化，T1 存量发现）
+# 注意：verify 门与全部子进程（sync/derive/用户 verify 命令）均在 C locale 下执行——collation 敏感的 verify 写法需自证
 export LC_ALL=C
 # ---------- 参数解析 ----------
 ACTOR=""; PROJECT=""; EVENT=""; TASK=""; COMMIT=""; EVIDENCE=""
@@ -162,7 +163,7 @@ SW=$(echo "$SYNC_POST" | sed -n 's/.*"warn:\([a-z_]*\)".*/\1/p')
 if [[ -n "$SW" ]]; then
   DJSON=$(echo "$DJSON" | python3 -c 'import json,sys; d=json.load(sys.stdin); d.append("sync_warn:'"$SW"'"); print(json.dumps(d))')
 fi
-echo "{\"seq\":$SEQ,\"shard\":$(json_escape "log/$(date +%F)/$PROJECT.md"),\"ref\":$(json_escape "$REF"),\"ts\":$(json_escape "$TS"),\"derived\":$DJSON}"
+echo "{\"seq\":$SEQ,\"shard\":$(json_escape "log/$(date +%F)/$PROJECT.md"),\"ref\":$(json_escape "$REF"),\"ts\":$(json_escape "$TS"),\"derived\":$DJSON,\"dedup\":false}"
 
 [[ "$EVENT" == verify_failed ]] && fail VERIFY_FAILED "verify 失败（见事件 verify_output）；先本地复现修复再发 done" 4
 exit 0
