@@ -399,6 +399,13 @@ MARK="$T/pwned-$RANDOM"
 AGORA_RUNTIME=true bash "$AGORA_HOME/scripts/dispatch.sh" --actor tester@proj --project "$PROJ" \
   --task "$POLLT" --prompt '$(touch '"$MARK"')' >/dev/null 2>&1
 [[ ! -e "$MARK" ]] && ok "dispatch prompt 注入不执行" || fail "dispatch prompt 注入不执行"
+# 拉起形态：runtime 参数含 --auto（无人值守权限）与 --dir（echo stub 把参数回显进 dispatch 日志）
+AGORA_RUNTIME=echo bash "$AGORA_HOME/scripts/dispatch.sh" --actor tester@proj --project "$PROJ" \
+  --task "$POLLT" >/dev/null 2>&1
+sleep 1
+RLOG=$(ls -t "$AGORA_HOME"/raw/dispatches/*.log | head -1)
+grep -q -- '--auto' "$RLOG" && grep -q -- '--dir' "$RLOG" \
+  && ok "dispatch 拉起参数含 --auto 与 --dir" || fail "dispatch 拉起参数缺 --auto/--dir（$RLOG）"
 
 echo "===== poll 本地保洁 ====="
 # sessions.map TTL：过期本机条目剔除；他机条目与新本机条目保留

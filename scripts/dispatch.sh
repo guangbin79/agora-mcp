@@ -68,9 +68,10 @@ BOOT="你是广场派生的一次性工作会话。按开场仪式查收信、�
 # 注入防御：PROMPT/PDIR 均不可信（PROMPT 可能来自他机邮件摘要）。一律走 env 传数据 +
 # 单引号脚本，bash -c 体内不出现任何外部插值
 touch "$AGORA_HOME/$LOG.live"
+# --auto：无人值守权限放行（未显式 deny 即放行）；--dir 对齐规格 §4.7；AGORA_RUNTIME 覆写为非 opencode 时两旗标兼容性自担
 setsid env AGORA_DEPTH=$NEXT AGORA_HOME="$AGORA_HOME" AGORA_RUNTIME="$RUNTIME" \
   AGORA_BOOT="$BOOT" AGORA_PDIR="$PDIR" AGORA_LIVEF="$AGORA_HOME/$LOG.live" \
-  bash -c 'cd "$AGORA_PDIR" && "$AGORA_RUNTIME" run "$AGORA_BOOT" ; rm -f "$AGORA_LIVEF"' \
+  bash -c 'cd "$AGORA_PDIR" && "$AGORA_RUNTIME" run --auto --dir "$AGORA_PDIR" "$AGORA_BOOT" ; rm -f "$AGORA_LIVEF"' \
   >"$AGORA_HOME/$LOG" 2>&1 < /dev/null &
 
 bash "$AGORA_HOME/scripts/post.sh" --actor "$ACTOR" --project "$PROJNAME" --event dispatched \

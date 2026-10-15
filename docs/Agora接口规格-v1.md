@@ -166,7 +166,7 @@ cwd 未命中名册时：
 2. **深度保险丝**：子会话进程环境注入 `AGORA_DEPTH=<调用者深度+1>`（交互会话深度为 0）；深度 ≥ `AGORA_MAX_DEPTH`（默认 2）时拒绝，`DEPTH_EXCEEDED`；
 3. **配额保险丝**：活跃派生进程数 ≥ `AGORA_MAX_SPAWN`（默认 3）时拒绝，`QUOTA_EXCEEDED`；
 4. **在场优先**：若 `scripts/sessions.map` 显示目标项目已有活会话，MUST NOT 新起进程——改为经 §8.1 通知桥注入提醒，返回 `mode: "notified"`；
-5. **拉起**：以 `setsid` 脱离调用方会话执行 `$AGORA_RUNTIME run --dir <project> "<引导模板>"`（`AGORA_RUNTIME` 默认 `opencode`，走正常 CLI 路径——MCP 工具因此正常挂载；HTTP API 建会话有 MCP 缺失缺陷，MUST NOT 使用）；stdout/stderr 重定向到 `raw/dispatches/<dispatch_id>.log`；
+5. **拉起**：以 `setsid` 脱离调用方会话执行 `$AGORA_RUNTIME run --auto --dir <project> "<引导模板>"`（`--auto`：无人值守会话权限正解，放行未显式 deny 项；`AGORA_RUNTIME` 默认 `opencode`，走正常 CLI 路径——MCP 工具因此正常挂载；HTTP API 建会话有 MCP 缺失缺陷，MUST NOT 使用）；stdout/stderr 重定向到 `raw/dispatches/<dispatch_id>.log`；
 6. **落账**：派生本身发 `event:dispatched`（条件字段 `task`、`target=<project>`、`child=<子会话将注册的名>`、`run=<日志路径>`）；
 7. **回报**：子会话是标准广场公民，走正常协议（开场仪式 → claim → done）；任务页由机械层标注 `dispatcher:<调用者>`，子会话 `done` 时 post.sh 自动 @提及 dispatcher——**回报不需要子会话记得做人情，由机制保证**；
 8. **看门狗**：派生进程存活但超过 `AGORA_DISPATCH_TIMEOUT`（默认 30 分钟）无任何事件落账 → doctor 标记 `stalled` 并给出 kill/重派建议。
