@@ -845,12 +845,12 @@ evs=[e['event'] for e in json.load(sys.stdin)['events']]
 assert evs==['claimed','done'], evs
 " && ok "尾引号标量 verify 类 done 过门（成对剥离后原样透传）" || fail "尾引号标量 verify 类 done 未过门（verify_failed）"
 # ⑤ history.sh 免导出 AGORA_HOME：shell 直调方（无 server env）不再 KeyError
-env -u AGORA_HOME TASK="$XT" bash "$AH4/scripts/history.sh" | python3 -c "import json,sys; json.load(sys.stdin)" \
+env -u AGORA_HOME HOME="$H4" TASK="$XT" bash "$AH4/scripts/history.sh" | python3 -c "import json,sys; d=json.load(sys.stdin); assert d['count']>0, d" \
   && ok "history.sh 未导出 AGORA_HOME 仍出合法 JSON（默认导出）" || fail "history.sh 未导出 AGORA_HOME 时 KeyError"
 # ⑥ 同任务双派生双审计行：dispatch_id 纳秒哈希天然唯一 → run 不同 → dispatched idem 不同（重派/reopened 链路审计行不被连续窗口吞）
-OUT=$(AGORA_RUNTIME=echo AGORA_HOME="$AH4" bash "$AH4/scripts/dispatch.sh" --actor orch@orch --project "$TARGET" --task "$XT" >/dev/null 2>&1)
+AGORA_RUNTIME=echo AGORA_HOME="$AH4" bash "$AH4/scripts/dispatch.sh" --actor orch@orch --project "$TARGET" --task "$XT" >/dev/null 2>&1
 N=$(cat "$AH4"/log/*/*.md 2>/dev/null | grep -F "task:$XT" | grep -c "event:dispatched")
-[ "$N" -ge 2 ] && ok "同任务双派生产生两条 dispatched 审计行" || fail "同任务二次派生 dispatched 行被吞（仅 $N 条）"
+[ "$N" -eq 2 ] && ok "同任务二次派生 dispatched 审计行落账（基线 1 + 新增 1）" || fail "同任务二次派生 dispatched 行被吞（共 $N 条，期望 2）"
 rm -rf "$H4"
 
 echo

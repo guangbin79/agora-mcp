@@ -43,7 +43,7 @@ fi
 [[ "$EVENT" == dispatched && -z "$TARGET" ]] && fail VALIDATION_FAILED "dispatched requires target"
 [[ "$MENTION" == *all* ]] && fail VALIDATION_FAILED "@all forbidden in v0"
 # 字段值禁止 | 与换行（ABNF: value 不含 "|" 与 LF）
-for v in "$TASK" "$COMMIT" "$EVIDENCE" "$CONCLUSION" "$REASON" "$BODY" "$TARGET" "$CHILD"; do
+for v in "$TASK" "$COMMIT" "$EVIDENCE" "$CONCLUSION" "$REASON" "$BODY" "$TARGET" "$CHILD" "$RUN"; do
   [[ "$v" == *"|"* || "$v" == *$'\n'* ]] && fail VALIDATION_FAILED "field value contains | or newline"
 done
 
