@@ -55,12 +55,12 @@ TOOLS = [
    "required": ["event"]}},
  {"name": "agora_check_mail", "description": "查收件箱（拉模式；读前自动与远端尽力同步，多机场景默认见新）。",
   "inputSchema": {**T, "properties": {"since": {"type": "string", "description": "水位指针，只返回其后新邮件"}}}},
- {"name": "agora_board", "description": "看板快照（含 parent 计划进度聚合 N/M 完成；读前自动与远端尽力同步）。owner 参数按认领者过滤任务行，owner=me 即服务端裁决的当前身份（个人任务队列）。",
+ {"name": "agora_board", "description": "看板快照（含 parent 计划进度聚合 N/M 完成；读前自动与远端尽力同步）。owner 参数按认领者过滤任务行，owner=me 即服务端裁决的当前身份（个人任务队列）；view 可选列视图（如 waiting）。",
   "inputSchema": {**T, "properties": {
     "view": {"type": "string", "enum": ["todo","waiting","in-progress","blocked","all"]},
     "owner": {"type": "string", "description": "按认领者过滤（如 kai@proj）；me = 当前身份（服务端按 cwd 裁决）"},
     "project": {"type": "string"}}}},
- {"name": "agora_wiki_read", "description": "读 wiki 页。",
+ {"name": "agora_wiki_read", "description": "读 wiki 页（无 .md 后缀自动归一补全）。",
   "inputSchema": {**T, "properties": {"path": {"type": "string"}}, "required": ["path"]}},
  {"name": "agora_wiki_write", "description": "写 wiki 页。replace 需 owner=自己；append 仅限 topics/。",
   "inputSchema": {**T, "properties": {
