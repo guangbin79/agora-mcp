@@ -262,7 +262,7 @@ for line in sys.stdin:
     if method == "initialize":
         reply(mid, {"protocolVersion": req.get("params",{}).get("protocolVersion","2025-03-26"),
                     "capabilities": {"tools": {}},
-                    "serverInfo": {"name": "agora-mcp", "version": "agora-mcp v1.24"},
+                    "serverInfo": {"name": "agora-mcp", "version": "agora-mcp v1.25"},
                     "instructions": INSTRUCTIONS})
     elif method == "notifications/initialized" or method == "ping":
         if mid is not None: reply(mid, {})

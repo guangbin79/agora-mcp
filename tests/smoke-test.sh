@@ -763,44 +763,6 @@ assert mineb in allv["blocked"] and mine in allv["in-progress"] and theirs not i
 p.stdin.close()
 PYEOF
 
-echo "===== opencode v2 插件（§8.2 宿主适配层） ====="
-if command -v node >/dev/null 2>&1; then
-  # 用桩模块替代 @opencode/plugin（插件只用到 Plugin.define 恒等函数），零网络单测 v2 三处注册
-  rm -rf "$T/plug"; mkdir -p "$T/plug/node_modules/@opencode/plugin"
-  printf '{"name":"@opencode/plugin","type":"module","main":"index.js"}' > "$T/plug/node_modules/@opencode/plugin/package.json"
-  printf 'export const Plugin = { define: (x) => x }\n' > "$T/plug/node_modules/@opencode/plugin/index.js"
-  cp "$PKG/plugin/agora.js" "$T/plug/"
-  node --check "$T/plug/agora.js" && ok "插件语法检查" || fail "插件语法检查"
-  AGORA_HOME="$AGORA_HOME" PROJ="$PROJ" MINE="$MINE" MINEB="$MINEB" THEIRS="$THEIRS" node - "$T/plug/agora.js" <<'NODEEOF' && ok "插件队列过滤与 v2 注册行为" || fail "插件队列过滤与 v2 注册行为"
-;(async () => {
-  const def = (await import(`file://${process.argv[2]}`)).default
-  if (def.id !== "agora" || typeof def.setup !== "function") throw new Error("缺 v2 define 形态")
-  const mcpSet = {}
-  const tools = {}
-  const hooks = {}
-  const ctx = {
-    location: { directory: process.env.PROJ },
-    mcp: { transform: async (fn) => fn({ get: (n) => mcpSet[n], set: (n, c) => { mcpSet[n] = c } }) },
-    tool: { transform: async (fn) => fn({ add: (t) => { tools[t.name] = t } }) },
-    session: { hook: async (name, cb) => { hooks[name] = cb } },
-  }
-  await def.setup(ctx)
-  if (!mcpSet.agora?.command?.[1]?.endsWith("server/agora_mcp.py")) throw new Error("mcp.transform 未注册 agora")
-  const out = await tools.agora_my_queue.execute({})
-  const text = out.content ?? ""
-  if (!text.includes("tester@proj")) throw new Error("身份裁决失败: " + text)
-  if (!text.includes(process.env.MINE) || !text.includes(process.env.MINEB)) throw new Error("自己的活缺失")
-  if (text.includes(process.env.THEIRS)) throw new Error("混入别人的活")
-  if (typeof hooks.context !== "function") throw new Error("session context 钩子未注册")
-  const ev = { system: [] }
-  await hooks.context(ev)
-  if (!ev.system.some(p => p.text.includes("tester@proj"))) throw new Error("上下文未注入队列提醒")
-})().catch(e => { console.error(e.message); process.exit(1) })
-NODEEOF
-else
-  echo "skip | opencode v2 插件（无 node）"
-fi
-
 echo "===== 跨仓委托协议播种 ====="
 # ① 隔离 AGORA_HOME 跑 init → wiki/topics/delegation.md 存在且含「与宿主准则的关系」
 H3=$(mktemp -d)
