@@ -78,7 +78,9 @@ SHARD="$SHARD_DIR/$PROJECT.md"
 # 去重窗口 = 该 actor 在该 task 上的"最近一条"事件：连续重复 = 重试，静默成功；
 # 中间隔了别的事件的相同 idem = 合法的新状态迁移（如 reopen 后再次 claim），必须落账。
 if [[ -z "$IDEM" ]]; then
-  IDEM=$(printf '%s' "$ACTOR|$EVENT|$TASK|$COMMIT|$EVIDENCE|$CONCLUSION|$REASON|$BODY|$MENTION|$TARGET|$CHILD" | sha1sum | cut -c1-8)
+  IDEM_INPUT="$ACTOR|$EVENT|$TASK|$COMMIT|$EVIDENCE|$CONCLUSION|$REASON|$BODY|$MENTION|$TARGET|$CHILD"
+  [[ -n "$RUN" ]] && IDEM_INPUT="$IDEM_INPUT|$RUN"
+  IDEM=$(printf '%s' "$IDEM_INPUT" | sha1sum | cut -c1-8)
 fi
 if [[ -n "$TASK" ]]; then
   LAST_EV=$(grep -F "actor:$ACTOR " "$SHARD" 2>/dev/null | grep -E 'task:'"$TASK"'( \||$)' | tail -1 || true)
