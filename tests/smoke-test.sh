@@ -667,6 +667,19 @@ bash "$AGORA_HOME/scripts/wiki-write.sh" --actor rival@proj2 --path topics/roadm
 bash "$AGORA_HOME/scripts/wiki-write.sh" --actor rival@proj2 --path entities/rival.md --mode append <<< "x" \
   2>/dev/null; [[ $? -eq 2 ]] && ok "非 topics append 被拒(rc=2)" || fail "非 topics append 被拒(rc=2)"
 
+# --- wiki_read 扩展名归一（无 .md 自动补，T6 人机学缝隙） ---
+cd "$PROJ" && python3 - "$PKG/server/agora_mcp.py" <<'PYEOF' && ok "wiki_read 无 .md 路径归一可读（topics/delegation）" || fail "wiki_read 无 .md 路径归一可读（topics/delegation）"
+import json, subprocess, sys
+p = subprocess.Popen(["python3", sys.argv[1]], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+def rpc(m, ps=None, i=1):
+    p.stdin.write(json.dumps({"jsonrpc":"2.0","id":i,"method":m,"params":ps or {}})+"\n"); p.stdin.flush()
+    return json.loads(p.stdout.readline())
+rpc("initialize", {})
+r = rpc("tools/call", {"name":"agora_wiki_read","arguments":{"path":"topics/delegation"}}, 2)
+assert "与宿主准则的关系" in r["result"]["content"][0]["text"], r
+p.stdin.close()
+PYEOF
+
 # --- backup.sh ---
 AGORA_BACKUP_DIR="$T/bak" bash "$AGORA_HOME/scripts/backup.sh" >/dev/null 2>&1
 ls "$T/bak"/agora-*.bundle >/dev/null 2>&1 && ok "backup bundle 生成" || fail "backup bundle 生成"
