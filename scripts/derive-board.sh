@@ -12,13 +12,12 @@ set -euo pipefail
 AGORA_HOME="${AGORA_HOME:-$HOME/agora}"
 cd "$AGORA_HOME"
 
-python3 - <<'PYEOF'
+PYTHONPATH="$(cd "$(dirname "$0")" && pwd)${PYTHONPATH:+:$PYTHONPATH}" python3 - <<'PYEOF'
 import os, re, glob, json, hashlib, collections
+import agora_lib as lib   # LINE_RE/KV_RE/parse_event 唯一真源
 
 HOME = os.environ.get("AGORA_HOME", os.path.expanduser("~/agora"))
 CACHE_F = os.path.join(HOME, ".git", "derive-cache.json")
-LINE_RE = re.compile(r'^- seq:\d+ \| ts:\S+ \| actor:(\S+) \| event:(\w+) \| idem:\S+ \| seen:\S+(.*)$')
-KV_RE = re.compile(r'(\w+):((?:[^|]|\|(?!\s*\w+:))*?)(?=\s*\|\s*\w+:|$)')
 
 # 任务元数据每次全量重读（deps/parent/title 供渲染；页面集合变化 = 缓存失效条件之一，
 # 因为页面缺失期间其事件被状态机跳过，事后补页必须全量重放才能补算）
@@ -40,9 +39,9 @@ def hash_lines(lines):
 
 def fresh_state():
     return ({tid: {"state": "todo", "owner": None} for tid in task_ids},
-            set(), [], [], {})
+            set(), [], {})   # tasks, retired, conflicts, last_progress
 
-tasks, retired, conflicts, stall_notes, last_progress = fresh_state()
+tasks, retired, conflicts, last_progress = fresh_state()
 wm, stats = {}, {"incr": 0, "full": 0}
 
 cache = None
@@ -69,7 +68,6 @@ if cache:
             if tid in tasks: tasks[tid] = st
         retired = set(cache.get("retired", []))
         conflicts = list(cache.get("conflicts", []))
-        stall_notes = list(cache.get("stall_notes", []))
         last_progress = dict(cache.get("last_progress", {}))
 
 def apply(shard, i, actor, event, f):
@@ -102,20 +100,16 @@ def apply(shard, i, actor, event, f):
         pass  # 保持 in-progress（宣言 §5.3）
     elif event == "blocked" and tid in tasks and tasks[tid]["owner"] == actor:
         tasks[tid].update(state="blocked")
-    elif event == "diagnosed" and tid:
-        stall_notes.append(f"{tid}: {f.get('conclusion','')}")
     elif event == "progress" and tid:
         last_progress[tid] = (f.get("body") or "")[:60]
 
 def replay_lines(shard, start, lines):
     for off, line in enumerate(lines, 1):
-        m = LINE_RE.match(line.strip())
-        if not m: continue
-        actor, event, rest = m.groups()
-        apply(shard, start + off, actor, event, dict(KV_RE.findall(rest)))
+        e = lib.parse_event(line)
+        if e: apply(shard, start + off, e["actor"], e["event"], e)
 
 if need_full:
-    tasks, retired, conflicts, stall_notes, last_progress = fresh_state()
+    tasks, retired, conflicts, last_progress = fresh_state()
     wm = {}
     for rel in shards:
         lines = open(os.path.join(HOME, rel), encoding="utf-8").read().splitlines(keepends=True)
@@ -137,7 +131,7 @@ else:
             replay_lines(rel, 0, lines)       # 新分片（已保证排在全部缓存分片之后）
         new_wm[rel] = {"n": len(lines), "h": hash_lines(lines)}
     if need_full:  # 前缀校验中途失败：状态已被部分污染，从零全量
-        tasks, retired, conflicts, stall_notes, last_progress = fresh_state()
+        tasks, retired, conflicts, last_progress = fresh_state()
         new_wm = {}
         for rel in shards:
             lines = open(os.path.join(HOME, rel), encoding="utf-8").read().splitlines(keepends=True)
@@ -195,12 +189,21 @@ open(f"{HOME}/board/todo.md", "w").write("".join(todo_out))
 open(f"{HOME}/board/in-progress.md", "w").write(render("In Progress", cols["in-progress"]))
 open(f"{HOME}/board/blocked.md", "w").write(render("Blocked", cols["blocked"]))
 open(f"{HOME}/board/waiting.md", "w").write(render("Waiting（依赖未满足）", cols["waiting"]))
-if conflicts:
-    open(f"{HOME}/board/conflicts.md", "w").write(render("Conflicts (claim_conflict)", conflicts))
+# 条件视图：有则落盘、无则清除陈旧文件（reopened/状态回迁不留死文件）
+def _write_optional(name, title, items):
+    p = f"{HOME}/board/{name}.md"
+    if items:
+        open(p, "w").write(render(title, items))
+    elif os.path.exists(p):
+        os.remove(p)
+
+_write_optional("conflicts", "Conflicts (claim_conflict)", conflicts)
+_write_optional("cancelled", "Cancelled",
+                [tid for tid in sorted(tasks) if tasks[tid]["state"] == "cancelled"])
 
 os.makedirs(os.path.dirname(CACHE_F), exist_ok=True)
 json.dump({"v": 2, "watermark": wm, "tasks": tasks, "retired": sorted(retired),
-           "conflicts": conflicts, "stall_notes": stall_notes,
-           "last_progress": last_progress, "task_ids": task_ids, "stats": stats},
+           "conflicts": conflicts, "last_progress": last_progress,
+           "task_ids": task_ids, "stats": stats},
           open(CACHE_F, "w"))
 PYEOF
