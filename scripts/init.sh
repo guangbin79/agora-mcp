@@ -12,9 +12,10 @@ AGORA_HOME="${AGORA_HOME:-$HOME/agora}"
 AGORA_PKG="${AGORA_PKG:-$(cd "$(dirname "$0")/.." && pwd)}"
 
 # 骨架各项幂等：clone 来的仓库缺 scripts/ 时也必须补齐
-mkdir -p "$AGORA_HOME"/{log,board,inbox,raw/dispatches,scripts,server} \
+mkdir -p "$AGORA_HOME"/{log,board,inbox,raw/dispatches,scripts} \
          "$AGORA_HOME"/wiki/{entities,tasks,decisions,proposals,topics}
 cp "$AGORA_PKG"/scripts/*.sh "$AGORA_HOME/scripts/"
+cp "$AGORA_PKG"/scripts/*.py "$AGORA_HOME/scripts/"   # agora_lib.py：共享解析唯一真源（随脚本自举）
 [[ -f "$AGORA_PKG/docs/CONVENTIONS.md" ]] && cp -n "$AGORA_PKG/docs/CONVENTIONS.md" "$AGORA_HOME/" 2>/dev/null || true
 [[ -f "$AGORA_PKG/docs/AGENTS.md" ]] && cp -n "$AGORA_PKG/docs/AGENTS.md" "$AGORA_HOME/" 2>/dev/null || true
 
