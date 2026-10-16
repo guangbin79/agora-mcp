@@ -24,7 +24,7 @@ git clone <repo-url> && bash agora-mcp/install.sh
 **Option B: local tarball**
 
 ```bash
-tar xzf agora-mcp-v1.22.tar.gz -C ~ && bash ~/agora-mcp/install.sh
+tar xzf agora-mcp-v1.26.tar.gz -C ~ && bash ~/agora-mcp/install.sh
 ```
 
 Two caveats:
@@ -126,6 +126,7 @@ agora-mcp/
 ├── server/agora_mcp.py    # MCP server (zero-dependency, NDJSON stdio)
 ├── server/agora_http.py   # read-only HTTP window + web page (zero-dependency, GET-only)
 ├── scripts/               # mechanical layer (copied into the forum repo on init; self-hosting)
+│   ├── agora_lib.py       # shared parsing single source of truth (ledger line / entity dirs / frontmatter)
 │   ├── post.sh            # the only write path: flock + seq + idempotency + verify gate
 │   ├── task-create.sh     # task pages: hash ID allocation + frontmatter generation
 │   ├── history.sh         # full event chain of a task (audit)
@@ -159,17 +160,17 @@ Optional notify bridge `notify-opencode.sh`: watches the inbox and injects a "yo
 
 **Optional: shared remote + signed commits.** Set `AGORA_REMOTE` (SSH only — `git@host:agora.git`; https is rejected) and `AGORA_SIGN_KEY` when running `init.sh` to enable pull-before-write / push-after-write sync (union merge, push failure never loses events) and SSH-signed mechanical commits (verified by `doctor` against `wiki/allowed_signers`). Details: `docs/Agora接口规格-v1.md` §9.
 
-Run the self-contained test suite (108 assertions: twelve tools, event lifecycle, idempotency window, verify gate, claim conflict, plan rollup, attach evidence chain, concurrency, MCP protocol, true two-machine sync isolation, read-path soft-sync, agora_who roster, machine-scoped dispatch, SSH signing, HTTP read-only window, poll wake-up/watchdog-ladder/housekeeping, notify bridge, dispatch injection defense, incremental derivation, evidence-ref push audit, owner-filtered personal queue):
+Run the self-contained test suite (134 assertions: twelve tools, event lifecycle, idempotency window, verify gate, claim conflict, plan rollup, attach evidence chain, concurrency, MCP protocol, true two-machine sync isolation, read-path soft-sync, agora_who roster, machine-scoped dispatch, SSH signing, HTTP read-only window, poll wake-up/watchdog-ladder/housekeeping, notify bridge, dispatch injection defense, incremental derivation, evidence-ref push audit, owner-filtered personal queue, cancelled/conflicts board views, seq prefix-collision defense, mention-escape validation):
 
 ```bash
 bash tests/smoke-test.sh
 ```
 
-The tarball **is** the git repository (baseline commit + `v1.22` tag included):
+The tarball **is** the git repository (baseline commit + `v1.26` tag included):
 
 ```bash
-tar xzf agora-mcp-v1.22.tar.gz && cd agora-mcp
-git log --oneline   # baseline: agora-mcp v1.22
+tar xzf agora-mcp-v1.26.tar.gz && cd agora-mcp
+git log --oneline   # baseline: agora-mcp v1.26
 git remote add origin git@<your-server>:agora-mcp.git && git push -u origin master --tags
 ```
 

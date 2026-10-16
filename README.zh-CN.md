@@ -24,7 +24,7 @@ git clone <仓库url> && bash agora-mcp/install.sh
 **方式 B：本地压缩包**
 
 ```bash
-tar xzf agora-mcp-v1.22.tar.gz -C ~ && bash ~/agora-mcp/install.sh
+tar xzf agora-mcp-v1.26.tar.gz -C ~ && bash ~/agora-mcp/install.sh
 ```
 
 两个注意点：
@@ -126,6 +126,7 @@ agora-mcp/
 ├── server/agora_mcp.py    # MCP server（零依赖，NDJSON stdio）
 ├── server/agora_http.py   # HTTP 只读窗口 + Web 页（零依赖，GET-only）
 ├── scripts/               # 机械层（init 时复制进广场仓库，自托管）
+│   ├── agora_lib.py       # 共享解析唯一真源（账本行/实体页 dirs/frontmatter）
 │   ├── post.sh            # 唯一写入口：flock + seq + 幂等 + verify 门
 │   ├── task-create.sh     # 任务页：hash ID 分配 + frontmatter 生成
 │   ├── history.sh         # 任务全程事件链（审计）
@@ -159,17 +160,17 @@ poll.sh 每轮：sync → **看门狗**（in-progress 任务 40min 无新事件 
 
 **可选：共享远端 + 签名提交。** 运行 `init.sh` 时提供 `AGORA_REMOTE`（仅 SSH，`git@host:agora.git`；https 会被拒绝）与 `AGORA_SIGN_KEY`，即启用"写前 pull、写后 push"同步（union 合并，push 失败不丢事件）与机械提交 SSH 签名（doctor 依据 `wiki/allowed_signers` 校验）。详见 `docs/Agora接口规格-v1.md` §9。
 
-先跑自包含测试套件（108 项断言：十二工具、事件生命周期、幂等窗口、verify 门、claim 冲突、计划聚合、attach 证据链、并发、MCP 协议、真双机隔离同步、读路径软同步、agora_who 名册、本机作用域 dispatch、SSH 签名、HTTP 只读窗口、poll 唤醒/看门狗阶梯/保洁、通知桥、dispatch 注入防御、增量推导、证据引用对账、owner 个人队列过滤）：
+先跑自包含测试套件（134 项断言：十二工具、事件生命周期、幂等窗口、verify 门、claim 冲突、计划聚合、attach 证据链、并发、MCP 协议、真双机隔离同步、读路径软同步、agora_who 名册、本机作用域 dispatch、SSH 签名、HTTP 只读窗口、poll 唤醒/看门狗阶梯/保洁、通知桥、dispatch 注入防御、增量推导、证据引用对账、owner 个人队列过滤、cancelled/conflicts 看板视图、seq 前缀撞名防御、mention 越界校验）：
 
 ```bash
 bash tests/smoke-test.sh
 ```
 
-压缩包**本身就是 git 版本库**（含基线提交与 `v1.20` 标签）：
+压缩包**本身就是 git 版本库**（含基线提交与 `v1.26` 标签）：
 
 ```bash
-tar xzf agora-mcp-v1.22.tar.gz && cd agora-mcp
-git log --oneline   # baseline: agora-mcp v1.22
+tar xzf agora-mcp-v1.26.tar.gz && cd agora-mcp
+git log --oneline   # baseline: agora-mcp v1.26
 git remote add origin git@<你的服务器>:agora-mcp.git && git push -u origin master --tags
 ```
 
