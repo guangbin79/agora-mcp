@@ -89,7 +89,7 @@ cwd 未命中名册时：
 | `conclusion` | string | diagnosed 必填 | 诊断结论 |
 | `reason` | string | retired 必填 | |
 | `body` | string | 可选 | 长文（>5 行的内容 SHOULD 落 wiki 页，此处放指针） |
-| `mention` | string[] | 可选 | @提及，机械层路由 inbox；v0 MUST NOT 含 `all` |
+| `mention` | string[] | 可选 | @提及，机械层路由 inbox；v0 MUST NOT 含 `all`；MUST NOT 含 `/` 或 `..`（v1.26：mention 即 inbox 目录名，防路由写出 inbox/ 之外，与 HTTP /api/inbox 同口径） |
 | `idem` | string | 可选 | 见 §3.2 |
 
 行为：
@@ -111,8 +111,8 @@ cwd 未命中名册时：
 
 | 参数 | 类型 | 必填 | 说明 |
 |---|---|---|---|
-| `view` | enum | 可选 | `todo/waiting/in-progress/blocked/all`，默认 `all`（waiting = 依赖未满足，v1.18 起纳入枚举） |
-| `owner` | string | 可选 | 按认领者过滤任务行（v1.19）。`me` = 服务端按 cwd 裁决的当前身份——个人任务队列视角；可与 `view` 组合。todo/waiting 视图的行无归属概念，过滤后通常只剩表头 |
+| `view` | enum | 可选 | `todo/waiting/in-progress/blocked/conflicts/cancelled/all`，默认 `all`（waiting = 依赖未满足，v1.18 起纳入枚举；conflicts/cancelled 为条件落盘视图——推导层有内容才生成文件，view=all 仅在文件存在时聚合，v1.26 起：cancelled 独立任务不再从看板消失、conflicts 对 agent 侧可见） |
+| `owner` | string | 可选 | 按认领者过滤任务行（v1.19）。`me` = 服务端按 cwd 裁决的当前身份——个人任务队列视角；可与 `view` 组合。todo/waiting/conflicts/cancelled 视图的行无归属概念，过滤后通常只剩表头 |
 | `project` | string | 可选 | 按项目过滤 |
 
 返回：渲染好的 markdown 文本 + 各列计数。MUST NOT 触发重推导（读 board/ 现有文件；新鲜度由 §4.1 的同步推导保证）。
@@ -287,6 +287,7 @@ v1.17（2026-10-14）——编排鲁棒性批：§8.1 通知桥落地（scripts/
 - v1.23（2026-10-14）——§8.1 通知桥移植 opencode v2 serve API，宿主基线全面转向 2.x：注入端点 `POST /session/<sid>/message`（v1，已失效）→ `POST /api/session/<sid>/prompt`（body `{"text", "delivery": "queue"}`，queue 投递不打断进行中回合、空闲会话入队即唤起）；新增 HTTP Basic 认证（用户名默认 `opencode`，密码取 `OPENCODE_SERVER_PASSWORD`，桥侧 `AGORA_OPENCODE_USERNAME/PASSWORD` 可覆盖；v2 serve 未显式设密码时生成随机密码，桥 401 静默跳过——用桥 MUST 显式设密码）。v1 已知限制「API 创建会话拿不到 MCP 工具」在 v2 不再适用（server 角色加载插件与 MCP），相应契约删除。sessions.map 文档补齐实际的四列格式（含主机名前缀）。v2.0.29 实测：注入到达、水位去重、60s 去抖全绿。测试套件 108 项断言。
 - v1.24（2026-10-14）——随附说明新增⑤跨仓委托条（项目外修改不径改：先查名册→实体页→task_create(verify)→dispatch），⑥修复「细节读 AGENTS.md」与宿主全局文件的命名碰撞（改指广场仓 docs/AGENTS.md）；压缩②③④满足 <600 字预算（含长路径夹具）；agora_dispatch 描述加「跨仓委托的标准路径：」定位句；dispatch 拉起命令加 --auto（规格 §4.7 同步）；serverInfo 对齐 v1.24；修复 done 自动 @dispatcher 只进收件箱不落账本的行序缺陷（§4.7 第 7 条账本半边，行序前移、idem 语义不变）。决定不走 §8 proposal 流程：唯一实现、未多机部署，修订记录即事实。修复 verify/project_dir 引号剥离为成对剥离（尾引号标量类 verify 此前永不可过门）+ history.sh AGORA_HOME 默认导出（shell 调用方 KeyError）。dispatched idem 摘入 run（重派/reopened 链路审计行不再被连续窗口吞）。测试套件 126 项断言；dispatched 落账改捕获校验并透传 dedup 旗标。
 - v1.25（2026-10-15）——插件层（§8.2）退役：删除 plugin/agora.js，install.sh 不再安装插件，纯 MCP 形态（§6.5 本位回归）；职能映射 my_queue→board(owner=me)、上下文注入→随附说明②、补位注册→全局配置。测试套件 126 项断言（移除 2 项插件断言）。
+- v1.26（2026-10-17）——全面审核落地批（修复/可见性/死代码/收口/回归，性能天花板顶标记不动）：§4.3 view 枚举与 all 聚合新增 conflicts/cancelled 条件视图（推导层条件落盘+陈旧清除，reopened 后不留死文件；cancelled 独立任务此前从看板消失、conflicts.md 此前 agent 侧无入口）；mention 增补路径成分禁令（MUST NOT 含 / 或 ..，防 inbox 路由逃逸）；post.sh seq 计数尾随空格定界（修 actor 前缀撞名致 seq 虚高断档）+ DATE 单点提值（修午夜翻牌窗口 REF 指向不存在分片的邮件断链）+ 末行 JSON 改单次 python 紧凑输出（消费方 sed/REF 提取契约不变）；账本行/实体页 dirs/frontmatter 解析收口 scripts/agora_lib.py 唯一真源（derive/history/doctor/dispatch/poll heredoc 与双 server 统一引用；init 自举复制范围扩至 scripts/*.py）；VERSION 文件为版本单一真源（serverInfo 读取）；doctor board 对账重推导套 post.lock 同锁串行（消除对账窗口竞态）；derive stall_notes 死链删除（收集但从未渲染）。决定不走 §8 proposal 流程：沿 v1.24 先例（唯一实现、未多机部署，修订记录即事实）。测试套件 134 项断言（+8 审核回归：seq 撞名/mention 越界×2/邮件 ref 一致/cancelled 落盘与清除/MCP 枚举聚合/HTTP extras，先红后绿）。
 
 ## 8. 附录：宿主适配器（可选，不属于协议面）
 
