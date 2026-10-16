@@ -763,6 +763,67 @@ assert mineb in allv["blocked"] and mine in allv["in-progress"] and theirs not i
 p.stdin.close()
 PYEOF
 
+echo "===== 审核回归（v1.26） ====="
+# --- post.sh seq 前缀撞名：actor:pre@a 不得把 actor:pre@ab 计入自己的 seq ---
+bash "$AGORA_HOME/scripts/post.sh" --actor "pre@a" --project pfxshard --event proposal --body "s1" >/dev/null
+bash "$AGORA_HOME/scripts/post.sh" --actor "pre@ab" --project pfxshard --event proposal --body "s2" >/dev/null
+OUT=$(bash "$AGORA_HOME/scripts/post.sh" --actor "pre@a" --project pfxshard --event proposal --body "s3")
+echo "$OUT" | grep -q '"seq":2' \
+  && ok "seq 前缀撞名防御（pre@a 不误数 pre@ab）" || fail "seq 前缀撞名防御（$OUT）"
+# --- mention 越界：../ 逃逸被拒，inbox/ 外无残留 ---
+bash "$AGORA_HOME/scripts/post.sh" --actor tester@proj --project proj --event proposal --body "x" --mention "../evil" 2>/dev/null
+[[ $? -eq 2 ]] && ok "mention 路径逃逸被拒(rc=2)" || fail "mention 路径逃逸被拒"
+[[ ! -e "$AGORA_HOME/evil" ]] && ok "mention 未逃逸出 inbox/" || fail "mention 逃逸出 inbox/"
+# --- 邮件 ref 与 post stdout ref 一致且分片存在（午夜翻牌防线） ---
+OUT=$(POST tester@proj --event proposal --body "ref一致性" --mention tester)
+REF=$(echo "$OUT" | sed -n 's/.*"ref":"\([^"]*\)".*/\1/p')
+MAIL=$(ls "$AGORA_HOME"/inbox/tester/*.md | sort | tail -1)
+grep -qF "ref:$REF" "$MAIL" && test -f "$AGORA_HOME/${REF%:*}" \
+  && ok "邮件 ref 与账本 ref 一致且分片存在" || fail "邮件 ref 一致性（ref=$REF mail=$MAIL）"
+# --- cancelled 独立任务可见性：落 board/cancelled.md ---
+OUT=$(TITLE="取消可见性" TC); CT=$(echo "$OUT" | sed -n 's/.*"task":"\(gt-[0-9a-f]*\)".*/\1/p')
+POST tester@proj --event claimed --task "$CT" >/dev/null
+POST tester@proj --event cancelled --task "$CT" --reason "撤销" >/dev/null
+grep -q "^- $CT" "$AGORA_HOME/board/cancelled.md" 2>/dev/null \
+  && ok "cancelled 独立任务落 board/cancelled.md" || fail "cancelled 独立任务落 board/cancelled.md"
+cd "$PROJ" && python3 - "$PKG/server/agora_mcp.py" "$CT" <<'PYEOF' && ok "MCP board：枚举+聚合 conflicts/cancelled" || fail "MCP board：枚举+聚合 conflicts/cancelled"
+import json, subprocess, sys
+srv, ct = sys.argv[1], sys.argv[2]
+p = subprocess.Popen(["python3", srv], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+def rpc(m, ps=None, i=[0]):
+    i[0] += 1
+    p.stdin.write(json.dumps({"jsonrpc":"2.0","id":i[0],"method":m,"params":ps or {}})+"\n"); p.stdin.flush()
+    return json.loads(p.stdout.readline())
+rpc("initialize", {})
+tools = rpc("tools/list")["result"]["tools"]
+enum = next(t for t in tools if t["name"] == "agora_board")["inputSchema"]["properties"]["view"]["enum"]
+assert "conflicts" in enum and "cancelled" in enum, enum
+def board(**kw):
+    return json.loads(rpc("tools/call", {"name":"agora_board","arguments":kw})["result"]["content"][0]["text"])["board"]
+a = board(view="all")
+assert "conflicts" in a and "cancelled" in a, list(a)
+assert ct in a["cancelled"], a["cancelled"]
+c = board(view="cancelled")
+assert ct in next(iter(c.values())), c
+p.stdin.close()
+PYEOF
+HPORT2=18472
+AGORA_HOME="$AGORA_HOME" AGORA_HTTP_PORT=$HPORT2 python3 "$PKG/server/agora_http.py" >/dev/null 2>&1 &
+HPID4=$!
+sleep 1
+python3 - "$HPORT2" <<'PYEOF' && ok "HTTP /api/board 含 conflicts/cancelled 视图" || fail "HTTP /api/board 含 conflicts/cancelled 视图"
+import json, sys, urllib.request
+d = json.load(urllib.request.urlopen(f"http://127.0.0.1:{sys.argv[1]}/api/board", timeout=8))
+assert "conflicts" in d["views"] and "cancelled" in d["views"], list(d["views"])
+assert "vs owner" in d["views"]["conflicts"], d["views"]["conflicts"][:120]
+PYEOF
+kill $HPID4 2>/dev/null || true
+# --- reopen 后 cancelled.md 陈旧文件清除（派生确定性防线） ---
+POST tester@proj --event reopened --task "$CT" --reason "恢复" >/dev/null
+[[ ! -f "$AGORA_HOME/board/cancelled.md" ]] \
+  && ok "reopen 后 cancelled.md 陈旧文件清除" || fail "reopen 后 cancelled.md 未清除"
+
+
 echo "===== 跨仓委托协议播种 ====="
 # ① 隔离 AGORA_HOME 跑 init → wiki/topics/delegation.md 存在且含「与宿主准则的关系」
 H3=$(mktemp -d)
