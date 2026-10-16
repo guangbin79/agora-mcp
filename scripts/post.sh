@@ -25,7 +25,6 @@ while [[ $# -gt 0 ]]; do
 done
 
 fail() { echo "{\"code\":\"$1\",\"message\":\"$2\"}" >&2; exit "${3:-2}"; }
-json_escape() { python3 -c 'import json,sys;print(json.dumps(sys.argv[1]))' "$1"; }
 
 # ---------- 文法校验（宣言 §5.2） ----------
 case "$EVENT" in
@@ -45,6 +44,14 @@ fi
 [[ "$EVENT" == retired && -z "$REASON" ]] && fail VALIDATION_FAILED "retired requires reason"
 [[ "$EVENT" == dispatched && -z "$TARGET" ]] && fail VALIDATION_FAILED "dispatched requires target"
 [[ "$MENTION" == *all* ]] && fail VALIDATION_FAILED "@all forbidden in v0"
+# mention 即 inbox 目录名：拒绝路径成分（../ 与 /），防路由写出 inbox/ 之外
+if [[ -n "$MENTION" ]]; then
+  IFS=',' read -ra _MS <<< "$MENTION"
+  for _m in "${_MS[@]}"; do
+    [[ -z "$_m" || "$_m" == *"/"* || "$_m" == *".."* ]] \
+      && fail VALIDATION_FAILED "bad mention: $_m（实体名不得含 / 或 ..）"
+  done
+fi
 # 字段值禁止 | 与换行（ABNF: value 不含 "|" 与 LF）
 for v in "$TASK" "$COMMIT" "$EVIDENCE" "$CONCLUSION" "$REASON" "$BODY" "$TARGET" "$CHILD" "$RUN"; do
   [[ "$v" == *"|"* || "$v" == *$'\n'* ]] && fail VALIDATION_FAILED "field value contains | or newline"
@@ -73,7 +80,8 @@ SYNC_PRE=$(bash "$AGORA_HOME/scripts/sync.sh" pre 2>/dev/null || true)
 SW=$(echo "$SYNC_PRE" | sed -n 's/.*"warn:\([a-z_]*\)".*/\1/p')
 [[ -n "$SW" ]] && DERIVED+=("sync_warn:$SW")
 
-SHARD_DIR="$AGORA_HOME/log/$(date +%F)"; mkdir -p "$SHARD_DIR"
+DATE=$(date +%F)   # 单点取值：午夜翻牌窗口内 SHARD 与 REF 必须同日
+SHARD_DIR="$AGORA_HOME/log/$DATE"; mkdir -p "$SHARD_DIR"
 SHARD="$SHARD_DIR/$PROJECT.md"
 [[ -f "$SHARD" ]] || echo '<!-- format: git-agora-log v1 -->' > "$SHARD"
 
@@ -97,7 +105,8 @@ if [[ -n "$LAST_EV" ]] && echo "$LAST_EV" | grep -qF "idem:$IDEM"; then
 fi
 
 # per-actor seq 与 seen（seen = 分片当前事件数）
-SEQ=$(grep -cF "actor:$ACTOR" "$SHARD" 2>/dev/null || true); SEQ=$((SEQ+1))
+# 尾随空格定界：actor:wd@a 不得把 actor:wd@ab 计入（前缀撞名防御，与上方 LAST_EV 同口径）
+SEQ=$(grep -cF "actor:$ACTOR " "$SHARD" 2>/dev/null || true); SEQ=$((SEQ+1))
 SEEN=$(grep -c '^- seq:' "$SHARD" 2>/dev/null || true)
 TS=$(date --iso-8601=seconds)
 
@@ -120,7 +129,7 @@ LINE="- seq:$SEQ | ts:$TS | actor:$ACTOR | event:$EVENT | idem:$IDEM | seen:$PRO
 [[ -n "$BODY" ]] && LINE="$LINE | body:$BODY"
 [[ -n "$MENTION" ]] && LINE="$LINE | mention:$MENTION"
 echo "$LINE" >> "$SHARD"
-REF="log/$(date +%F)/$PROJECT.md:$(grep -c '^- seq:' "$SHARD")"
+REF="log/$DATE/$PROJECT.md:$(grep -c '^- seq:' "$SHARD")"
 
 # claim 冲突检测（账本是事实：仍落账，只标注 derived）
 # 跨分片检索：任务可能被其他项目的 actor 认领，只看本分片会漏报（§3.4 副作用可见性）
@@ -163,7 +172,12 @@ SW=$(echo "$SYNC_POST" | sed -n 's/.*"warn:\([a-z_]*\)".*/\1/p')
 if [[ -n "$SW" ]]; then
   DJSON=$(echo "$DJSON" | python3 -c 'import json,sys; d=json.load(sys.stdin); d.append("sync_warn:'"$SW"'"); print(json.dumps(d))')
 fi
-echo "{\"seq\":$SEQ,\"shard\":$(json_escape "log/$(date +%F)/$PROJECT.md"),\"ref\":$(json_escape "$REF"),\"ts\":$(json_escape "$TS"),\"derived\":$DJSON,\"dedup\":false}"
+python3 - "$SEQ" "log/$DATE/$PROJECT.md" "$REF" "$TS" "$DJSON" <<'PY'
+import json, sys
+print(json.dumps({"seq": int(sys.argv[1]), "shard": sys.argv[2], "ref": sys.argv[3],
+                  "ts": sys.argv[4], "derived": json.loads(sys.argv[5]), "dedup": False},
+                 ensure_ascii=False, separators=(",", ":")))  # 紧凑分隔符：dispatch sed / REF 提取按无空格契约解析
+PY
 
 [[ "$EVENT" == verify_failed ]] && fail VERIFY_FAILED "verify 失败（见事件 verify_output）；先本地复现修复再发 done" 4
 exit 0
