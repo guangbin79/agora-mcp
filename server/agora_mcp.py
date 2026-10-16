@@ -1,8 +1,16 @@
 #!/usr/bin/env python3
-"""agora-mcp —— Git 广场 MCP server（规格 agora-mcp v1.22）
+"""agora_mcp —— Git 广场 MCP server（版本见仓库根 VERSION；规格 docs/Agora接口规格-v1.md）
 零依赖 stdio NDJSON JSON-RPC 实现。薄壳：所有逻辑落到 scripts/。
 """
-import sys, os, json, glob, subprocess, hashlib, re
+import sys, os, json, glob, subprocess, re
+_PKG = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(_PKG, "scripts"))
+import agora_lib as lib   # 账本/实体页共享解析（scripts/ 自举同源）
+
+try:
+    VERSION = open(os.path.join(_PKG, "VERSION"), encoding="utf-8").read().strip()
+except Exception:
+    VERSION = "agora-mcp dev"
 
 HOME = os.environ.get("AGORA_HOME", os.path.expanduser("~/agora"))
 SCRIPTS = os.path.join(HOME, "scripts")
@@ -10,9 +18,8 @@ CWD = os.path.realpath(os.getcwd())
 
 # 自举：AGORA_HOME 无 git 仓库时自动初始化（幂等，宣言"clone 即入职"的单机形态）
 if not os.path.isdir(os.path.join(HOME, ".git")):
-    _pkg = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    _init = os.path.join(_pkg, "scripts", "init.sh")
-    subprocess.run(["bash", _init], env={**os.environ, "AGORA_HOME": HOME, "AGORA_PKG": _pkg},
+    _init = os.path.join(_PKG, "scripts", "init.sh")
+    subprocess.run(["bash", _init], env={**os.environ, "AGORA_HOME": HOME, "AGORA_PKG": _PKG},
                    check=True, capture_output=True)
 
 # ---------- 身份裁决（规格 §2.1：cwd → 名册前缀匹配，最深优先） ----------
@@ -20,9 +27,7 @@ def adjudicate():
     best = None
     for f in glob.glob(f"{HOME}/wiki/entities/*.md"):
         txt = open(f, encoding="utf-8").read()
-        m = re.search(r'^dirs:\s*\n((?:\s+-\s+.+\n)+)', txt, re.M)
-        if not m: continue
-        for d in re.findall(r'-\s+(\S+)', m.group(1)):
+        for d in lib.entity_dirs(txt):
             d = os.path.realpath(os.path.expanduser(d))
             if CWD == d or CWD.startswith(d + "/"):
                 if best is None or len(d) > len(best[1]):
@@ -57,7 +62,7 @@ TOOLS = [
   "inputSchema": {**T, "properties": {"since": {"type": "string", "description": "水位指针，只返回其后新邮件"}}}},
  {"name": "agora_board", "description": "看板快照（含 parent 计划进度聚合 N/M 完成；读前自动与远端尽力同步）。owner 参数按认领者过滤任务行，owner=me 即服务端裁决的当前身份（个人任务队列）；view 可选列视图（如 waiting）。",
   "inputSchema": {**T, "properties": {
-    "view": {"type": "string", "enum": ["todo","waiting","in-progress","blocked","all"]},
+    "view": {"type": "string", "enum": ["todo","waiting","in-progress","blocked","conflicts","cancelled","all"]},
     "owner": {"type": "string", "description": "按认领者过滤（如 kai@proj）；me = 当前身份（服务端按 cwd 裁决）"},
     "project": {"type": "string"}}}},
  {"name": "agora_wiki_read", "description": "读 wiki 页（无 .md 后缀自动归一补全）。",
@@ -112,15 +117,6 @@ def need_actor(write=True):
     return {"code": "NOT_REGISTERED",
             "message": "未注册身份。读工具可用；写工具被拒。用 agora_post(event=proposal, body='注册 <名字>，目录 <cwd>') 自报名。"}
 
-def soft_sync():
-    """读路径的静默 pre-pull：离线/失败不影响读（星型协作下读前尽量见新）。"""
-    try:
-        subprocess.run(["bash", os.path.join(SCRIPTS, "sync.sh"), "pre"],
-                       capture_output=True, text=True, timeout=30,
-                       env={**os.environ, "AGORA_HOME": HOME})
-    except Exception:
-        pass
-
 def call(name, a):
     if name == "agora_post":
         if not ACTOR and a.get("event") != "proposal": return None, need_actor()
@@ -132,7 +128,7 @@ def call(name, a):
         return run_script("post.sh", args)
     if name == "agora_check_mail":
         if not ACTOR: return {"unread": [], "count": 0, "note": "未注册身份无收件箱"}, None
-        soft_sync()
+        lib.soft_sync(SCRIPTS, HOME)
         box = f"{HOME}/inbox/{ACTOR.split('@')[0]}"
         items = []
         for f in sorted(glob.glob(f"{box}/*.md")):
@@ -153,8 +149,13 @@ def call(name, a):
         return {"unread": items, "count": len(items),
                 "watermark": items[-1]["ref"] if items else a.get("since")}, None
     if name == "agora_board":
-        soft_sync()
-        views = ["todo","waiting","in-progress","blocked"] if a.get("view","all")=="all" else [a["view"]]
+        lib.soft_sync(SCRIPTS, HOME)
+        if a.get("view", "all") == "all":
+            views = ["todo", "waiting", "in-progress", "blocked"]
+            # conflicts/cancelled 条件落盘视图：文件在才聚合（agent 侧可见性补全）
+            views += [v for v in ("conflicts", "cancelled") if os.path.exists(f"{HOME}/board/{v}.md")]
+        else:
+            views = [a["view"]]
         owner = a.get("owner")
         if owner == "me":
             if not ACTOR: return None, need_actor(write=False)
@@ -201,17 +202,16 @@ def call(name, a):
         if a.get("parent"): env["PARENT"] = a["parent"]
         return run_script("task-create.sh", [], extra_env=env)
     if name == "agora_history":
-        soft_sync()
+        lib.soft_sync(SCRIPTS, HOME)
         return run_script("history.sh", [], extra_env={"TASK": a["task"]})
     if name == "agora_sync":
         return run_script("sync.sh", ["pre"])
     if name == "agora_who":
-        soft_sync()
+        lib.soft_sync(SCRIPTS, HOME)
         roster = []
         for f in sorted(glob.glob(f"{HOME}/wiki/entities/*.md")):
             txt = open(f, encoding="utf-8").read()
-            m = re.search(r'^dirs:\s*\n((?:\s+-\s+.+\n)+)', txt, re.M)
-            dirs = re.findall(r'-\s+(\S+)', m.group(1)) if m else []
+            dirs = lib.entity_dirs(txt)
             rm = re.search(r'^role:\s*(\S+)', txt, re.M)
             here = False
             for d in dirs:
@@ -262,7 +262,7 @@ for line in sys.stdin:
     if method == "initialize":
         reply(mid, {"protocolVersion": req.get("params",{}).get("protocolVersion","2025-03-26"),
                     "capabilities": {"tools": {}},
-                    "serverInfo": {"name": "agora-mcp", "version": "agora-mcp v1.25"},
+                    "serverInfo": {"name": "agora-mcp", "version": VERSION},
                     "instructions": INSTRUCTIONS})
     elif method == "notifications/initialized" or method == "ping":
         if mid is not None: reply(mid, {})

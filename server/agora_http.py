@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""agora-http —— 广场只读 HTTP 窗口 + 内置 Web 浏览页（agora-mcp v1.8）
+"""agora-http —— 广场只读 HTTP 窗口 + 内置 Web 浏览页（版本见仓库根 VERSION）
 
 零依赖（stdlib http.server）。只读闭合：只提供 GET，写入仍唯一走 MCP/scripts（宣言铁律）。
 安全模型：默认绑 127.0.0.1，本机即信任边界；设 AGORA_HTTP_HOST=0.0.0.0 暴露到局域网
@@ -10,7 +10,10 @@
 随机端口发现：启动后实际端口写入 $AGORA_HOME/.git/httpd.json（仓库本地，不进 git），
 agent 可经 MCP 工具 agora_who 的 http 字段查询（含死进程活体验证）。
 """
-import os, re, glob, json, subprocess, atexit, time, signal
+import os, re, glob, json, atexit, time, signal, sys
+_PKG = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(_PKG, "scripts"))
+import agora_lib as lib   # 账本/实体页共享解析（与机械层同源）
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
@@ -20,26 +23,7 @@ HOST = os.environ.get("AGORA_HTTP_HOST", "127.0.0.1")
 PORT = int(os.environ.get("AGORA_HTTP_PORT", "0"))
 RUNTIME_FILE = os.path.join(HOME, ".git", "httpd.json")
 
-LINE_RE = re.compile(r'^- seq:(\d+) \| ts:(\S+) \| actor:(\S+) \| event:(\w+) \| idem:(\S+) \| seen:(\S+)(.*)$')
-KV_RE = re.compile(r'(\w+):((?:[^|]|\|(?!\s*\w+:))*?)(?=\s*\|\s*\w+:|$)')
 
-def soft_sync():
-    """读前尽力同步（与 MCP 读路径同语义；离线/失败不影响读）。"""
-    try:
-        subprocess.run(["bash", os.path.join(SCRIPTS, "sync.sh"), "pre"],
-                       capture_output=True, timeout=10,
-                       env={**os.environ, "AGORA_HOME": HOME})
-    except Exception:
-        pass
-
-def rederive():
-    """看板是推导产物；服务前尽力重推一遍保证新鲜（幂等，失败用现有文件）。"""
-    try:
-        subprocess.run(["bash", os.path.join(SCRIPTS, "derive-board.sh")],
-                       capture_output=True, timeout=15,
-                       env={**os.environ, "AGORA_HOME": HOME})
-    except Exception:
-        pass
 
 def read(p):
     try: return open(p, encoding="utf-8").read()
@@ -47,42 +31,25 @@ def read(p):
 
 def all_events(task=None):
     out = []
-    for f in sorted(glob.glob(f"{HOME}/log/*/*.md")):
-        shard = os.path.relpath(f, HOME)
-        for i, line in enumerate(open(f, encoding="utf-8"), 1):
-            m = LINE_RE.match(line.strip())
-            if not m: continue
-            seq, ts, actor, event, idem, seen, rest = m.groups()
-            fields = {k: v.strip() for k, v in KV_RE.findall(rest) if v.strip()}
-            if task and fields.get("task") != task: continue
-            out.append({"ref": f"{shard}:{i}", "seq": int(seq), "ts": ts,
-                        "actor": actor, "event": event, "idem": idem, **fields})
+    for shard, i, e in lib.iter_events(HOME):
+        if task and e.get("task") != task: continue
+        e.pop("seen", None)  # 与既有 API 形状一致：不外泄 seen
+        e["ref"] = f"{shard}:{i}"
+        out.append(e)
     return out
 
-def parse_frontmatter(txt):
-    m = re.match(r'^---\n(.*?)\n---\n?', txt, re.S)
-    fm, body = {}, txt
-    if m:
-        body = txt[m.end():]
-        for line in m.group(1).splitlines():
-            km = re.match(r'^(\w+):\s*(.*)$', line)
-            if not km: continue
-            k, v = km.group(1), km.group(2).strip()
-            if v.startswith("[") and v.endswith("]"):
-                v = [x.strip() for x in v[1:-1].split(",") if x.strip()]
-            fm[k] = v
-    return fm, body.strip()
 
 def api(path, q):
-    soft_sync()
+    lib.soft_sync(SCRIPTS, HOME, timeout=10)
     if path == "/api/board":
-        rederive()
-        return {"views": {v: read(f"{HOME}/board/{v}.md")
-                          for v in ("todo", "waiting", "in-progress", "blocked")}}
+        lib.rederive(SCRIPTS, HOME)
+        vs = ["todo", "waiting", "in-progress", "blocked"]
+        vs += [v for v in ("conflicts", "cancelled") if os.path.exists(f"{HOME}/board/{v}.md")]
+        return {"views": {v: read(f"{HOME}/board/{v}.md") for v in vs}}
     if path == "/api/tasks":
         tasks = []
         for f in sorted(glob.glob(f"{HOME}/wiki/tasks/*.md")):
-            fm, _ = parse_frontmatter(read(f))
+            fm, _ = lib.parse_frontmatter(read(f))
             if fm.get("id"): tasks.append(fm)
         return {"tasks": tasks}
     if path == "/api/task":
@@ -101,8 +68,8 @@ def api(path, q):
         roster = []
         for f in sorted(glob.glob(f"{HOME}/wiki/entities/*.md")):
             txt = read(f)
-            fm, _ = parse_frontmatter(txt)
-            dirs = re.findall(r'^\s+-\s+(\S+)\s*$', txt, re.M)
+            fm, _ = lib.parse_frontmatter(txt)
+            dirs = lib.entity_dirs(txt)
             roster.append({"name": os.path.basename(f)[:-3],
                            "dirs": dirs,
                            "can_spawn": fm.get("can_spawn") == "true",
@@ -217,7 +184,7 @@ async function load(){
 }
 async function loadBoard(){
   const d=await api("/api/board");
-  const names={todo:"Todo（ready）","in-progress":"进行中",blocked:"受阻"};
+  const names={todo:"Todo（ready）","in-progress":"进行中",blocked:"受阻",conflicts:"冲突（claim_conflict）",cancelled:"已取消"};
   const count=v=>(v.match(/^- .+/gm)||[]).filter(l=>!l.includes("（空）")&&!l.startsWith("- **")).length;
   const stripH1=v=>v.replace(/^<!--[\s\S]*?-->\s*/,"").replace(/^# [^\n]*\n/,"");  // 卡片已有标题，去掉 md 自带 H1
   $("#view").innerHTML=Object.entries(d.views).map(([k,v])=>
