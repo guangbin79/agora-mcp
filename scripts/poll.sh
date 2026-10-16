@@ -37,8 +37,9 @@ flock -n 9 || { echo '{"poll":"skip","reason":"another poll running"}'; exit 0; 
 bash "$AGORA_HOME/scripts/sync.sh" pre >/dev/null 2>&1 || true
 bash "$AGORA_HOME/scripts/derive-board.sh" >/dev/null 2>&1 || true
 
-AGORA_HOME="$AGORA_HOME" python3 - <<'PYEOF'
+AGORA_HOME="$AGORA_HOME" PYTHONPATH="$(cd "$(dirname "$0")" && pwd)${PYTHONPATH:+:$PYTHONPATH}" python3 - <<'PYEOF'
 import os, re, glob, json, time, shutil, hashlib, subprocess, socket
+import agora_lib as lib
 from datetime import datetime
 
 HOME = os.environ["AGORA_HOME"]
@@ -196,9 +197,8 @@ for d in list(live_notified):
 # ---------- ③ mention 拾取（目录存在性 = 机器归属；水位 = 邮件文件名，定宽时间戳字典序可比） ----------
 def local_dirs(f):
     txt = open(f, encoding="utf-8").read()
-    dirs = [os.path.realpath(os.path.expanduser(d))
-            for d in re.findall(r'^\s+-\s+(\S+)\s*$', txt, re.M)]
-    return [d for d in dirs if os.path.isdir(d)]
+    return [d for d in (os.path.realpath(os.path.expanduser(x)) for x in lib.entity_dirs(txt))
+            if os.path.isdir(d)]
 
 for f in sorted(glob.glob(f"{HOME}/wiki/entities/*.md")):
     name = os.path.basename(f)[:-3]

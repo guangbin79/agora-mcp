@@ -29,23 +29,21 @@ PYEOF
 
 # 2. idem 完整性：同一 (actor, task) 子序列内"连续"重复 idem 才是重试残留异常；
 #    隔着其他事件的相同 idem 是合法状态迁移（如 reopen 后再次 claimed），不算异常
-IDEM_BAD=$(python3 - <<'PYEOF'
-import glob, re, os, collections
+IDEM_BAD=$(PYTHONPATH="$(cd "$(dirname "$0")" && pwd)${PYTHONPATH:+:$PYTHONPATH}" python3 - <<'PYEOF'
+import os, glob
+import agora_lib as lib
 HOME = os.environ["AGORA_HOME"]
-LINE_RE = re.compile(r'^- seq:\d+ \| ts:\S+ \| actor:(\S+) \| event:\w+ \| idem:(\S+) \| seen:\S+(.*)$')
-KV_RE = re.compile(r'(\w+):((?:[^|]|\|(?!\s*\w+:))*?)(?=\s*\|\s*\w+:|$)')
 bad = []
 for f in sorted(glob.glob(f"{HOME}/log/*/*.md")):
-    last = {}  # (actor, task) -> (idem, lineno)
-    for i, line in enumerate(open(f, encoding="utf-8"), 1):
-        m = LINE_RE.match(line.strip())
-        if not m: continue
-        actor, idem, rest = m.groups()
-        task = dict(KV_RE.findall(rest)).get("task", "")
-        key = (actor, task)
-        if last.get(key, (None,))[0] == idem:
-            bad.append(f"{f}:{i} idem:{idem}")
-        last[key] = (idem, i)
+    last = {}  # (actor, task) -> 上一条 idem
+    with open(f, encoding="utf-8") as fh:
+        for i, line in enumerate(fh, 1):
+            e = lib.parse_event(line)
+            if not e: continue
+            key = (e["actor"], e.get("task", ""))
+            if last.get(key) == e["idem"]:
+                bad.append(f"{f}:{i} idem:{e['idem']}")
+            last[key] = e["idem"]
 print("\n".join(bad))
 PYEOF
 )
@@ -54,7 +52,10 @@ PYEOF
 # 3. board 对账：重推导与现有 board 一致性
 TMP=$(mktemp -d)
 cp -r "$AGORA_HOME/board" "$TMP/board.orig"
-AGORA_HOME="$AGORA_HOME" bash "$AGORA_HOME/scripts/derive-board.sh" >/dev/null 2>&1
+{
+  flock -w "${AGORA_LOCK_WAIT:-5}" 9 || true   # 重推导与 post.sh 同锁串行；拿不到锁仍继续（只报告）
+  AGORA_HOME="$AGORA_HOME" bash "$AGORA_HOME/scripts/derive-board.sh" >/dev/null 2>&1
+} 9>"$AGORA_HOME/.git/post.lock"
 if diff -rq "$TMP/board.orig" "$AGORA_HOME/board" >/dev/null 2>&1; then
   ok "board 对账"
 else
@@ -134,13 +135,14 @@ fi
 
 # 7. 证据引用推送对账（attach 的物证在项目仓库 refs/agora/evidence/*；只存本地 = 他机不可见）
 #    warn 级：不影响 ALL GREEN；离线/无远端静默跳过
-EV_BAD=$(python3 - <<'PYEOF'
+EV_BAD=$(PYTHONPATH="$(cd "$(dirname "$0")" && pwd)${PYTHONPATH:+:$PYTHONPATH}" python3 - <<'PYEOF'
 import glob, os, re, subprocess
+import agora_lib as lib
 HOME = os.environ["AGORA_HOME"]
 dirs = set()
 for f in glob.glob(f"{HOME}/wiki/entities/*.md") + glob.glob(f"{HOME}/wiki/projects/*.md"):
     txt = open(f, encoding="utf-8").read()
-    for d in re.findall(r'^\s+-\s+(/\S+)\s*$', txt, re.M) + re.findall(r'^path:\s*(\S+)\s*$', txt, re.M):
+    for d in lib.entity_dirs(txt) + re.findall(r'^path:\s*(\S+)\s*$', txt, re.M):
         d = os.path.realpath(os.path.expanduser(d))
         if os.path.isdir(os.path.join(d, ".git")): dirs.add(d)
 out = []

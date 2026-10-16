@@ -32,15 +32,14 @@ LIVE=$(find "$AGORA_HOME/raw/dispatches" -name '*.live' 2>/dev/null | wc -l)
 [[ $LIVE -ge $MAX_SPAWN ]] && fail QUOTA_EXCEEDED "live dispatches $LIVE >= max $MAX_SPAWN" 8
 
 # 子会话身份：名册目录前缀匹配（最深优先）
-CHILD=$(python3 - "$AGORA_HOME" "$PDIR" <<'PYEOF'
-import sys, glob, os, re
+CHILD=$(PYTHONPATH="$(cd "$(dirname "$0")" && pwd)${PYTHONPATH:+:$PYTHONPATH}" python3 - "$AGORA_HOME" "$PDIR" <<'PYEOF'
+import sys, glob, os
+import agora_lib as lib
 home, target = sys.argv[1], os.path.realpath(sys.argv[2])
 best = None
 for f in glob.glob(f"{home}/wiki/entities/*.md"):
     txt = open(f, encoding="utf-8").read()
-    m = re.search(r'^dirs:\s*\n((?:\s+-\s+.+\n)+)', txt, re.M)
-    if not m: continue
-    for d in re.findall(r'-\s+(\S+)', m.group(1)):
+    for d in lib.entity_dirs(txt):
         d = os.path.expanduser(d)
         if (target + "/").startswith(os.path.realpath(d) + "/") or target == os.path.realpath(d):
             if best is None or len(d) > len(best[1]): best = (os.path.basename(f)[:-3], d)
