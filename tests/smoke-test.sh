@@ -836,6 +836,7 @@ bash "$AGORA_HOME/scripts/post.sh" --actor probe@p27 --project p27 --event propo
   && ok "fail stderr 为合法 JSON（引号转义）" || fail "fail stderr 为合法 JSON（rc=$RC27）"
 # --- dispatcher 双侧防线：写入侧拒坏名；预置毒页后 done 读取侧兜底拒 ---
 OUT=$(TITLE="派发逃逸任务" VERIFY="true" PROJECT_DIR="$PROJ" TC); DT=$(echo "$OUT" | sed -n 's/.*"task":"\(gt-[0-9a-f]*\)".*/\1/p')
+[[ "$DT" =~ ^gt-[0-9a-f]+$ ]] && ok "派发逃逸任务就绪（DT=$DT）" || fail "派发逃逸任务就绪（$OUT）"
 bash "$AGORA_HOME/scripts/post.sh" --actor '../x@proj' --project proj --event dispatched --task "$DT" --target "$PROJ" 2>/dev/null
 [[ $? -eq 2 ]] && ! grep -q '^dispatcher:' "$AGORA_HOME/wiki/tasks/$DT.md" \
   && ok "坏名 dispatcher 写入侧被拒(rc=2)" || fail "坏名 dispatcher 写入侧被拒"
@@ -844,7 +845,8 @@ bash "$AGORA_HOME/scripts/post.sh" --actor tester@proj --project proj --event do
 [[ $? -eq 2 ]] && [[ ! -e "$AGORA_HOME/evil9" ]] \
   && ok "毒 dispatcher 读取侧兜底拒（无逃逸）" || fail "毒 dispatcher 读取侧兜底"
 # --- SEQ 双侧定界：跨 actor body 注入不再虚高 ---
-bash "$AGORA_HOME/scripts/post.sh" --actor spoof9@q --project p27b --event proposal --body "embed actor:t9@p tail" >/dev/null
+OUT=$(bash "$AGORA_HOME/scripts/post.sh" --actor spoof9@q --project p27b --event proposal --body "embed actor:t9@p tail")
+echo "$OUT" | grep -q '"seq":1,' && ok "投毒事件落账就绪" || fail "投毒事件落账就绪（$OUT）"
 OUT=$(bash "$AGORA_HOME/scripts/post.sh" --actor t9@p --project p27b --event proposal --body first)
 echo "$OUT" | grep -q '"seq":1,' \
   && ok "SEQ 双侧定界（跨 actor body 注入不虚高）" || fail "SEQ 双侧定界（$OUT）"
@@ -870,7 +872,7 @@ PYEOF
 HPORT3=18473
 AGORA_HOME="$AGORA_HOME" AGORA_HTTP_PORT=$HPORT3 python3 "$PKG/server/agora_http.py" >/dev/null 2>&1 &
 HPID5=$!
-sleep 1
+for i in 1 2 3 4 5 6 7 8 9 10; do bash -c "exec 3<>/dev/tcp/127.0.0.1/$HPORT3" 2>/dev/null && break; sleep 0.3; done
 python3 - "$HPORT3" <<'PYEOF' && ok "HTTP /api/inbox 拒 name=..（400）" || fail "HTTP /api/inbox 拒 name=.."
 import sys, urllib.request, urllib.error
 try:
