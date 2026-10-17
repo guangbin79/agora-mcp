@@ -2,7 +2,7 @@
 # doctor.sh —— 自检与恢复（宣言 §6：任何故障 MUST 有文档化恢复路径）
 # 用法: doctor.sh [--fix]；退出码 0=全绿 1=有 fail
 set -euo pipefail
-AGORA_HOME="${AGORA_HOME:-$HOME/agora}"
+AGORA_HOME="${AGORA_HOME:-$HOME/agora}"; export AGORA_HOME   # heredoc python 经 os.environ 读取——裸调用不再 KeyError（与 wiki-write r1 修法同类）
 FIX="${1:-}"
 FAIL=0
 
