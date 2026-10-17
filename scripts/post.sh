@@ -24,7 +24,7 @@ while [[ $# -gt 0 ]]; do
   esac; shift 2
 done
 
-fail() { local _m="${2//\\/\\\\}"; _m="${_m//\"/\\\"}"; echo "{\"code\":\"$1\",\"message\":\"$_m\"}" >&2; exit "${3:-2}"; }   # 值内引号/反斜杠转义：stderr 恒为合法 JSON
+fail() { local _m="${2//\\/\\\\}"; _m="${_m//\"/\\\"}"; _m="${_m//$'\n'/ }"; _m="${_m//$'\t'/ }"; echo "{\"code\":\"$1\",\"message\":\"$_m\"}" >&2; exit "${3:-2}"; }   # 值内引号/反斜杠转义+控制字符清洗：stderr 恒为合法 JSON
 
 # ---------- 文法校验（宣言 §5.2） ----------
 case "$EVENT" in
@@ -55,6 +55,10 @@ fi
 # 字段值禁止 | 与换行（ABNF: value 不含 "|" 与 LF）——MENTION/ACTOR/PROJECT 同环（账本行完整性）
 for v in "$TASK" "$COMMIT" "$EVIDENCE" "$CONCLUSION" "$REASON" "$BODY" "$TARGET" "$CHILD" "$RUN" "$MENTION" "$ACTOR" "$PROJECT"; do
   [[ "$v" == *"|"* || "$v" == *$'\n'* ]] && fail VALIDATION_FAILED "field value contains | or newline"
+done
+# ACTOR/PROJECT 占 LINE_RE 的 \S+ 槽：任何空白（空格/制表等）都会撕裂行解析
+for v in "$ACTOR" "$PROJECT"; do
+  [[ "$v" == *[[:space:]]* ]] && fail VALIDATION_FAILED "actor/project must not contain whitespace"
 done
 
 # ---------- 验证门（宣言 §6：done 由机械层执行 verify 背书） ----------
@@ -115,7 +119,7 @@ if [[ "$EVENT" == done && -n "$TASK" ]]; then
   DISP=$(grep -m1 '^dispatcher:' "$AGORA_HOME/wiki/tasks/$TASK.md" | sed 's/^dispatcher:[[:space:]]*//' || true)
   if [[ -n "$DISP" && "$DISP" != "${ACTOR%%@*}" && "$MENTION" != *"$DISP"* ]]; then
     # 读取侧兜底：dispatcher 来自任务页（历史脏数据/手改可达），追加前按 mention 同口径校验
-    [[ -z "$DISP" || "$DISP" == *"|"* || "$DISP" == *$'\n'* || "$DISP" == *"/"* || "$DISP" == *".."* ]] \
+    [[ -z "$DISP" || "$DISP" == *"|"* || "$DISP" == *$'\n'* || "$DISP" == *"/"* || "$DISP" == *".."* || "$DISP" == *,* ]] \
       && fail VALIDATION_FAILED "bad dispatcher on task page: $DISP（实体名不得含 | / .. 或换行）"
     MENTION="${MENTION:+$MENTION,}$DISP"
   fi
@@ -147,7 +151,7 @@ if [[ "$EVENT" == dispatched && -n "$TASK" ]]; then
   TP="$AGORA_HOME/wiki/tasks/$TASK.md"
   # 写入侧防线：dispatcher 名来自 --actor 名部，坏名在污染任务页前拒绝
   _DN="${ACTOR%%@*}"
-  [[ -z "$_DN" || "$_DN" == *"|"* || "$_DN" == *$'\n'* || "$_DN" == *"/"* || "$_DN" == *".."* ]] \
+  [[ -z "$_DN" || "$_DN" == *"|"* || "$_DN" == *$'\n'* || "$_DN" == *"/"* || "$_DN" == *".."* || "$_DN" == *,* || "$_DN" == *"\\"* ]] \
     && fail VALIDATION_FAILED "bad dispatcher name from actor: $_DN（实体名不得含 | / .. 或换行）"
   grep -q '^dispatcher:' "$TP" || { [[ $(head -1 "$TP") == "---" ]] && sed -i "1a dispatcher: $_DN" "$TP"; } || true
 fi

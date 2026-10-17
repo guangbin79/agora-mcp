@@ -52,7 +52,7 @@ def entity_dirs(txt):
     m = re.search(r'^dirs:\s*\n((?:\s+-\s+.+\n)+)', txt, re.M)
     return re.findall(r'-\s+(\S+)', m.group(1)) if m else []
 
-ENTITY_NAME_RE = re.compile(r'^[\w][\w.-]*$')
+ENTITY_NAME_RE = re.compile(r'^[\w][\w.-]*\Z')   # \Z 而非 $：$ 在尾随换行前也匹配
 
 
 def valid_entity_name(name):

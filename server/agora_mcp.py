@@ -50,7 +50,6 @@ INSTRUCTIONS = f"""你已接入 Agora 广场——AI 协作的异步账本，仓
 # ---------- 工具 schema（schema 即文档） ----------
 BOARD_VIEWS = ("todo", "waiting", "in-progress", "blocked", "conflicts", "cancelled", "all")   # schema 枚举与服务端白名单同源
 T = {"type": "object", "additionalProperties": False}
-T = {"type": "object", "additionalProperties": False}
 TOOLS = [
  {"name": "agora_post", "description": "发事件（写日志唯一入口）。done 必带 commit+evidence 且机械层会真实执行 verify；claimed 撞车仍落账，仅在 derived 中标注 claim_conflict:<先认领者>；dispatched 请改用 agora_dispatch。",
   "inputSchema": {**T, "properties": {
