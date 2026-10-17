@@ -38,6 +38,7 @@ import agora_lib as lib
 home, target = sys.argv[1], os.path.realpath(sys.argv[2])
 best = None
 for f in glob.glob(f"{home}/wiki/entities/*.md"):
+    if not lib.valid_entity_name(os.path.basename(f)[:-3]): continue   # 畸形实体名不参与子身份解析
     txt = open(f, encoding="utf-8").read()
     for d in lib.entity_dirs(txt):
         d = os.path.expanduser(d)
