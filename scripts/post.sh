@@ -52,14 +52,23 @@ if [[ -n "$MENTION" ]]; then
       && fail VALIDATION_FAILED "bad mention: $_m（实体名不得含 / 或 ..）"
   done
 fi
-# 字段值禁止 | 与换行（ABNF: value 不含 "|" 与 LF）——MENTION/ACTOR/PROJECT 同环（账本行完整性）
-for v in "$TASK" "$COMMIT" "$EVIDENCE" "$CONCLUSION" "$REASON" "$BODY" "$TARGET" "$CHILD" "$RUN" "$MENTION" "$ACTOR" "$PROJECT"; do
+# 字段值禁止 | 与换行（ABNF: value 不含 "|" 与 LF）——MENTION/ACTOR/PROJECT/IDEM 同环（账本行完整性；idem 换行=整行伪造原语）
+for v in "$TASK" "$COMMIT" "$EVIDENCE" "$CONCLUSION" "$REASON" "$BODY" "$TARGET" "$CHILD" "$RUN" "$MENTION" "$ACTOR" "$PROJECT" "$IDEM"; do
   [[ "$v" == *"|"* || "$v" == *$'\n'* ]] && fail VALIDATION_FAILED "field value contains | or newline"
 done
+# IDEM 亦占 \S+ 槽（idem:）：空白撕裂行解析
 # ACTOR/PROJECT 占 LINE_RE 的 \S+ 槽：任何空白（空格/制表等）都会撕裂行解析
-for v in "$ACTOR" "$PROJECT"; do
-  [[ "$v" == *[[:space:]]* ]] && fail VALIDATION_FAILED "actor/project must not contain whitespace"
+for v in "$ACTOR" "$PROJECT" "$IDEM"; do
+  [[ "$v" == *[[:space:]]* ]] && fail VALIDATION_FAILED "actor/project/idem must not contain whitespace"
 done
+# PROJECT 兼作 shard 文件名（log/<date>/<PROJECT>.md）：拒绝路径成分，防越界写 .md 绕过 wiki-write owner 校验
+[[ "$PROJECT" == *"/"* || "$PROJECT" == *".."* ]] && fail VALIDATION_FAILED "project must not contain / or .."
+# dispatched 写入侧防线（前移至预锁校验段——fail=零写入契约）：dispatcher 名来自 --actor 名部，坏名在任何写入前拒绝
+if [[ "$EVENT" == dispatched ]]; then
+  _DN="${ACTOR%%@*}"
+  [[ -z "$_DN" || "$_DN" == *"|"* || "$_DN" == *$'\n'* || "$_DN" == *"/"* || "$_DN" == *".."* || "$_DN" == *,* || "$_DN" == *"\\"* ]] \
+    && fail VALIDATION_FAILED "bad dispatcher name from actor: $_DN（实体名不得含 | / .. , \\ 或换行）"
+fi
 
 # ---------- 验证门（宣言 §6：done 由机械层执行 verify 背书） ----------
 DERIVED=()
@@ -149,10 +158,7 @@ fi
 
 if [[ "$EVENT" == dispatched && -n "$TASK" ]]; then
   TP="$AGORA_HOME/wiki/tasks/$TASK.md"
-  # 写入侧防线：dispatcher 名来自 --actor 名部，坏名在污染任务页前拒绝
-  _DN="${ACTOR%%@*}"
-  [[ -z "$_DN" || "$_DN" == *"|"* || "$_DN" == *$'\n'* || "$_DN" == *"/"* || "$_DN" == *".."* || "$_DN" == *,* || "$_DN" == *"\\"* ]] \
-    && fail VALIDATION_FAILED "bad dispatcher name from actor: $_DN（实体名不得含 | / .. 或换行）"
+  # 守卫已前移至预锁校验段（fail=零写入契约）；此处仅落 dispatcher 标注
   grep -q '^dispatcher:' "$TP" || { [[ $(head -1 "$TP") == "---" ]] && sed -i "1a dispatcher: $_DN" "$TP"; } || true
 fi
 

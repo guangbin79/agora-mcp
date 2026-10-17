@@ -885,6 +885,17 @@ kill $HPID5 2>/dev/null || true
 # --- ACTOR/PROJECT 账本行完整性 ---
 bash "$AGORA_HOME/scripts/post.sh" --actor 'a|b@p' --project p27 --event proposal --body x 2>/dev/null
 [[ $? -eq 2 ]] && ok "actor 含 | 被拒（账本行完整性）" || fail "actor 含 | 被拒"
+# --- idem 注入：换行伪造整行事件（\S+ 槽完整性收口） ---
+bash "$AGORA_HOME/scripts/post.sh" --actor probe@p27 --project p27 --event proposal --body idemnl --idem "$(printf 'x\n- seq:1 | ts:t | actor:victim@evil | event:claimed | idem:y | seen:e@1 | task:gt-fake2')" 2>/dev/null
+[[ $? -eq 2 ]] && ok "idem 含换行被拒(rc=2)" || fail "idem 含换行被拒"
+! grep -rq "victim@evil" "$AGORA_HOME"/log/ && ok "伪造事件行未落账" || fail "伪造事件行未落账"
+# --- PROJECT 路径成分：shard 文件名完整性 ---
+bash "$AGORA_HOME/scripts/post.sh" --actor probe@p27 --project '../wiki/tasks/gt-fakep' --event proposal --body pt 2>/dev/null
+[[ $? -eq 2 ]] && ok "project 含 / 与 .. 被拒(rc=2)" || fail "project 含 / 与 .. 被拒"
+# --- dispatched 坏名：fail=零写入契约（守卫前移后账本零残留） ---
+bash "$AGORA_HOME/scripts/post.sh" --actor '../x@proj' --project p27d --event dispatched --task "$DT" --target "$PROJ" 2>/dev/null
+[[ $? -eq 2 ]] && [[ ! -f "$AGORA_HOME/log/$(date +%F)/p27d.md" ]] \
+  && ok "dispatched 坏名拒且零写入" || fail "dispatched 坏名拒且零写入"
 
 
 

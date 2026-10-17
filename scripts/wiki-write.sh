@@ -8,7 +8,7 @@ while [[ $# -gt 0 ]]; do case "$1" in
   --actor) ACTOR="$2";; --path) P="$2";; --mode) MODE="$2";;
   *) echo '{"code":"VALIDATION_FAILED","message":"unknown arg"}' >&2; exit 2;;
 esac; shift 2; done
-fail() { local _m="${2//\\/\\\\}"; _m="${_m//\"/\\\"}"; _m="${_m//$'\n'/ }"; echo "{\"code\":\"$1\",\"message\":\"$_m\"}" >&2; exit "${3:-2}"; }   # 值内引号/反斜杠转义：stderr 恒为合法 JSON
+fail() { local _m="${2//\\/\\\\}"; _m="${_m//\"/\\\"}"; _m="${_m//$'\n'/ }"; _m="${_m//$'\t'/ }"; echo "{\"code\":\"$1\",\"message\":\"$_m\"}" >&2; exit "${3:-2}"; }   # 值内引号/反斜杠转义：stderr 恒为合法 JSON
 
 NAME="${ACTOR%%@*}"
 [[ "$P" == *..* || "$P" == /* ]] && fail VALIDATION_FAILED "path escapes wiki/"
