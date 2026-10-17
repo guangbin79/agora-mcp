@@ -11,7 +11,7 @@ while [[ $# -gt 0 ]]; do case "$1" in
   --actor) ACTOR="$2";; --project) PDIR="$2";; --task) TASK="$2";; --prompt) PROMPT="$2";;
   *) echo '{"code":"VALIDATION_FAILED","message":"unknown arg"}' >&2; exit 2;;
 esac; shift 2; done
-fail() { echo "{\"code\":\"$1\",\"message\":\"$2\"}" >&2; exit "${3:-2}"; }
+fail() { python3 -c 'import json,sys; print(json.dumps({"code":sys.argv[1],"message":sys.argv[2]}, ensure_ascii=False), file=sys.stderr)' "$1" "$2"; exit "${3:-2}"; }   # $POUT 等嵌值含引号亦合法（评审 MINOR：错误通道 JSON）
 
 NAME="${ACTOR%%@*}"
 ENTITY="$AGORA_HOME/wiki/entities/$NAME.md"

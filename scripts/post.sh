@@ -10,6 +10,7 @@ LOCK_WAIT="${AGORA_LOCK_WAIT:-5}"
 # 机械层确定性：跨分片检索/glob 序不受宿主 locale 影响（collation 硬化，T1 存量发现）
 # 注意：verify 门与全部子进程（sync/derive/用户 verify 命令）均在 C locale 下执行——collation 敏感的 verify 写法需自证
 export LC_ALL=C
+fail() { python3 -c 'import json,sys; print(json.dumps({"code":sys.argv[1],"message":sys.argv[2]}, ensure_ascii=False), file=sys.stderr)' "$1" "$2"; exit "${3:-2}"; }   # 值经 json.dumps 全量转义：stderr 恒为合法 JSON（含任意控制字符），无手写转义可漂移
 # ---------- 参数解析 ----------
 ACTOR=""; PROJECT=""; EVENT=""; TASK=""; COMMIT=""; EVIDENCE=""
 CONCLUSION=""; REASON=""; BODY=""; MENTION=""; IDEM=""; TARGET=""; CHILD=""; RUN=""
@@ -20,11 +21,10 @@ while [[ $# -gt 0 ]]; do
     --conclusion) CONCLUSION="$2";; --reason) REASON="$2";; --body) BODY="$2";;
     --mention) MENTION="$2";; --idem) IDEM="$2";; --target) TARGET="$2";;
     --child) CHILD="$2";; --run) RUN="$2";;
-    *) echo "{\"code\":\"VALIDATION_FAILED\",\"message\":\"unknown arg: $1\"}" >&2; exit 2;;
+    *) fail VALIDATION_FAILED "unknown arg: $1";;
   esac; shift 2
 done
 
-fail() { local _m="${2//\\/\\\\}"; _m="${_m//\"/\\\"}"; _m="${_m//$'\n'/ }"; _m="${_m//$'\t'/ }"; echo "{\"code\":\"$1\",\"message\":\"$_m\"}" >&2; exit "${3:-2}"; }   # 值内引号/反斜杠转义+控制字符清洗：stderr 恒为合法 JSON
 
 # ---------- 文法校验（宣言 §5.2） ----------
 case "$EVENT" in

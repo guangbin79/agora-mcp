@@ -13,7 +13,7 @@ set -u
 AGORA_HOME="${AGORA_HOME:-$HOME/agora}"
 PROJECT_DIR="${PROJECT_DIR:-$PWD}"
 
-fail() { echo "{\"error\":\"$1\",\"hint\":\"$2\"}" >&2; exit "${3:-2}"; }
+fail() { python3 -c 'import json,sys; print(json.dumps({"error":sys.argv[1],"hint":sys.argv[2]}, ensure_ascii=False), file=sys.stderr)' "$1" "$2"; exit "${3:-2}"; }   # 嵌值含引号亦合法（评审 MINOR：错误通道 JSON）
 [ -z "${ACTOR:-}" ]  && fail ACTOR_REQUIRED "attach 必须带身份（经 agora_attach 工具调用）"
 [ -z "${TASK:-}" ]   && fail TASK_REQUIRED ""
 [ -z "${FILES:-}" ]  && fail FILES_REQUIRED "至少一个文件"
