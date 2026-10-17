@@ -24,7 +24,7 @@ while [[ $# -gt 0 ]]; do
   esac; shift 2
 done
 
-fail() { echo "{\"code\":\"$1\",\"message\":\"$2\"}" >&2; exit "${3:-2}"; }
+fail() { local _m="${2//\\/\\\\}"; _m="${_m//\"/\\\"}"; echo "{\"code\":\"$1\",\"message\":\"$_m\"}" >&2; exit "${3:-2}"; }   # 值内引号/反斜杠转义：stderr 恒为合法 JSON
 
 # ---------- 文法校验（宣言 §5.2） ----------
 case "$EVENT" in
@@ -52,8 +52,8 @@ if [[ -n "$MENTION" ]]; then
       && fail VALIDATION_FAILED "bad mention: $_m（实体名不得含 / 或 ..）"
   done
 fi
-# 字段值禁止 | 与换行（ABNF: value 不含 "|" 与 LF）
-for v in "$TASK" "$COMMIT" "$EVIDENCE" "$CONCLUSION" "$REASON" "$BODY" "$TARGET" "$CHILD" "$RUN"; do
+# 字段值禁止 | 与换行（ABNF: value 不含 "|" 与 LF）——MENTION/ACTOR/PROJECT 同环（账本行完整性）
+for v in "$TASK" "$COMMIT" "$EVIDENCE" "$CONCLUSION" "$REASON" "$BODY" "$TARGET" "$CHILD" "$RUN" "$MENTION" "$ACTOR" "$PROJECT"; do
   [[ "$v" == *"|"* || "$v" == *$'\n'* ]] && fail VALIDATION_FAILED "field value contains | or newline"
 done
 
@@ -94,9 +94,9 @@ if [[ -z "$IDEM" ]]; then
   IDEM=$(printf '%s' "$IDEM_INPUT" | sha1sum | cut -c1-8)
 fi
 if [[ -n "$TASK" ]]; then
-  LAST_EV=$(grep -F "actor:$ACTOR " "$SHARD" 2>/dev/null | grep -E 'task:'"$TASK"'( \||$)' | tail -1 || true)
+  LAST_EV=$(grep -F " | actor:$ACTOR | " "$SHARD" 2>/dev/null | grep -E 'task:'"$TASK"'( \||$)' | tail -1 || true)
 else
-  LAST_EV=$(grep -F "actor:$ACTOR " "$SHARD" 2>/dev/null | tail -1 || true)
+  LAST_EV=$(grep -F " | actor:$ACTOR | " "$SHARD" 2>/dev/null | tail -1 || true)
 fi
 if [[ -n "$LAST_EV" ]] && echo "$LAST_EV" | grep -qF "idem:$IDEM"; then
   EXIST=$(echo "$LAST_EV" | sed -n 's/.*seq:\([0-9]*\).*/\1/p')
@@ -105,15 +105,20 @@ if [[ -n "$LAST_EV" ]] && echo "$LAST_EV" | grep -qF "idem:$IDEM"; then
 fi
 
 # per-actor seq 与 seen（seen = 分片当前事件数）
-# 尾随空格定界：actor:wd@a 不得把 actor:wd@ab 计入（前缀撞名防御，与上方 LAST_EV 同口径）
-SEQ=$(grep -cF "actor:$ACTOR " "$SHARD" 2>/dev/null || true); SEQ=$((SEQ+1))
+# 双侧 " | " 定界：防前缀撞名（wd@a vs wd@ab），也防 body/conclusion 引用 actor 令牌造成计数虚高断档
+SEQ=$(grep -cF " | actor:$ACTOR | " "$SHARD" 2>/dev/null || true); SEQ=$((SEQ+1))
 SEEN=$(grep -c '^- seq:' "$SHARD" 2>/dev/null || true)
 TS=$(date --iso-8601=seconds)
 
 # 派生回报链：dispatched 时把 dispatcher 写入任务页；done 时自动 @提及 dispatcher
 if [[ "$EVENT" == done && -n "$TASK" ]]; then
   DISP=$(grep -m1 '^dispatcher:' "$AGORA_HOME/wiki/tasks/$TASK.md" | sed 's/^dispatcher:[[:space:]]*//' || true)
-  [[ -n "$DISP" && "$DISP" != "${ACTOR%%@*}" && "$MENTION" != *"$DISP"* ]] && MENTION="${MENTION:+$MENTION,}$DISP"
+  if [[ -n "$DISP" && "$DISP" != "${ACTOR%%@*}" && "$MENTION" != *"$DISP"* ]]; then
+    # 读取侧兜底：dispatcher 来自任务页（历史脏数据/手改可达），追加前按 mention 同口径校验
+    [[ -z "$DISP" || "$DISP" == *"|"* || "$DISP" == *$'\n'* || "$DISP" == *"/"* || "$DISP" == *".."* ]] \
+      && fail VALIDATION_FAILED "bad dispatcher on task page: $DISP（实体名不得含 | / .. 或换行）"
+    MENTION="${MENTION:+$MENTION,}$DISP"
+  fi
 fi
 
 LINE="- seq:$SEQ | ts:$TS | actor:$ACTOR | event:$EVENT | idem:$IDEM | seen:$PROJECT@$SEEN"
@@ -140,7 +145,11 @@ fi
 
 if [[ "$EVENT" == dispatched && -n "$TASK" ]]; then
   TP="$AGORA_HOME/wiki/tasks/$TASK.md"
-  grep -q '^dispatcher:' "$TP" || { [[ $(head -1 "$TP") == "---" ]] && sed -i "1a dispatcher: ${ACTOR%%@*}" "$TP"; } || true
+  # 写入侧防线：dispatcher 名来自 --actor 名部，坏名在污染任务页前拒绝
+  _DN="${ACTOR%%@*}"
+  [[ -z "$_DN" || "$_DN" == *"|"* || "$_DN" == *$'\n'* || "$_DN" == *"/"* || "$_DN" == *".."* ]] \
+    && fail VALIDATION_FAILED "bad dispatcher name from actor: $_DN（实体名不得含 | / .. 或换行）"
+  grep -q '^dispatcher:' "$TP" || { [[ $(head -1 "$TP") == "---" ]] && sed -i "1a dispatcher: $_DN" "$TP"; } || true
 fi
 
 # @提及路由：inbox 指针（不复制内容）
