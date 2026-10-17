@@ -7,8 +7,9 @@ set -u
 AGORA_HOME="${AGORA_HOME:-$HOME/agora}"; export AGORA_HOME
 [ -z "${TASK:-}" ] && { echo '{"error":"TASK_REQUIRED"}' >&2; exit 2; }
 
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"   # cd 前捕获：scripts 目录内相对调用亦能定位 agora_lib
 cd "$AGORA_HOME"
-TASK="$TASK" PYTHONPATH="$(cd "$(dirname "$0")" && pwd)${PYTHONPATH:+:$PYTHONPATH}" python3 - <<'PYEOF'
+TASK="$TASK" PYTHONPATH="$SCRIPT_DIR${PYTHONPATH:+:$PYTHONPATH}" python3 - <<'PYEOF'
 import os, json
 import agora_lib as lib
 

@@ -11,15 +11,17 @@ warn() { echo "warn | $1"; }
 bad()  { echo "fail | $1 | 恢复: $2"; FAIL=1; }
 
 # 1. seq 对账：每 actor 在每分片内 seq 连续无重号
-SEQ_BAD=$(python3 - <<'PYEOF'
-import glob, re, collections, os
+SEQ_BAD=$(PYTHONPATH="$(cd "$(dirname "$0")" && pwd)${PYTHONPATH:+:$PYTHONPATH}" python3 - <<'PYEOF'
+import glob, os, collections
+import agora_lib as lib
 HOME = os.environ["AGORA_HOME"]
 bad = []
 for f in glob.glob(f"{HOME}/log/*/*.md"):
     seqs = collections.defaultdict(list)
-    for line in open(f, encoding="utf-8"):
-        m = re.match(r'^- seq:(\d+) \| .*?\| actor:(\S+?) \|', line)
-        if m: seqs[m.group(2)].append(int(m.group(1)))
+    with open(f, encoding="utf-8") as fh:
+        for line in fh:
+            e = lib.parse_event(line)
+            if e: seqs[e["actor"]].append(e["seq"])
     for actor, ss in seqs.items():
         if sorted(ss) != list(range(1, len(ss)+1)): bad.append(f"{f}:{actor}:{ss}")
 print("\n".join(bad))
@@ -49,21 +51,21 @@ PYEOF
 )
 [[ -z "$IDEM_BAD" ]] && ok "idem 完整性" || bad "连续重复 idem（重试残留）: $IDEM_BAD" "保留首条，人工删除后续行（doctor-runbook §idem）"
 
-# 3. board 对账：重推导与现有 board 一致性
+# 3. board 对账：cp/推导/diff 全程持 post.lock——对账窗口对写路径完全闭合
 TMP=$(mktemp -d)
-cp -r "$AGORA_HOME/board" "$TMP/board.orig"
+BOARD_STATE=ok
 {
-  flock -w "${AGORA_LOCK_WAIT:-5}" 9 || true   # 重推导与 post.sh 同锁串行；拿不到锁仍继续（只报告）
+  flock -w "${AGORA_LOCK_WAIT:-5}" 9 || true   # 拿不到锁仍继续（只报告）；锁内 cp→推导→diff 原子
+  cp -r "$AGORA_HOME/board" "$TMP/board.orig"
   AGORA_HOME="$AGORA_HOME" bash "$AGORA_HOME/scripts/derive-board.sh" >/dev/null 2>&1
-} 9>"$AGORA_HOME/.git/post.lock"
-if diff -rq "$TMP/board.orig" "$AGORA_HOME/board" >/dev/null 2>&1; then
-  ok "board 对账"
-else
-  if [[ "$FIX" == "--fix" ]]; then ok "board 对账（已重建修复）"; else
-    cp -r "$TMP/board.orig/." "$AGORA_HOME/board/"  # 还原，保持只报告
-    bad "board 与日志不一致" "doctor.sh --fix（重建 board）"
+  if ! diff -rq "$TMP/board.orig" "$AGORA_HOME/board" >/dev/null 2>&1; then
+    if [[ "$FIX" == "--fix" ]]; then BOARD_STATE=fixed
+    else cp -r "$TMP/board.orig/." "$AGORA_HOME/board/"; BOARD_STATE=bad; fi   # 还原，保持只报告
   fi
-fi
+    } 9>"$AGORA_HOME/.git/post.lock"
+    if [[ "$BOARD_STATE" == ok ]]; then ok "board 对账"
+  elif [[ "$BOARD_STATE" == fixed ]]; then ok "board 对账（已重建修复）"
+else bad "board 与日志不一致" "doctor.sh --fix（重建 board）"; fi
 rm -rf "$TMP"
 
 # 4. flock 活性（flock 的锁在 fd 上不在文件上：文件存在属正常，长期不可获取才是故障）
@@ -75,15 +77,17 @@ else ok "flock（尚未初始化）"; fi
 
 # 5. 派生会话 stalled 检测：活性以论坛事件（progress/done 等）计，不看 commit
 TIMEOUT="${AGORA_DISPATCH_TIMEOUT:-30}"
-STALLED=$(python3 - <<'PYEOF'
+STALLED=$(PYTHONPATH="$(cd "$(dirname "$0")" && pwd)${PYTHONPATH:+:$PYTHONPATH}" python3 - <<'PYEOF'
 import glob, os, re, time, datetime
+import agora_lib as lib
 HOME = os.environ["AGORA_HOME"]
 timeout = int(os.environ.get("AGORA_DISPATCH_TIMEOUT", "30"))
 last = {}
 for f in glob.glob(f"{HOME}/log/*/*.md"):
-    for line in open(f, encoding="utf-8"):
-        m = re.match(r'^- seq:\d+ \| ts:(\S+) \| actor:(\S+?) \|', line)
-        if m: last[m.group(2)] = max(last.get(m.group(2), ""), m.group(1))
+    with open(f, encoding="utf-8") as fh:
+        for line in fh:
+            e = lib.parse_event(line)
+            if e: last[e["actor"]] = max(last.get(e["actor"], ""), e["ts"])
 now = time.time()
 out = []
 for live in glob.glob(f"{HOME}/raw/dispatches/*.live"):

@@ -63,22 +63,22 @@ def run(script, args):
 
 def task_last_refs():
     """task -> (指纹, event, actor, wn)。wn = 该任务尾部连续看门狗诊断条数
-    （账本推导的升级阶梯计数，跨机一致，任何真实活动即归零）。"""
+    （账本推导的升级阶梯计数，跨机一致，任何真实活动即归零）。
+    事件解析走 agora_lib（行格式唯一真源）；畸形行跳过。"""
     refs = {}
     for f in sorted(glob.glob(f"{HOME}/log/*/*.md")):
         rel = os.path.relpath(f, HOME)
         with open(f, encoding="utf-8") as fh:
             for i, line in enumerate(fh, 1):
-                m = re.search(r'\| task:(gt-[0-9a-f]+)\b', line)
-                if not m: continue
-                ev = re.search(r'\| event:(\w+)', line)
-                ac = re.search(r'\| actor:(\S+)', line)
-                ev, ac = (ev.group(1) if ev else ""), (ac.group(1) if ac else "")
+                e = lib.parse_event(line)
+                if not e: continue
+                t = e.get("task") or ""
+                if not re.fullmatch(r"gt-[0-9a-f]+", t): continue
                 h = hashlib.sha1(line.encode()).hexdigest()[:16]
                 wn = 0
-                if ev in ("diagnosed", "escalated") and ac.startswith("watchdog@"):
-                    wn = (refs.get(m.group(1)) or (None, "", "", 0))[3] + 1
-                refs[m.group(1)] = (f"{rel}:{i}:{h}", ev, ac, wn)
+                if e["event"] in ("diagnosed", "escalated") and e["actor"].startswith("watchdog@"):
+                    wn = (refs.get(t) or (None, "", "", 0))[3] + 1
+                refs[t] = (f"{rel}:{i}:{h}", e["event"], e["actor"], wn)
     return refs
 
 report = {"poll": "ok", "host": HOST, "stalled": [], "suspicious": [], "escalated": [],
@@ -202,6 +202,7 @@ def local_dirs(f):
 
 for f in sorted(glob.glob(f"{HOME}/wiki/entities/*.md")):
     name = os.path.basename(f)[:-3]
+    if not lib.valid_entity_name(name): continue   # 畸形实体名不参与 mention 拾取
     dirs = local_dirs(f)
     if not dirs: continue  # 不是本机实体
     can_spawn = bool(re.search(r'^can_spawn:\s*true', open(f, encoding="utf-8").read(), re.M))
