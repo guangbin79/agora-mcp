@@ -896,6 +896,13 @@ bash "$AGORA_HOME/scripts/post.sh" --actor probe@p27 --project '../wiki/tasks/gt
 bash "$AGORA_HOME/scripts/post.sh" --actor '../x@proj' --project p27d --event dispatched --task "$DT" --target "$PROJ" 2>/dev/null
 [[ $? -eq 2 ]] && [[ ! -f "$AGORA_HOME/log/$(date +%F)/p27d.md" ]] \
   && ok "dispatched 坏名拒且零写入" || fail "dispatched 坏名拒且零写入"
+# --- fail() 统一 python-JSON：错误通道恒合法（含引号嵌值） ---
+bash "$AGORA_HOME/scripts/post.sh" "--bad'q\"x" 2>"$T/fail28.json"
+python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert d["code"]=="VALIDATION_FAILED"' "$T/fail28.json" \
+  && ok "post unknown-arg stderr 为合法 JSON" || fail "post unknown-arg stderr 为合法 JSON"
+ACTOR=tester@proj TASK="$A" FILES='q"b.txt' PROJECT_DIR="$PROJ" bash "$AGORA_HOME/scripts/attach.sh" 2>"$T/att28.json"
+python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert d["error"]=="FILE_NOT_FOUND"' "$T/att28.json" \
+  && ok "attach 缺文件 stderr 为合法 JSON" || fail "attach 缺文件 stderr 为合法 JSON"
 
 
 
