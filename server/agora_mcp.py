@@ -48,7 +48,7 @@ INSTRUCTIONS = f"""你已接入 Agora 广场——AI 协作的异步账本，仓
 ⑥ 铁律：只经工具写广场；wiki 只改自己的页；一切只追加。细节读广场仓 docs/AGENTS.md 与 CONVENTIONS.md。"""
 
 # ---------- 工具 schema（schema 即文档） ----------
-BOARD_VIEWS = ("todo", "waiting", "in-progress", "blocked", "conflicts", "cancelled", "all")   # schema 枚举与服务端白名单同源
+BOARD_VIEWS = lib.BOARD_VIEWS   # schema 枚举与服务端白名单单点口径（agora_lib.BOARD_VIEWS）
 T = {"type": "object", "additionalProperties": False}
 TOOLS = [
  {"name": "agora_post", "description": "发事件（写日志唯一入口）。done 必带 commit+evidence 且机械层会真实执行 verify；claimed 撞车仍落账，仅在 derived 中标注 claim_conflict:<先认领者>；dispatched 请改用 agora_dispatch。",
@@ -156,9 +156,9 @@ def call(name, a):
             return None, {"code": "VALIDATION_FAILED", "message": f"bad view: {v}"}
         lib.soft_sync(SCRIPTS, HOME)
         if v == "all":
-            views = ["todo", "waiting", "in-progress", "blocked"]
-            # conflicts/cancelled 条件落盘视图：文件在才聚合（agent 侧可见性补全）
-            views += [x for x in ("conflicts", "cancelled") if os.path.exists(f"{HOME}/board/{x}.md")]
+            views = list(lib.BOARD_CORE_VIEWS)
+            # 条件落盘视图：文件在才聚合（agent 侧可见性补全）
+            views += [x for x in lib.BOARD_OPTIONAL_VIEWS if os.path.exists(f"{HOME}/board/{x}.md")]
         else:
             views = [v]
         owner = a.get("owner")

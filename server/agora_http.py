@@ -43,8 +43,8 @@ def api(path, q):
     lib.soft_sync(SCRIPTS, HOME, timeout=10)
     if path == "/api/board":
         lib.rederive(SCRIPTS, HOME)
-        vs = ["todo", "waiting", "in-progress", "blocked"]
-        vs += [v for v in ("conflicts", "cancelled") if os.path.exists(f"{HOME}/board/{v}.md")]
+        vs = list(lib.BOARD_CORE_VIEWS)
+        vs += [v for v in lib.BOARD_OPTIONAL_VIEWS if os.path.exists(f"{HOME}/board/{v}.md")]
         return {"views": {v: read(f"{HOME}/board/{v}.md") for v in vs}}
     if path == "/api/tasks":
         tasks = []

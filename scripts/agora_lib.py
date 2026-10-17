@@ -13,6 +13,11 @@ import os, re, glob, subprocess
 LINE_RE = re.compile(r'^- seq:(\d+) \| ts:(\S+) \| actor:(\S+) \| event:(\w+) \| idem:(\S+) \| seen:(\S+)(.*)$')
 KV_RE = re.compile(r'(\w+):((?:[^|]|\|(?!\s*\w+:))*?)(?=\s*\|\s*\w+:|$)')
 
+# 看板视图契约（规格 §4.3）：全枚举/白名单、常驻列、条件列——双 server 单点口径
+BOARD_VIEWS = ("todo", "waiting", "in-progress", "blocked", "conflicts", "cancelled", "all")
+BOARD_CORE_VIEWS = ("todo", "waiting", "in-progress", "blocked")
+BOARD_OPTIONAL_VIEWS = ("conflicts", "cancelled")
+
 
 def kv(rest):
     """尾部 k:v 串 → dict（strip、去空值）。"""
