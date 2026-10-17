@@ -67,10 +67,12 @@ def api(path, q):
     if path == "/api/entities":
         roster = []
         for f in sorted(glob.glob(f"{HOME}/wiki/entities/*.md")):
+            name = os.path.basename(f)[:-3]
+            if not lib.valid_entity_name(name): continue   # 畸形实体名不入名册
             txt = read(f)
             fm, _ = lib.parse_frontmatter(txt)
             dirs = lib.entity_dirs(txt)
-            roster.append({"name": os.path.basename(f)[:-3],
+            roster.append({"name": name,
                            "dirs": dirs,
                            "can_spawn": fm.get("can_spawn") == "true",
                            "role": fm.get("role", "worker"),
@@ -78,7 +80,7 @@ def api(path, q):
         return {"roster": roster}
     if path == "/api/inbox":
         name = (q.get("name") or [""])[0]
-        if not re.match(r'^[\w.-]+$', name):
+        if not re.match(r'^[\w.-]+$', name) or name in (".", ".."):
             return None, ("INVALID_NAME", "需要 name=<实体名>")
         items = []
         for f in sorted(glob.glob(f"{HOME}/inbox/{name}/*.md")):

@@ -26,6 +26,7 @@ if not os.path.isdir(os.path.join(HOME, ".git")):
 def adjudicate():
     best = None
     for f in glob.glob(f"{HOME}/wiki/entities/*.md"):
+        if not lib.valid_entity_name(os.path.basename(f)[:-3]): continue   # 畸形实体名不参与裁决
         txt = open(f, encoding="utf-8").read()
         for d in lib.entity_dirs(txt):
             d = os.path.realpath(os.path.expanduser(d))
@@ -47,6 +48,8 @@ INSTRUCTIONS = f"""你已接入 Agora 广场——AI 协作的异步账本，仓
 ⑥ 铁律：只经工具写广场；wiki 只改自己的页；一切只追加。细节读广场仓 docs/AGENTS.md 与 CONVENTIONS.md。"""
 
 # ---------- 工具 schema（schema 即文档） ----------
+BOARD_VIEWS = ("todo", "waiting", "in-progress", "blocked", "conflicts", "cancelled", "all")   # schema 枚举与服务端白名单同源
+T = {"type": "object", "additionalProperties": False}
 T = {"type": "object", "additionalProperties": False}
 TOOLS = [
  {"name": "agora_post", "description": "发事件（写日志唯一入口）。done 必带 commit+evidence 且机械层会真实执行 verify；claimed 撞车仍落账，仅在 derived 中标注 claim_conflict:<先认领者>；dispatched 请改用 agora_dispatch。",
@@ -62,7 +65,7 @@ TOOLS = [
   "inputSchema": {**T, "properties": {"since": {"type": "string", "description": "水位指针，只返回其后新邮件"}}}},
  {"name": "agora_board", "description": "看板快照（含 parent 计划进度聚合 N/M 完成；读前自动与远端尽力同步）。owner 参数按认领者过滤任务行，owner=me 即服务端裁决的当前身份（个人任务队列）；view 可选列视图（如 waiting）。",
   "inputSchema": {**T, "properties": {
-    "view": {"type": "string", "enum": ["todo","waiting","in-progress","blocked","conflicts","cancelled","all"]},
+   "view": {"type": "string", "enum": list(BOARD_VIEWS)},
     "owner": {"type": "string", "description": "按认领者过滤（如 kai@proj）；me = 当前身份（服务端按 cwd 裁决）"},
     "project": {"type": "string"}}}},
  {"name": "agora_wiki_read", "description": "读 wiki 页（无 .md 后缀自动归一补全）。",
@@ -149,13 +152,16 @@ def call(name, a):
         return {"unread": items, "count": len(items),
                 "watermark": items[-1]["ref"] if items else a.get("since")}, None
     if name == "agora_board":
+        v = a.get("view", "all")
+        if v not in BOARD_VIEWS:   # 服务端白名单：防越枚举 view 的路径穿越读（任意 .md）
+            return None, {"code": "VALIDATION_FAILED", "message": f"bad view: {v}"}
         lib.soft_sync(SCRIPTS, HOME)
-        if a.get("view", "all") == "all":
+        if v == "all":
             views = ["todo", "waiting", "in-progress", "blocked"]
             # conflicts/cancelled 条件落盘视图：文件在才聚合（agent 侧可见性补全）
-            views += [v for v in ("conflicts", "cancelled") if os.path.exists(f"{HOME}/board/{v}.md")]
+            views += [x for x in ("conflicts", "cancelled") if os.path.exists(f"{HOME}/board/{x}.md")]
         else:
-            views = [a["view"]]
+            views = [v]
         owner = a.get("owner")
         if owner == "me":
             if not ACTOR: return None, need_actor(write=False)
@@ -210,6 +216,7 @@ def call(name, a):
         lib.soft_sync(SCRIPTS, HOME)
         roster = []
         for f in sorted(glob.glob(f"{HOME}/wiki/entities/*.md")):
+            if not lib.valid_entity_name(os.path.basename(f)[:-3]): continue   # 畸形实体名不入名册
             txt = open(f, encoding="utf-8").read()
             dirs = lib.entity_dirs(txt)
             rm = re.search(r'^role:\s*(\S+)', txt, re.M)
