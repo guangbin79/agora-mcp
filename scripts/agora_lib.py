@@ -52,6 +52,13 @@ def entity_dirs(txt):
     m = re.search(r'^dirs:\s*\n((?:\s+-\s+.+\n)+)', txt, re.M)
     return re.findall(r'-\s+(\S+)', m.group(1)) if m else []
 
+ENTITY_NAME_RE = re.compile(r'^[\w][\w.-]*$')
+
+
+def valid_entity_name(name):
+    """实体名 = wiki/entities/<name>.md 的 basename：防畸形名（尾随空格/特殊字符）撕裂账本行解析。"""
+    return bool(name) and bool(ENTITY_NAME_RE.match(name)) and ".." not in name
+
 
 def iter_events(home):
     """全部账本分片 → (shard 相对路径, 行号, 事件 dict)，按权威序逐条产出。"""

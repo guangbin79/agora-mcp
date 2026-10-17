@@ -13,6 +13,12 @@ fail() { echo "{\"code\":\"$1\",\"message\":\"$2\"}" >&2; exit "${3:-2}"; }
 NAME="${ACTOR%%@*}"
 [[ "$P" == *..* || "$P" == /* ]] && fail VALIDATION_FAILED "path escapes wiki/"
 FILE="$AGORA_HOME/wiki/$P"
+# 实体页创建侧防线：名字合法性（消费侧 adjudicate/who/dispatch/poll/http 同口径过滤）
+if [[ "$P" == entities/* && ! -f "$FILE" ]]; then
+  _EN="${P#entities/}"; _EN="${_EN%.md}"
+  python3 -c 'import os,sys; sys.path.insert(0, os.path.join(os.environ["AGORA_HOME"], "scripts")); import agora_lib as l; sys.exit(0 if l.valid_entity_name(sys.argv[1]) else 1)' "$_EN" \
+    || fail VALIDATION_FAILED "bad entity name: $_EN（仅字母/数字/下划线/点/连字符及 CJK，禁 .. 与空白）"
+fi
 CONTENT=$(cat)
 
 exec 9>"$AGORA_HOME/.git/post.lock"; flock -w "${AGORA_LOCK_WAIT:-5}" 9 || fail LOCK_TIMEOUT "flock timeout" 3
