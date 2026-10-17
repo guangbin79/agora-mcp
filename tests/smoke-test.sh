@@ -823,6 +823,68 @@ POST tester@proj --event reopened --task "$CT" --reason "恢复" >/dev/null
 [[ ! -f "$AGORA_HOME/board/cancelled.md" ]] \
   && ok "reopen 后 cancelled.md 陈旧文件清除" || fail "reopen 后 cancelled.md 未清除"
 
+echo "===== 审核回归二期（v1.27） ====="
+# --- mention 字段完整性：| 与换行入环被拒（防幻影字段/账本行撕裂） ---
+bash "$AGORA_HOME/scripts/post.sh" --actor probe@p27 --project p27 --event proposal --body pipe --mention 'a| task:gt-fake' 2>/dev/null
+[[ $? -eq 2 ]] && ok "mention 含 | 被拒(rc=2)" || fail "mention 含 | 被拒"
+! grep -rq "gt-fake" "$AGORA_HOME"/log/ && ok "幻影 task 字段未落账" || fail "幻影 task 字段未落账"
+bash "$AGORA_HOME/scripts/post.sh" --actor probe@p27 --project p27 --event proposal --body nl --mention "$(printf 'x\ny')" 2>/dev/null
+[[ $? -eq 2 ]] && ok "mention 含换行被拒(rc=2)" || fail "mention 含换行被拒"
+# --- fail stderr 恒为合法 JSON（值内引号已转义） ---
+bash "$AGORA_HOME/scripts/post.sh" --actor probe@p27 --project p27 --event proposal --body esc --mention '../q"b\x' 2>"$T/fail27.json"; RC27=$?
+[[ $RC27 -eq 2 ]] && python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert d["code"]=="VALIDATION_FAILED"' "$T/fail27.json" \
+  && ok "fail stderr 为合法 JSON（引号转义）" || fail "fail stderr 为合法 JSON（rc=$RC27）"
+# --- dispatcher 双侧防线：写入侧拒坏名；预置毒页后 done 读取侧兜底拒 ---
+OUT=$(TITLE="派发逃逸任务" VERIFY="true" PROJECT_DIR="$PROJ" TC); DT=$(echo "$OUT" | sed -n 's/.*"task":"\(gt-[0-9a-f]*\)".*/\1/p')
+bash "$AGORA_HOME/scripts/post.sh" --actor '../x@proj' --project proj --event dispatched --task "$DT" --target "$PROJ" 2>/dev/null
+[[ $? -eq 2 ]] && ! grep -q '^dispatcher:' "$AGORA_HOME/wiki/tasks/$DT.md" \
+  && ok "坏名 dispatcher 写入侧被拒(rc=2)" || fail "坏名 dispatcher 写入侧被拒"
+sed -i "1a dispatcher: ../evil9" "$AGORA_HOME/wiki/tasks/$DT.md"
+bash "$AGORA_HOME/scripts/post.sh" --actor tester@proj --project proj --event done --task "$DT" --commit HEAD --evidence 指针 2>/dev/null
+[[ $? -eq 2 ]] && [[ ! -e "$AGORA_HOME/evil9" ]] \
+  && ok "毒 dispatcher 读取侧兜底拒（无逃逸）" || fail "毒 dispatcher 读取侧兜底"
+# --- SEQ 双侧定界：跨 actor body 注入不再虚高 ---
+bash "$AGORA_HOME/scripts/post.sh" --actor spoof9@q --project p27b --event proposal --body "embed actor:t9@p tail" >/dev/null
+OUT=$(bash "$AGORA_HOME/scripts/post.sh" --actor t9@p --project p27b --event proposal --body first)
+echo "$OUT" | grep -q '"seq":1,' \
+  && ok "SEQ 双侧定界（跨 actor body 注入不虚高）" || fail "SEQ 双侧定界（$OUT）"
+# --- 相对路径调用：scripts 目录内 bash history.sh 不再 ModuleNotFoundError ---
+OUT=$(cd "$AGORA_HOME/scripts" && TASK=gt-none9 bash history.sh 2>&1)
+echo "$OUT" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["count"]==0, d' \
+  && ok "scripts 目录内相对调用 history.sh 出合法 JSON" || fail "相对调用 history.sh（$OUT）"
+# --- MCP view 服务端白名单：越枚举 view 被拒（防任意 .md 读） ---
+cd "$PROJ" && python3 - "$PKG/server/agora_mcp.py" <<'PYEOF' && ok "MCP view 白名单（越枚举拒）" || fail "MCP view 白名单"
+import json, subprocess, sys
+p = subprocess.Popen(["python3", sys.argv[1]], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+def rpc(m, ps=None, i=[0]):
+    i[0] += 1
+    p.stdin.write(json.dumps({"jsonrpc":"2.0","id":i[0],"method":m,"params":ps or {}})+"\n"); p.stdin.flush()
+    return json.loads(p.stdout.readline())
+rpc("initialize", {})
+r = rpc("tools/call", {"name":"agora_board","arguments":{"view":"../CONVENTIONS"}})
+d = json.loads(r["result"]["content"][0]["text"])
+assert r["result"].get("isError") and d.get("code")=="VALIDATION_FAILED", r
+p.stdin.close()
+PYEOF
+# --- HTTP /api/inbox 拒 name=..（400） ---
+HPORT3=18473
+AGORA_HOME="$AGORA_HOME" AGORA_HTTP_PORT=$HPORT3 python3 "$PKG/server/agora_http.py" >/dev/null 2>&1 &
+HPID5=$!
+sleep 1
+python3 - "$HPORT3" <<'PYEOF' && ok "HTTP /api/inbox 拒 name=..（400）" || fail "HTTP /api/inbox 拒 name=.."
+import sys, urllib.request, urllib.error
+try:
+    urllib.request.urlopen(f"http://127.0.0.1:{sys.argv[1]}/api/inbox?name=..", timeout=8)
+    raise SystemExit(1)
+except urllib.error.HTTPError as e:
+    assert e.code == 400, e.code
+PYEOF
+kill $HPID5 2>/dev/null || true
+# --- ACTOR/PROJECT 账本行完整性 ---
+bash "$AGORA_HOME/scripts/post.sh" --actor 'a|b@p' --project p27 --event proposal --body x 2>/dev/null
+[[ $? -eq 2 ]] && ok "actor 含 | 被拒（账本行完整性）" || fail "actor 含 | 被拒"
+
+
 
 echo "===== 跨仓委托协议播种 ====="
 # ① 隔离 AGORA_HOME 跑 init → wiki/topics/delegation.md 存在且含「与宿主准则的关系」
