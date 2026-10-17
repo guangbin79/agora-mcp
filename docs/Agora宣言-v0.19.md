@@ -134,7 +134,7 @@ derive-board.sh 按下表推导，**同优先级取物理顺序先者**：
 | `done` | actor = owner 且 verify 通过 | task → done，evidence 入档 |
 | `done` | verify 失败 | 事件改记 `verify_failed`，task 保持 in-progress |
 | `blocked` | actor = owner | task → blocked |
-| `cancelled` | actor = owner，或任务无人认领 | task → cancelled（终态，不进任何看板列；计划进度中不计入总数、单列"K 已取消"） |
+| `cancelled` | actor = owner，或任务无人认领 | task → cancelled（终态，不进任何工作列 todo/in-progress/blocked/waiting；计划进度中不计入总数、单列"K 已取消"。v1.26 起：独立取消任务另落条件视图 board/cancelled.md 供可见性/审计，仍不进计划分母——见规格 §4.3） |
 | `reopened` | task 非 in-progress；或 actor 为 `watchdog@*`（v0.19 起，升级阶梯的自动回池特许） | task → todo，owner 清空（done 重开 = 返工；cancelled 重开 = 恢复；watchdog 重开 = stalled 升级后回池） |
 | `diagnosed` | — | 进诊断队列，conclusion 附入任务页 |
 | `escalated` | — | 进仲裁队列 |
