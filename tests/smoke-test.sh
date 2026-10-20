@@ -1000,6 +1000,38 @@ assert d.get('dedup') is False, d
 
 rm -rf "$H4"
 
+echo "===== 身份裁决不冻结（2026-10-20 gt-9f24 事故回归） ====="
+# server 启动早于实体页覆盖：启动期 auto-register 因同名页 O_EXCL 撞名让位 → 匿名；
+# 旧代码冻结终身（共享 server 08:39 启动早于 10:14 实体页 → 派生会话写路径全拒）；
+# 修后每次工具调用重裁决 → 实体页后到补 dirs，同进程内身份立即生效
+LATE="$T/late"; mkdir -p "$LATE"
+printf -- '---\nname: late\ndirs:\n  - /nonexistent-late-xyz\ncan_spawn: false\n---\n' > "$AGORA_HOME/wiki/entities/late.md"
+cd "$AGORA_HOME" && git add -A >/dev/null && AGORA_MECHANICAL=1 git commit -qm "late entity" >/dev/null
+python3 - "$PKG/server/agora_mcp.py" "$LATE" "$AGORA_HOME" <<'PYEOF' && ok "身份裁决不冻结（后到覆盖同进程生效）" || fail "身份裁决不冻结（后到覆盖同进程生效）"
+import json, subprocess, sys, os
+srv, late, home = sys.argv[1], sys.argv[2], sys.argv[3]
+env = {**os.environ, "AGORA_HOME": home}
+p = subprocess.Popen(["python3", srv], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, cwd=late, env=env)
+def rpc(m, ps=None, i=[0]):
+    i[0] += 1
+    p.stdin.write(json.dumps({"jsonrpc":"2.0","id":i[0],"method":m,"params":ps or {}})+"\n"); p.stdin.flush()
+    return json.loads(p.stdout.readline())
+rpc("initialize", {})
+def you():
+    r = rpc("tools/call", {"name":"agora_who","arguments":{}})
+    return json.loads(r["result"]["content"][0]["text"]).get("you")
+# 启动期：late.md dirs 未含 cwd（夹具里 $T 可能已被前序段落 auto-register 覆盖，
+# 故不断言匿名，只断言 late 尚未命中——冻结代码下此值此后不再变化）
+you0 = you()
+assert you0 != "late@late", f"夹具应保证 late 覆盖是后到的，实际启动即 {you0}"
+# 实体页后到覆盖 cwd（模拟实体页晚于 server 启动）
+f = f"{home}/wiki/entities/late.md"
+txt = open(f).read().replace("/nonexistent-late-xyz", late)
+open(f, "w").write(txt)
+assert you() == "late@late", f"后到覆盖应立即生效，实际 {you()}"
+p.stdin.close()
+PYEOF
+
 echo
 echo "===== 结果: $PASS 通过, $FAIL 失败 ====="
 rm -rf "$T"

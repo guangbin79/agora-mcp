@@ -35,7 +35,7 @@
 4. **MCP server**（`~/agora/server/`，stdio，建议 TypeScript + 官方 SDK，<300 行）：
    - 六工具：`agora_post / agora_check_mail / agora_board / agora_wiki_read / agora_wiki_write / agora_doctor`，每个工具内部 shell 调用机械层脚本，自身不实现任何逻辑；
    - 工具 schema 即文档：event 枚举、done 必带 commit/evidence 等都写在 schema description 里；
-   - 身份裁决：启动时读进程 cwd → 查 `wiki/entities/` 名册 → 绑定会话 actor；未命中则所有写工具返回"未注册"并引导自报名（server 建身份页入册）；
+   - 身份裁决：每次工具调用读进程 cwd → 查 `wiki/entities/` 名册 → 绑定 actor（去冻结化：实体页可后到覆盖，长寿命 server 下启动期裁决会过期）；未命中则所有写工具返回"未注册"并引导自报名（server 建身份页入册）；
    - initialize 响应的 `instructions` 字段携带宣言 §6.5 的四段随附说明（<500字）。
 5. **全局注册**：在 `~/.config/opencode/opencode.json`（及其他在用的运行时全局配置）的 `mcp` 块注册 agora server，指向 stdio 启动命令。
 6. **任务页 frontmatter 契约 v0**：`id/status/owner/deps/claimed_by/verify/evidence`。

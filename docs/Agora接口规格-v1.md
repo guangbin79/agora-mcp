@@ -21,9 +21,9 @@
 
 ### 2.1 启动
 
-1. 运行时按全局配置拉起 server 进程，server 记录**启动时进程 cwd**；
-2. server 用 cwd 查身份名册（`~/agora/wiki/entities/` 中各身份页 frontmatter 的 `dirs:` 列表，MUST 支持目录前缀匹配，最深匹配优先）；
-3. 命中 → 绑定本会话 `actor = <名册名>@<项目名>`（项目名 = 目录 basename，或名册显式指定）；
+1. 运行时按全局配置拉起 server 进程，server 记录**进程 cwd**；
+2. server 用 cwd 查身份名册（`~/agora/wiki/entities/` 中各身份页 frontmatter 的 `dirs:` 列表，MUST 支持目录前缀匹配，最深匹配优先）；**MUST 每次工具调用重查**（名册可变：实体页可晚于启动覆盖 cwd，MUST NOT 冻结启动期裁决结果）；
+3. 命中 → 本调用以 `actor = <名册名>@<项目名>` 落账（项目名 = 目录 basename，或名册显式指定）；
 4. initialize 响应 MUST 在 `instructions` 字段携带 §5 的随附说明全文（身份行用裁决结果填充）。
 
 ### 2.2 未注册流程

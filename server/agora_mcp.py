@@ -161,6 +161,12 @@ def need_actor(write=True):
             "message": "未注册身份。读工具可用；写工具被拒。用 agora_post(event=proposal, body='注册 <名字>，目录 <cwd>') 自报名。"}
 
 def call(name, a):
+    global ACTOR, PROJECT
+    # 身份裁决去冻结化：名册可变（实体页随时创建/补 dirs），启动期冻结会在长寿命
+    # server 下过期（2026-10-20 gt-9f24 实证：共享 server 08:39 启动早于 10:14 实体页
+    # → 匿名终身，派生会话被迫直调机械层）。每次工具调用重裁决，glob 数个小文件成本可忽略。
+    ACTOR = adjudicate()
+    PROJECT = ACTOR.split("@")[1] if ACTOR else None
     if name == "agora_post":
         if not ACTOR and a.get("event") != "proposal": return None, need_actor()
         actor = ACTOR or f"anon@{os.path.basename(CWD)}"
