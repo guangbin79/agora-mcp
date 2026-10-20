@@ -12,6 +12,7 @@ fail() { python3 -c 'import json,sys; print(json.dumps({"code":sys.argv[1],"mess
 
 NAME="${ACTOR%%@*}"
 [[ "$P" == *..* || "$P" == /* ]] && fail VALIDATION_FAILED "path escapes wiki/"
+[[ "$P" == *.md ]] || P="$P.md"   # 扩展名归一：与 server wiki_read 同口径（机械层消费方一律 glob *.md）
 FILE="$AGORA_HOME/wiki/$P"
 # 实体页创建侧防线：名字合法性（消费侧 adjudicate/who/dispatch/poll/http 同口径过滤）
 if [[ "$P" == entities/* && ! -f "$FILE" ]]; then

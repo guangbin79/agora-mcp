@@ -681,6 +681,9 @@ bash "$AGORA_HOME/scripts/wiki-write.sh" --actor rival@proj2 --path topics/roadm
   && ok "topics append 放行（带署名）" || fail "topics append 放行（带署名）"
 bash "$AGORA_HOME/scripts/wiki-write.sh" --actor rival@proj2 --path entities/rival.md --mode append <<< "x" \
   2>/dev/null; [[ $? -eq 2 ]] && ok "非 topics append 被拒(rc=2)" || fail "非 topics append 被拒(rc=2)"
+bash "$AGORA_HOME/scripts/wiki-write.sh" --actor tester@proj --path projects/regress --mode replace <<< "desc" >/dev/null \
+  && test -f "$AGORA_HOME/wiki/projects/regress.md" \
+  && ok "wiki_write 无后缀路径归一落盘 .md（与读侧同口径）" || fail "wiki_write 无后缀路径归一落盘 .md（与读侧同口径）"
 
 # --- wiki_read 扩展名归一（无 .md 自动补，T6 人机学缝隙） ---
 cd "$PROJ" && python3 - "$PKG/server/agora_mcp.py" <<'PYEOF' && ok "wiki_read 无 .md 路径归一可读（topics/delegation）" || fail "wiki_read 无 .md 路径归一可读（topics/delegation）"
