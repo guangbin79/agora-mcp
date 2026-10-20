@@ -23,6 +23,43 @@ if not os.path.isdir(os.path.join(HOME, ".git")):
                    check=True, capture_output=True)
 
 # ---------- 身份裁决（规格 §2.1：cwd → 名册前缀匹配，最深优先） ----------
+def _auto_register():
+    """cwd 无实体覆盖时机械自注册（2026-10-20 裁定：注册去人工闸）——以目录 basename
+    建实体页（can_spawn 放开；dispatch 深度/配额保险丝照常兜底）。O_CREAT|O_EXCL 原子
+    建页：同名页已存在（人工建的他义实体）即让位回匿名。$HOME 本身不自动注册（防家目录
+    级广覆盖实体）。任何失败静默回退匿名，绝不阻塞 MCP 启动。"""
+    name = os.path.basename(CWD.rstrip("/"))
+    if not name or CWD == os.path.realpath(os.path.expanduser("~")):
+        return False
+    if not lib.valid_entity_name(name):
+        return False
+    page = os.path.join(HOME, "wiki", "entities", f"{name}.md")
+    content = (
+        "---\n"
+        f"owner: {name}\n"
+        "dirs:\n"
+        f"  - {CWD}\n"
+        "can_spawn: true\n"
+        "role: worker\n"
+        "active: true\n"
+        "---\n\n"
+        "自动注册（2026-10-20 裁定：注册去人工闸）——adjudicate() 首见未覆盖 cwd 机械建页，\n"
+        "dispatch 深度/配额保险丝照常约束；同名实体被人工抢占时本页让位（O_EXCL 不覆盖）。\n"
+    )
+    try:
+        fd = os.open(page, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+    except OSError:
+        return False
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        fh.write(content)
+    rel = f"wiki/entities/{name}.md"
+    env = {**os.environ, "AGORA_MECHANICAL": "1"}
+    subprocess.run(["git", "-C", HOME, "add", rel], env=env, capture_output=True)
+    subprocess.run(["git", "-C", HOME, "-c", f"user.name={name}", "-c",
+                    f"user.email={name}@local", "commit", "-qm",
+                    f"entity: auto-register {name} (cwd={CWD})"], env=env, capture_output=True)
+    return True
+
 def adjudicate():
     best = None
     for f in glob.glob(f"{HOME}/wiki/entities/*.md"):
@@ -33,6 +70,10 @@ def adjudicate():
             if CWD == d or CWD.startswith(d + "/"):
                 if best is None or len(d) > len(best[1]):
                     best = (os.path.basename(f)[:-3], d)
+    if not best:
+        if _auto_register():   # 仅本调用原子建页成功才授身份；O_EXCL 失败＝同名他义页已在 → 保持匿名
+            name = os.path.basename(CWD.rstrip("/"))
+            return f"{name}@{name}"
     if not best: return None
     return f"{best[0]}@{os.path.basename(best[1])}"
 

@@ -143,8 +143,23 @@ att = json.loads(r["result"]["content"][0]["text"])
 assert "@" in att["url"] + "@" + att["commit"] and att["ref"].endswith(tid), att
 p.stdin.close()
 PYEOF
-# 未注册目录调写工具被拒
-cd "$T" && python3 - "$PKG/server/agora_mcp.py" <<'PYEOF' && ok "未注册写工具被拒" || fail "未注册写工具被拒"
+# 可自动注册目录：写工具直接可用且机械建页（2026-10-20 注册去人工闸）；不可注册目录（$HOME）仍拒
+cd "$T" && python3 - "$PKG/server/agora_mcp.py" "$AGORA_HOME" <<'PYEOF' && ok "未注册目录自动注册后可写" || fail "未注册目录自动注册后可写"
+import json, subprocess, sys, os
+p = subprocess.Popen(["python3", sys.argv[1]], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+def rpc(m, ps=None, i=1):
+    p.stdin.write(json.dumps({"jsonrpc":"2.0","id":i,"method":m,"params":ps or {}})+"\n"); p.stdin.flush()
+    return json.loads(p.stdout.readline())
+rpc("initialize", {})
+r = rpc("tools/call", {"name":"agora_task_create","arguments":{"title":"x"}}, 2)
+txt = json.loads(r["result"]["content"][0]["text"])
+assert txt.get("code") != "NOT_REGISTERED" and txt.get("task","").startswith("gt-"), txt
+home = sys.argv[2]
+page = os.path.join(home, "wiki", "entities", os.path.basename(os.getcwd()) + ".md")
+assert os.path.isfile(page) and "can_spawn: true" in open(page).read(), page
+p.stdin.close()
+PYEOF
+cd "$HOME" && python3 - "$PKG/server/agora_mcp.py" <<'PYEOF' && ok "不可注册目录（\$HOME）写仍被拒" || fail "不可注册目录（\$HOME）写仍被拒"
 import json, subprocess, sys
 p = subprocess.Popen(["python3", sys.argv[1]], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
 def rpc(m, ps=None, i=1):
@@ -399,13 +414,13 @@ MARK="$T/pwned-$RANDOM"
 AGORA_RUNTIME=true bash "$AGORA_HOME/scripts/dispatch.sh" --actor tester@proj --project "$PROJ" \
   --task "$POLLT" --prompt '$(touch '"$MARK"')' >/dev/null 2>&1
 [[ ! -e "$MARK" ]] && ok "dispatch prompt 注入不执行" || fail "dispatch prompt 注入不执行"
-# 拉起形态：runtime 参数含 --auto（无人值守权限）与 --dir（echo stub 把参数回显进 dispatch 日志）
+# 拉起形态：runtime 参数含 --auto（无人值守权限），且不含已随 opencode 2.0.32 移除的 --dir（echo stub 把参数回显进 dispatch 日志）
 AGORA_RUNTIME=echo bash "$AGORA_HOME/scripts/dispatch.sh" --actor tester@proj --project "$PROJ" \
   --task "$POLLT" >/dev/null 2>&1
 sleep 1
 RLOG=$(ls -t "$AGORA_HOME"/raw/dispatches/*.log | head -1)
-grep -q -- '--auto' "$RLOG" && grep -q -- '--dir' "$RLOG" \
-  && ok "dispatch 拉起参数含 --auto 与 --dir" || fail "dispatch 拉起参数缺 --auto/--dir（$RLOG）"
+grep -q -- '--auto' "$RLOG" && ! grep -q -- '--dir' "$RLOG" \
+  && ok "dispatch 拉起参数含 --auto 且无 --dir" || fail "dispatch 拉起参数异常（$RLOG）"
 
 echo "===== poll 本地保洁 ====="
 # sessions.map TTL：过期本机条目剔除；他机条目与新本机条目保留
