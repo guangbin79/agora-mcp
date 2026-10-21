@@ -1075,6 +1075,25 @@ p.stdin.close()
 PYEOF
 rm -rf "$H5"
 
+# --- post.sh 读取侧三件 + board 心跳 age（gt-4ea1 F/E）---
+# 坏名（含反斜杠）dispatcher 拒 done + fail 零写入（全新 project 无 shard 残留）
+TF=$(TITLE="毒dispatcher任务" VERIFY="true" PROJECT_DIR="$PROJ" TC | sed -n 's/.*"task":"\(gt-[0-9a-f]*\)".*/\1/p')
+printf 'dispatcher: bo\\ss\n' >> "$AGORA_HOME/wiki/tasks/$TF.md"
+OUT=$(bash "$AGORA_HOME/scripts/post.sh" --actor tester@projx --project projx --event done --task "$TF" --commit HEAD --evidence x 2>&1)
+echo "$OUT" | grep -q VALIDATION_FAILED && ok "读取侧 dispatcher 坏名（含反斜杠）拒 done" || fail "读取侧坏名未拒（$OUT）"
+[[ ! -f "$AGORA_HOME/log/$(date +%F)/projx.md" ]] && ok "读取侧 fail 零写入（无 shard 头残留）" || fail "fail 后 shard 头残留"
+# MENTION 精确匹配：mention=bossy 不误吞 dispatcher=boss 的自动提及
+T3=$(TITLE="子串mention任务" VERIFY="true" PROJECT_DIR="$PROJ" TC | sed -n 's/.*"task":"\(gt-[0-9a-f]*\)".*/\1/p')
+printf 'dispatcher: boss\n' >> "$AGORA_HOME/wiki/tasks/$T3.md"
+POST tester@proj --event done --task "$T3" --commit HEAD --evidence x --mention bossy >/dev/null
+grep -E 'task:'"$T3"'( \||$)' "$AGORA_HOME"/log/*/proj.md | tail -1 | grep -q "mention:bossy,boss" && ok "MENTION 精确匹配（bossy 不吞 boss）" || fail "MENTION 子串误吞"
+# board in-progress 显示心跳 age（last_progress (ts,body)）
+T5=$(TITLE="心跳任务" VERIFY="grep -q FIXED app.txt" PROJECT_DIR="$PROJ" TC | sed -n 's/.*"task":"\(gt-[0-9a-f]*\)".*/\1/p')
+POST tester@proj --event claimed --task "$T5" >/dev/null
+POST tester@proj --event progress --task "$T5" --body "心跳测试" >/dev/null
+bash "$AGORA_HOME/scripts/derive-board.sh" >/dev/null 2>&1
+grep -qE "进展（[0-9]+min前）: 心跳测试" "$AGORA_HOME/board/in-progress.md" && ok "board 显示心跳 age" || fail "board 无心跳 age"
+
 echo "===== 身份裁决不冻结（2026-10-20 gt-9f24 事故回归） ====="
 # server 启动早于实体页覆盖：启动期 auto-register 因同名页 O_EXCL 撞名让位 → 匿名；
 # 旧代码冻结终身（共享 server 08:39 启动早于 10:14 实体页 → 派生会话写路径全拒）；

@@ -94,6 +94,24 @@ SYNC_PRE=$(bash "$AGORA_HOME/scripts/sync.sh" pre 2>/dev/null || true)
 SW=$(echo "$SYNC_PRE" | sed -n 's/.*"warn:\([a-z_]*\)".*/\1/p')
 [[ -n "$SW" ]] && DERIVED+=("sync_warn:$SW")
 
+# 派生回报链：dispatched 时把 dispatcher 写入任务页；done/plan 时自动 @提及 dispatcher（plan 的 ack 回路由机制保证，v1.30）
+# 前移至预锁/写入前段（fail=零写入契约，v1.31）：dispatcher 读取+校验+拼接不产生任何落盘副作用
+if [[ ( "$EVENT" == done || "$EVENT" == plan ) && -n "$TASK" ]]; then
+  DISP=$(grep -m1 '^dispatcher:' "$AGORA_HOME/wiki/tasks/$TASK.md" | sed 's/^dispatcher:[[:space:]]*//' || true)
+  # 读取侧兜底：dispatcher 来自任务页（历史脏数据/手改可达），先校验再使用——与写入侧同口径（含反斜杠）
+  if [[ -n "$DISP" ]]; then
+    [[ "$DISP" == *"|"* || "$DISP" == *$'\n'* || "$DISP" == *"/"* || "$DISP" == *".."* || "$DISP" == *,* || "$DISP" == *\\* ]] \
+      && fail VALIDATION_FAILED "bad dispatcher on task page: $DISP（实体名不得含 | / .. , \\ 或换行）"
+    [[ "$DISP" != "${ACTOR%%@*}" ]] || DISP=""
+  fi
+  # 精确匹配（逗号分隔逐项）：防子串误吞（mention 已含 bossy 不误吞 boss）
+  if [[ -n "$DISP" ]]; then
+    _HAS=0; IFS=',' read -ra _MS2 <<< "$MENTION"
+    for _m in "${_MS2[@]}"; do [[ "$_m" == "$DISP" ]] && { _HAS=1; break; }; done
+    [[ $_HAS -eq 0 ]] && MENTION="${MENTION:+$MENTION,}$DISP"
+  fi
+fi
+
 DATE=$(date +%F)   # 单点取值：午夜翻牌窗口内 SHARD 与 REF 必须同日
 SHARD_DIR="$AGORA_HOME/log/$DATE"; mkdir -p "$SHARD_DIR"
 SHARD="$SHARD_DIR/$PROJECT.md"
@@ -123,17 +141,6 @@ fi
 SEQ=$(grep -cF " | actor:$ACTOR | " "$SHARD" 2>/dev/null || true); SEQ=$((SEQ+1))
 SEEN=$(grep -c '^- seq:' "$SHARD" 2>/dev/null || true)
 TS=$(date --iso-8601=seconds)
-
-# 派生回报链：dispatched 时把 dispatcher 写入任务页；done/plan 时自动 @提及 dispatcher（plan 的 ack 回路由机制保证，v1.30）
-if [[ ( "$EVENT" == done || "$EVENT" == plan ) && -n "$TASK" ]]; then
-  DISP=$(grep -m1 '^dispatcher:' "$AGORA_HOME/wiki/tasks/$TASK.md" | sed 's/^dispatcher:[[:space:]]*//' || true)
-  if [[ -n "$DISP" && "$DISP" != "${ACTOR%%@*}" && "$MENTION" != *"$DISP"* ]]; then
-    # 读取侧兜底：dispatcher 来自任务页（历史脏数据/手改可达），追加前按 mention 同口径校验
-    [[ -z "$DISP" || "$DISP" == *"|"* || "$DISP" == *$'\n'* || "$DISP" == *"/"* || "$DISP" == *".."* || "$DISP" == *,* ]] \
-      && fail VALIDATION_FAILED "bad dispatcher on task page: $DISP（实体名不得含 | / .. 或换行）"
-    MENTION="${MENTION:+$MENTION,}$DISP"
-  fi
-fi
 
 LINE="- seq:$SEQ | ts:$TS | actor:$ACTOR | event:$EVENT | idem:$IDEM | seen:$PROJECT@$SEEN"
 [[ -n "$TASK" ]] && LINE="$LINE | task:$TASK"

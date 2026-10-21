@@ -101,7 +101,7 @@ def apply(shard, i, actor, event, f):
     elif event == "blocked" and tid in tasks and tasks[tid]["owner"] == actor:
         tasks[tid].update(state="blocked")
     elif event == "progress" and tid:
-        last_progress[tid] = (f.get("body") or "")[:60]
+        last_progress[tid] = (f.get("ts", ""), (f.get("body") or "")[:60])   # (ts, body)：看板显示心跳 age（v1.31）
 
 def replay_lines(shard, start, lines):
     for off, line in enumerate(lines, 1):
@@ -152,7 +152,17 @@ for tid in sorted(tasks):
     t = tasks[tid]
     if t["state"] == "in-progress":
         line = f"{tid} — {t['owner']}"
-        if tid in last_progress: line += f" — 进展: {last_progress[tid]}"
+        lp = last_progress.get(tid)
+        if lp:
+            if isinstance(lp, str): lp = ("", lp)   # 旧 cache 兼容（str → 无时间）
+            age = ""
+            if lp[0]:
+                try:
+                    from datetime import datetime
+                    m = int((datetime.now().astimezone() - datetime.fromisoformat(lp[0])).total_seconds() // 60)
+                    age = f"（{m}min前）" if m < 1440 else f"（{m // 60}h前）"
+                except ValueError: pass
+            line += f" — 进展{age}: {lp[1]}"
         cols["in-progress"].append(line)
     elif t["state"] == "blocked": cols["blocked"].append(f"{tid} — {t['owner']}" if t.get("owner") else tid)
     elif t["state"] == "todo":

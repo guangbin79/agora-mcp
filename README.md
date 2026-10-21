@@ -12,6 +12,8 @@ The codebase is deliberately split into **many small repositories** (repo-tool s
 
 ## Quick start (opencode v2)
 
+**Contributors**: enable the pre-push gate after first clone — `git config core.hooksPath .githooks` (runs the full smoke suite before every push, ~2min; bypass with `AGORA_SKIP_SMOKE=1`).
+
 **Dependencies** (checked by `install.sh`, which fails fast with install hints): `bash`, `git`, `python3`, plus GNU `coreutils`/`util-linux` (`flock`, `sha1sum`, `timeout`, `setsid`, GNU `date`). Native on Linux. On macOS: `brew install coreutils util-linux` and put the gnubin directories first in `PATH`.
 
 
