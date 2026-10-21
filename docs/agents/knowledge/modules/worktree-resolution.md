@@ -17,6 +17,12 @@
 - **教训：测试短路**——断言场景 ACTOR 恒非 None，fallback 分支从未执行（ocr 探针发现）。写分支测试先问「这个分支在夹具下真的会走到吗」。
 - **教训：ack 回路断裂**——引导文案只说「post 计划」没说通知谁，dispatcher 收件箱永远看不到，软门退化为固定延迟。凡协议依赖「对方看到」，必须有机制化的到达路径（mention→inbox），文案指示不算数。
 
+## v1.31 批增补（gt-4ea1）
+- **post.sh 写入路径块序契约**：idem 先行计算（哈希输入 MUST 不含后续自动追加字段如 dispatcher）→ dispatcher 自动 @ 块（零写盘副作用）→ SHARD 头创建 → 幂等检查 → SEQ/SEEN。任何块前移先问「幂等输入的构成时序变了吗」——ocr 抓到：dispatcher 前移到 idem 前会把自动追加的 MENTION 吃进哈希，重试幂等窗口失配。
+- **fail=零写入契约**：读取侧校验（任务页 dispatcher 坏名）必须在任何落盘副作用（shard 头创建）之前完成——fail 后产生 header-only shard 即违约。
+- **跨机钟漂防御**：所有「距今时长」渲染钳 max(0)（未来 ts 不显示负 age）；datetime 解析异常捕 (ValueError, TypeError) 双类（无时区 ts 是 TypeError）。
+- **精确匹配防误吞**：子串匹配（`*"$DISP"*`）会误吞——mention 列表按逗号切分后逐项 trim 再相等比较；空数组循环在 set -u 下需 guard。
+
 ## 测试模式
 - 套件内涉及名册匹配的测试用**独立小广场**（AH4/AH5 模式：mktemp + init.sh + 自建实体），主广场名册会被前段测试的 auto_register 污染（dirs=$T 吞掉一切 $T 下路径）。
 - 部署形态注意：MCP server 挂主 repo 代码（install 注册路径），worktree 里的机械层修复在合并+install.sh 刷新前**不生效**——worktree 会话身份仍是旧口径。
