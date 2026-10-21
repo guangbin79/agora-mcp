@@ -93,7 +93,8 @@ TOOLS = [
     "commit": {"type": "string"}, "evidence": {"type": "string"},
     "conclusion": {"type": "string"}, "reason": {"type": "string"},
     "body": {"type": "string"}, "mention": {"type": "array", "items": {"type": "string"}},
-    "idem": {"type": "string", "description": "可选；缺省按内容派生，重试天然去重"}},
+    "idem": {"type": "string", "description": "可选；缺省按内容派生，重试天然去重"},
+    "actor": {"type": "string", "description": "可选；显式声明落账身份。dispatch 派生的子会话 MUST 传 dispatch 记录给定的 child_actor（共享 MCP 进程级 ACTOR 归 dispatcher，gt-49fb）"}},
    "required": ["event"]}},
  {"name": "agora_check_mail", "description": "查收件箱（拉模式；读前自动与远端尽力同步，多机场景默认见新）。",
   "inputSchema": {**T, "properties": {"since": {"type": "string", "description": "水位指针，只返回其后新邮件"}}}},
@@ -163,7 +164,7 @@ def call(name, a):
     PROJECT = ACTOR.split("@")[1] if ACTOR else None
     if name == "agora_post":
         if not ACTOR and a.get("event") != "proposal": return None, need_actor()
-        actor = ACTOR or f"anon@{os.path.basename(CWD)}"
+        actor = a.get("actor") or ACTOR or f"anon@{os.path.basename(CWD)}"   # gt-49fb：dispatch 派生子会话显式声明（共享 MCP 进程级 ACTOR 归 dispatcher）
         args = ["--actor", actor, "--project", PROJECT or os.path.basename(lib.main_repo_of(CWD) or CWD), "--event", a["event"]]
         for k in ("task","commit","evidence","conclusion","reason","body","idem"):
             if a.get(k): args += [f"--{k}", a[k]]
