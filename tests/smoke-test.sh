@@ -1032,6 +1032,7 @@ def rpc(m, ps=None, i=1):
 rpc("initialize", {})
 r = json.loads(rpc("tools/call", {"name":"agora_who","arguments":{}}, 2)["result"]["content"][0]["text"])
 assert r.get("you") == "tester@repo", r.get("you")
+assert [x for x in r.get("roster",[]) if x["name"]=="tester"][0]["here"] is True, r.get("roster")
 r = json.loads(rpc("tools/call", {"name":"agora_task_create","arguments":{"title":"wt 自干"}}, 3)["result"]["content"][0]["text"])
 assert r.get("task","").startswith("gt-"), r
 p.stdin.close()

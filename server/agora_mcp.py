@@ -27,7 +27,9 @@ def _auto_register():
     """cwd 无实体覆盖时机械自注册（2026-10-20 裁定：注册去人工闸）——以目录 basename
     建实体页（can_spawn 放开；dispatch 深度/配额保险丝照常兜底）。O_CREAT|O_EXCL 原子
     建页：同名页已存在（人工建的他义实体）即让位回匿名。$HOME 本身不自动注册（防家目录
-    级广覆盖实体）。任何失败静默回退匿名，绝不阻塞 MCP 启动。"""
+    级广覆盖实体）。worktree cwd 亦不注册（应归属主 repo 实体；主 repo 未注册则保持匿名，
+    gt-ac14）。任何失败静默回退匿名，绝不阻塞 MCP 启动。"""
+    if lib.main_repo_of(CWD): return None
     name = os.path.basename(CWD.rstrip("/"))
     if not name or CWD == os.path.realpath(os.path.expanduser("~")):
         return False
@@ -261,7 +263,7 @@ def call(name, a):
             here = False
             cw = lib.main_repo_of(CWD) or CWD   # worktree cwd 归一主 repo 再判覆盖（gt-ac14）
             for d in dirs:
-                if lib.covers(cw, d): here = True
+                if lib.covers(CWD, d) or lib.covers(cw, d): here = True   # 直判优先、归一兜底——对齐 resolve_entity 两段口径
             roster.append({"name": os.path.basename(f)[:-3], "dirs": dirs,
                            "can_spawn": bool(re.search(r'^can_spawn:\s*true', txt, re.M)),
                            "role": rm.group(1) if rm else "worker", "here": here})

@@ -66,7 +66,7 @@ def main_repo_of(p):
     except OSError: return None
     if not line.startswith("gitdir:"): return None
     dd = os.path.dirname(os.path.realpath(os.path.join(p, line[7:].strip())))  # <main>/.git/worktrees
-    if os.path.basename(os.path.dirname(dd)) != ".git": return None
+    if os.path.basename(dd) != "worktrees" or os.path.basename(os.path.dirname(dd)) != ".git": return None
     return os.path.dirname(os.path.dirname(dd))
 
 
