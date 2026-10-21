@@ -39,6 +39,7 @@ if [[ " $TASK_CLASS " == *" $EVENT "* ]]; then
   [[ -f "$AGORA_HOME/wiki/tasks/$TASK.md" ]] || fail UNKNOWN_TASK "task not found: $TASK"
 fi
 [[ "$EVENT" == done && ( -z "$COMMIT" || -z "$EVIDENCE" ) ]] && fail VALIDATION_FAILED "done requires commit+evidence"
+[[ "$EVENT" == plan && -z "$BODY" ]] && fail VALIDATION_FAILED "plan requires body（实施计划内容）"
 [[ "$EVENT" == attached && -z "$EVIDENCE" ]] && fail VALIDATION_FAILED "attached requires evidence（<url>@<commit>，一般由 agora_attach 生成）"
 [[ "$EVENT" == diagnosed && -z "$CONCLUSION" ]] && fail VALIDATION_FAILED "diagnosed requires conclusion"
 [[ "$EVENT" == retired && -z "$REASON" ]] && fail VALIDATION_FAILED "retired requires reason"
@@ -123,8 +124,8 @@ SEQ=$(grep -cF " | actor:$ACTOR | " "$SHARD" 2>/dev/null || true); SEQ=$((SEQ+1)
 SEEN=$(grep -c '^- seq:' "$SHARD" 2>/dev/null || true)
 TS=$(date --iso-8601=seconds)
 
-# 派生回报链：dispatched 时把 dispatcher 写入任务页；done 时自动 @提及 dispatcher
-if [[ "$EVENT" == done && -n "$TASK" ]]; then
+# 派生回报链：dispatched 时把 dispatcher 写入任务页；done/plan 时自动 @提及 dispatcher（plan 的 ack 回路由机制保证，v1.30）
+if [[ ( "$EVENT" == done || "$EVENT" == plan ) && -n "$TASK" ]]; then
   DISP=$(grep -m1 '^dispatcher:' "$AGORA_HOME/wiki/tasks/$TASK.md" | sed 's/^dispatcher:[[:space:]]*//' || true)
   if [[ -n "$DISP" && "$DISP" != "${ACTOR%%@*}" && "$MENTION" != *"$DISP"* ]]; then
     # 读取侧兜底：dispatcher 来自任务页（历史脏数据/手改可达），追加前按 mention 同口径校验

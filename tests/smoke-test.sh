@@ -1058,6 +1058,21 @@ assert r.get("shard","").endswith("/repo.md"), r   # plan 落账 + project 归�
 p.stdin.close()
 PYEOF
 ls "$AH5"/wiki/entities/ | grep -q "^src\.md$" && fail "子目录 cwd 误注册 src 实体页" || ok "子目录 cwd 不误注册实体页"
+# 匿名 fallback：未注册主 repo 的 worktree cwd，proposal 落账归一主 repo 名（v1.30 ① fallback 分支）
+R6="$H5/repo2"; mkdir -p "$R6"; cd "$R6" && git init -q . && git -c user.name=t -c user.email=t@local commit -q --allow-empty -m i
+W6="$H5/repo2__wt-anon__10213000"; git -C "$R6" worktree add -q "$W6" 2>/dev/null
+cd "$W6" && python3 - "$PKG/server/agora_mcp.py" "$AH5" <<'PYEOF' && ok "匿名 worktree cwd 的 proposal 落账归一主 repo 名" || fail "匿名 proposal shard 未归一"
+import json, subprocess, sys, os
+p = subprocess.Popen(["python3", sys.argv[1]], env={**os.environ, "AGORA_HOME": sys.argv[2]},
+                     stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+def rpc(m, ps=None, i=1):
+    p.stdin.write(json.dumps({"jsonrpc":"2.0","id":i,"method":m,"params":ps or {}})+"\n"); p.stdin.flush()
+    return json.loads(p.stdout.readline())
+rpc("initialize", {})
+r = json.loads(rpc("tools/call", {"name":"agora_post","arguments":{"event":"proposal","body":"匿名自报"}}, 2)["result"]["content"][0]["text"])
+assert r.get("shard","").endswith("/repo2.md"), r   # fallback：非 worktree basename
+p.stdin.close()
+PYEOF
 rm -rf "$H5"
 
 echo "===== 身份裁决不冻结（2026-10-20 gt-9f24 事故回归） ====="
