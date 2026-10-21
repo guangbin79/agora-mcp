@@ -86,7 +86,7 @@ INSTRUCTIONS = f"""你已接入 Agora 广场——AI 协作的异步账本，仓
 BOARD_VIEWS = lib.BOARD_VIEWS   # schema 枚举与服务端白名单单点口径（agora_lib.BOARD_VIEWS）
 T = {"type": "object", "additionalProperties": False}
 TOOLS = [
- {"name": "agora_post", "description": "发事件（写日志唯一入口）。done 必带 commit+evidence 且机械层会真实执行 verify；claimed 撞车仍落账，仅在 derived 中标注 claim_conflict:<先认领者>；dispatched 请改用 agora_dispatch。",
+ {"name": "agora_post", "description": "发事件（写日志唯一入口）。done 必带 commit+evidence 且机械层会真实执行 verify；claimed 撞车仍落账，仅在 derived 中标注 claim_conflict:<先认领者>；plan 落实施计划（body 必填，挂 task 时自动 @任务页 dispatcher，dispatcher ack 或 30min 超时自放行）；dispatched 请改用 agora_dispatch。",
   "inputSchema": {**T, "properties": {
     "event": {"type": "string", "enum": ["claimed","done","blocked","diagnosed","escalated","retired","proposal","ack","progress","cancelled","reopened","attached","plan"]},
     "task": {"type": "string", "description": "gt-xxxx，任务类事件必填"},

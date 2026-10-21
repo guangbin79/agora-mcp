@@ -104,7 +104,7 @@ fi
 # 派生回报链：dispatched 时把 dispatcher 写入任务页；done/plan 时自动 @提及 dispatcher（plan 的 ack 回路由机制保证，v1.30）
 # 前移至写入前段（fail=零写入契约，v1.31）：dispatcher 读取+校验+拼接不产生任何落盘副作用
 if [[ ( "$EVENT" == done || "$EVENT" == plan ) && -n "$TASK" ]]; then
-  DISP=$(grep -m1 '^dispatcher:' "$AGORA_HOME/wiki/tasks/$TASK.md" | sed 's/^dispatcher:[[:space:]]*//' || true)
+  DISP=$(grep -m1 '^dispatcher:' "$AGORA_HOME/wiki/tasks/$TASK.md" | sed 's/^dispatcher:[[:space:]]*//; s/[[:space:]]*$//' || true)
   # 读取侧兜底：dispatcher 来自任务页（历史脏数据/手改可达），先校验再使用——与写入侧同口径（含反斜杠）
   if [[ -n "$DISP" ]]; then
     [[ "$DISP" == *"|"* || "$DISP" == *$'\n'* || "$DISP" == *"/"* || "$DISP" == *".."* || "$DISP" == *,* || "$DISP" == *\\* ]] \
@@ -182,6 +182,8 @@ fi
 if [[ -n "$MENTION" ]]; then
   IFS=',' read -ra MS <<< "$MENTION"
   for m in "${MS[@]}"; do
+    m="${m#"${m%%[![:space:]]*}"}"; m="${m%"${m##*[![:space:]]}"}"   # trim：mention 项可带空白（校验只拒空项）
+    [[ -z "$m" ]] && continue
     mkdir -p "$AGORA_HOME/inbox/$m"
     printf -- '- from:%s | ts:%s | ref:%s | summary:%s %s\n' "$ACTOR" "$TS" "$REF" "$EVENT" "$TASK" \
       > "$AGORA_HOME/inbox/$m/$(date +%s%N).md"

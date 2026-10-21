@@ -12,3 +12,4 @@ if ! (cd "$ROOT" && timeout 600 bash tests/smoke-test.sh) > "${TMPDIR:-/tmp}/ago
   exit 1
 fi
 echo "[pre-push] smoke 全绿"
+rm -f "${TMPDIR:-/tmp}/agora-mcp-prepush.$$.log"
