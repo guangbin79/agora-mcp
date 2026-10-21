@@ -58,7 +58,7 @@ if grep -q "^$(hostname) $CHILD " "$AGORA_HOME/scripts/sessions.map" 2>/dev/null
   exit 0
 fi
 
-BOOT="你是广场派生的一次性工作会话。按开场仪式查收信、看看板；你的任务是 $TASK（读 wiki/tasks/$TASK.md，按 verify 要求验收）。动手实施前先 agora_post(event=plan, task=$TASK) 落实施计划——dispatcher ack（mention 你）后再动工；等待超 30min 无 ack 可自行放行并在 plan 评论注明。完成后 agora_post(event=done) 并结束。${PROMPT:+ 补充指示：$PROMPT}"
+BOOT="你是广场派生的一次性工作会话。按开场仪式查收信、看看板；你的任务是 $TASK（读 wiki/tasks/$TASK.md，按 verify 要求验收）。动手实施前先 agora_post(event=plan, task=$TASK) 落实施计划——dispatcher ack（mention 你）后再动工；等待超 30min 无 ack 可自行放行并在 plan 评论注明。每完成一个里程碑（阶段完成/关键决策/受阻）agora_post(event=progress, task=$TASK) 刷新看板。完成后 agora_post(event=done) 并结束。${PROMPT:+ 补充指示：$PROMPT}"
 # 注入防御：PROMPT/PDIR 均不可信（PROMPT 可能来自他机邮件摘要）。一律走 env 传数据 +
 # 单引号脚本，bash -c 体内不出现任何外部插值
 touch "$AGORA_HOME/$LOG.live"
