@@ -159,9 +159,9 @@ for tid in sorted(tasks):
             if lp[0]:
                 try:
                     from datetime import datetime
-                    m = int((datetime.now().astimezone() - datetime.fromisoformat(lp[0])).total_seconds() // 60)
+                    m = max(int((datetime.now().astimezone() - datetime.fromisoformat(lp[0])).total_seconds() // 60), 0)   # 跨机钟漂：未来 ts 钳零
                     age = f"（{m}min前）" if m < 1440 else f"（{m // 60}h前）"
-                except ValueError: pass
+                except (ValueError, TypeError): pass   # 畸形/无时区 ts 静默（v1.31）
             line += f" — 进展{age}: {lp[1]}"
         cols["in-progress"].append(line)
     elif t["state"] == "blocked": cols["blocked"].append(f"{tid} — {t['owner']}" if t.get("owner") else tid)

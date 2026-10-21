@@ -94,8 +94,15 @@ SYNC_PRE=$(bash "$AGORA_HOME/scripts/sync.sh" pre 2>/dev/null || true)
 SW=$(echo "$SYNC_PRE" | sed -n 's/.*"warn:\([a-z_]*\)".*/\1/p')
 [[ -n "$SW" ]] && DERIVED+=("sync_warn:$SW")
 
+# 幂等 idem 先行计算（v1.31：不含 dispatcher 自动追加的 MENTION——幂等语义与 v1.30 前一致）
+if [[ -z "$IDEM" ]]; then
+  IDEM_INPUT="$ACTOR|$EVENT|$TASK|$COMMIT|$EVIDENCE|$CONCLUSION|$REASON|$BODY|$MENTION|$TARGET|$CHILD"
+  [[ -n "$RUN" ]] && IDEM_INPUT="$IDEM_INPUT|$RUN"
+  IDEM=$(printf '%s' "$IDEM_INPUT" | sha1sum | cut -c1-8)
+fi
+
 # 派生回报链：dispatched 时把 dispatcher 写入任务页；done/plan 时自动 @提及 dispatcher（plan 的 ack 回路由机制保证，v1.30）
-# 前移至预锁/写入前段（fail=零写入契约，v1.31）：dispatcher 读取+校验+拼接不产生任何落盘副作用
+# 前移至写入前段（fail=零写入契约，v1.31）：dispatcher 读取+校验+拼接不产生任何落盘副作用
 if [[ ( "$EVENT" == done || "$EVENT" == plan ) && -n "$TASK" ]]; then
   DISP=$(grep -m1 '^dispatcher:' "$AGORA_HOME/wiki/tasks/$TASK.md" | sed 's/^dispatcher:[[:space:]]*//' || true)
   # 读取侧兜底：dispatcher 来自任务页（历史脏数据/手改可达），先校验再使用——与写入侧同口径（含反斜杠）
@@ -104,11 +111,17 @@ if [[ ( "$EVENT" == done || "$EVENT" == plan ) && -n "$TASK" ]]; then
       && fail VALIDATION_FAILED "bad dispatcher on task page: $DISP（实体名不得含 | / .. , \\ 或换行）"
     [[ "$DISP" != "${ACTOR%%@*}" ]] || DISP=""
   fi
-  # 精确匹配（逗号分隔逐项）：防子串误吞（mention 已含 bossy 不误吞 boss）
+  # 精确匹配（逗号分隔逐项+trim）：防子串误吞与空白漏配（mention 已含 bossy / " boss" 不误吞 boss）
   if [[ -n "$DISP" ]]; then
-    _HAS=0; IFS=',' read -ra _MS2 <<< "$MENTION"
-    for _m in "${_MS2[@]}"; do [[ "$_m" == "$DISP" ]] && { _HAS=1; break; }; done
-    [[ $_HAS -eq 0 ]] && MENTION="${MENTION:+$MENTION,}$DISP"
+    if [[ -z "$MENTION" ]]; then MENTION="$DISP"
+    else
+      _HAS=0; IFS=',' read -ra _MS2 <<< "$MENTION"
+      for _m in "${_MS2[@]}"; do
+        _m="${_m#"${_m%%[![:space:]]*}"}"; _m="${_m%"${_m##*[![:space:]]}"}"
+        [[ "$_m" == "$DISP" ]] && { _HAS=1; break; }
+      done
+      [[ $_HAS -eq 0 ]] && MENTION="$MENTION,$DISP"
+    fi
   fi
 fi
 
@@ -117,14 +130,9 @@ SHARD_DIR="$AGORA_HOME/log/$DATE"; mkdir -p "$SHARD_DIR"
 SHARD="$SHARD_DIR/$PROJECT.md"
 [[ -f "$SHARD" ]] || echo '<!-- format: git-agora-log v1 -->' > "$SHARD"
 
-# 幂等：默认 idem = sha1(actor|event|task|条件字段)。
+# 幂等：idem 已于写入前段计算（见上「幂等 idem 先行计算」）。
 # 去重窗口 = 该 actor 在该 task 上的"最近一条"事件：连续重复 = 重试，静默成功；
 # 中间隔了别的事件的相同 idem = 合法的新状态迁移（如 reopen 后再次 claim），必须落账。
-if [[ -z "$IDEM" ]]; then
-  IDEM_INPUT="$ACTOR|$EVENT|$TASK|$COMMIT|$EVIDENCE|$CONCLUSION|$REASON|$BODY|$MENTION|$TARGET|$CHILD"
-  [[ -n "$RUN" ]] && IDEM_INPUT="$IDEM_INPUT|$RUN"
-  IDEM=$(printf '%s' "$IDEM_INPUT" | sha1sum | cut -c1-8)
-fi
 if [[ -n "$TASK" ]]; then
   LAST_EV=$(grep -F " | actor:$ACTOR | " "$SHARD" 2>/dev/null | grep -E 'task:'"$TASK"'( \||$)' | tail -1 || true)
 else
