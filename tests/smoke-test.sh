@@ -1038,6 +1038,24 @@ assert r.get("task","").startswith("gt-"), r
 p.stdin.close()
 PYEOF
 ! ls "$AH5"/wiki/entities/repo__wt-*.md >/dev/null 2>&1 && ok "worktree cwd 不自动注册实体页" || fail "worktree cwd 被误注册实体页"
+# worktree 子目录：归一向上爬到主 repo（终闸 HIGH 回归，gt-ac14）
+mkdir -p "$W5/src"
+rm -f "$AH5"/raw/dispatches/*.live
+OUT=$(AGORA_RUNTIME=true AGORA_HOME="$AH5" bash "$AH5/scripts/dispatch.sh" --actor tester@repo --project "$W5/src" --task "$XW" 2>&1)
+echo "$OUT" | grep -q '"child_actor":"tester@repo"' && ok "worktree 子目录派发归属主 repo 实体" || fail "worktree 子目录派发（$OUT）"
+cd "$W5/src" && python3 - "$PKG/server/agora_mcp.py" "$AH5" <<'PYEOF' && ok "worktree 子目录身份裁决归属主实体" || fail "worktree 子目录身份裁决异常"
+import json, subprocess, sys, os
+p = subprocess.Popen(["python3", sys.argv[1]], env={**os.environ, "AGORA_HOME": sys.argv[2]},
+                     stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+def rpc(m, ps=None, i=1):
+    p.stdin.write(json.dumps({"jsonrpc":"2.0","id":i,"method":m,"params":ps or {}})+"\n"); p.stdin.flush()
+    return json.loads(p.stdout.readline())
+rpc("initialize", {})
+r = json.loads(rpc("tools/call", {"name":"agora_who","arguments":{}}, 2)["result"]["content"][0]["text"])
+assert r.get("you") == "tester@repo", r.get("you")
+p.stdin.close()
+PYEOF
+ls "$AH5"/wiki/entities/ | grep -q "^src\.md$" && fail "子目录 cwd 误注册 src 实体页" || ok "子目录 cwd 不误注册实体页"
 rm -rf "$H5"
 
 echo "===== 身份裁决不冻结（2026-10-20 gt-9f24 事故回归） ====="

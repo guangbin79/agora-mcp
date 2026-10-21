@@ -59,15 +59,25 @@ def entity_dirs(txt):
 
 
 def main_repo_of(p):
-    """git worktree 的 .git 是文件（"gitdir: <main>/.git/worktrees/<name>"）→ 主 repo 路径；非 worktree → None。"""
-    g = os.path.join(p, ".git")
-    if not os.path.isfile(g): return None
-    try: line = open(g, encoding="utf-8", errors="replace").read().strip()
-    except OSError: return None
-    if not line.startswith("gitdir:"): return None
-    dd = os.path.dirname(os.path.realpath(os.path.join(p, line[7:].strip())))  # <main>/.git/worktrees
-    if os.path.basename(dd) != "worktrees" or os.path.basename(os.path.dirname(dd)) != ".git": return None
-    return os.path.dirname(os.path.dirname(dd))
+    """路径所在 worktree 的主 repo；非 worktree（普通 repo、无 .git、畸形 gitdir）→ None。
+    自 p 逐级向上找最近 .git：目录=普通 repo 即停（p 自身即实体路径，无需归一）；
+    文件且 gitdir 指向 <main>/.git/worktrees/<name> 且主 repo .git 目录在场 → 主 repo（防捏造/逃逸，gt-ac14）。"""
+    p = os.path.realpath(p)
+    while True:
+        g = os.path.join(p, ".git")
+        if os.path.isdir(g): return None
+        if os.path.isfile(g):
+            try: line = open(g, encoding="utf-8", errors="replace").read().strip()
+            except OSError: return None
+            if line.startswith("gitdir:"):
+                dd = os.path.dirname(os.path.realpath(os.path.join(p, line[7:].strip())))  # <main>/.git/worktrees
+                if os.path.basename(dd) == "worktrees" and os.path.basename(os.path.dirname(dd)) == ".git":
+                    mr = os.path.dirname(os.path.dirname(dd))
+                    if os.path.isdir(os.path.join(mr, ".git")): return mr
+            return None
+        up = os.path.dirname(p)
+        if up == p: return None
+        p = up
 
 
 def covers(path, d):
