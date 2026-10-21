@@ -61,21 +61,13 @@ def _auto_register():
     return True
 
 def adjudicate():
-    best = None
-    for f in glob.glob(f"{HOME}/wiki/entities/*.md"):
-        if not lib.valid_entity_name(os.path.basename(f)[:-3]): continue   # 畸形实体名不参与裁决
-        txt = open(f, encoding="utf-8").read()
-        for d in lib.entity_dirs(txt):
-            d = os.path.realpath(os.path.expanduser(d))
-            if CWD == d or CWD.startswith(d + "/"):
-                if best is None or len(d) > len(best[1]):
-                    best = (os.path.basename(f)[:-3], d)
-    if not best:
+    r = lib.resolve_entity(HOME, CWD)
+    if not r:
         if _auto_register():   # 仅本调用原子建页成功才授身份；O_EXCL 失败＝同名他义页已在 → 保持匿名
             name = os.path.basename(CWD.rstrip("/"))
             return f"{name}@{name}"
-    if not best: return None
-    return f"{best[0]}@{os.path.basename(best[1])}"
+        return None
+    return f"{r[0]}@{os.path.basename(r[1])}"   # @后缀=命中 dirs 目录名（原语义）；worktree cwd 归一主实体不误注册
 
 ACTOR = adjudicate()
 PROJECT = ACTOR.split("@")[1] if ACTOR else None
@@ -116,7 +108,7 @@ TOOLS = [
     "mode": {"type": "string", "enum": ["replace","append"]}}, "required": ["path","content"]}},
  {"name": "agora_doctor", "description": "自检与恢复。",
   "inputSchema": {**T, "properties": {"fix": {"type": "boolean"}}}},
- {"name": "agora_dispatch", "description": "跨仓委托的标准路径：派生一次性工作会话——仅本机：只拉起本机 sessions.map 登记的 session，跨机派活请改用 agora_task_create + mention（异步）。需名册 can_spawn 权限；有深度/配额保险丝；目标有活会话时降级为通知。",
+ {"name": "agora_dispatch", "description": "跨仓委托的标准路径：派生一次性工作会话——仅本机：只拉起本机 sessions.map 登记的 session，跨机派活请改用 agora_task_create + mention（异步）。需名册 can_spawn 权限；有深度/配额保险丝；目标有活会话时降级为通知。project 可为 git worktree 路径——机械层归一到主 repo 匹配名册实体，dispatched 的 project 字段取主 repo 名；worktree 生命周期（建/清/合并）归调用者。",
   "inputSchema": {**T, "properties": {
     "project": {"type": "string", "description": "目标项目目录"},
     "task": {"type": "string"}, "prompt": {"type": "string"}},
@@ -267,9 +259,9 @@ def call(name, a):
             dirs = lib.entity_dirs(txt)
             rm = re.search(r'^role:\s*(\S+)', txt, re.M)
             here = False
+            cw = lib.main_repo_of(CWD) or CWD   # worktree cwd 归一主 repo 再判覆盖（gt-ac14）
             for d in dirs:
-                rd = os.path.realpath(os.path.expanduser(d))
-                if CWD == rd or CWD.startswith(rd + "/"): here = True
+                if lib.covers(cw, d): here = True
             roster.append({"name": os.path.basename(f)[:-3], "dirs": dirs,
                            "can_spawn": bool(re.search(r'^can_spawn:\s*true', txt, re.M)),
                            "role": rm.group(1) if rm else "worker", "here": here})

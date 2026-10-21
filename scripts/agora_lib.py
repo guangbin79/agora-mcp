@@ -57,6 +57,49 @@ def entity_dirs(txt):
     m = re.search(r'^dirs:\s*\n((?:\s+-\s+.+\n)+)', txt, re.M)
     return re.findall(r'-\s+(\S+)', m.group(1)) if m else []
 
+
+def main_repo_of(p):
+    """git worktree 的 .git 是文件（"gitdir: <main>/.git/worktrees/<name>"）→ 主 repo 路径；非 worktree → None。"""
+    g = os.path.join(p, ".git")
+    if not os.path.isfile(g): return None
+    try: line = open(g, encoding="utf-8", errors="replace").read().strip()
+    except OSError: return None
+    if not line.startswith("gitdir:"): return None
+    dd = os.path.dirname(os.path.realpath(os.path.join(p, line[7:].strip())))  # <main>/.git/worktrees
+    if os.path.basename(os.path.dirname(dd)) != ".git": return None
+    return os.path.dirname(os.path.dirname(dd))
+
+
+def covers(path, d):
+    """实体 dirs 项 d 是否覆盖 path（前缀语义，两路径均归一）。"""
+    rd = os.path.realpath(os.path.expanduser(d))
+    return path == rd or path.startswith(rd + "/")
+
+
+def resolve_entity(home, path):
+    """路径 → 实体 (name, matched_dir, projroot)；无命中 → None。
+    前缀最深优先；worktree 路径归一到主 repo 再匹配（projroot=主 repo），adjudicate/who/dispatch 唯一口径。"""
+    target = os.path.realpath(path)
+
+    def match(root):
+        best = None
+        for f in glob.glob(f"{home}/wiki/entities/*.md"):
+            if not valid_entity_name(os.path.basename(f)[:-3]): continue   # 畸形实体名不参与解析
+            txt = open(f, encoding="utf-8").read()
+            for d in entity_dirs(txt):
+                d = os.path.realpath(os.path.expanduser(d))
+                if covers(root, d) and (best is None or len(d) > len(best[1])):
+                    best = (os.path.basename(f)[:-3], d)
+        return best
+
+    hit, projroot = match(target), target
+    if hit is None:
+        mr = main_repo_of(target)
+        if mr is not None:
+            hit = match(mr)
+            if hit is not None: projroot = mr
+    return (hit[0], hit[1], projroot) if hit else None
+
 ENTITY_NAME_RE = re.compile(r'^[\w][\w.-]*\Z')   # \Z 而非 $：$ 在尾随换行前也匹配
 
 

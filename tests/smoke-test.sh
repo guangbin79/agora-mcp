@@ -1003,6 +1003,42 @@ assert d.get('dedup') is False, d
 
 rm -rf "$H4"
 
+echo "===== dispatch worktree 感知（独立论坛：名册仅主 repo 实体） ====="
+# worktree 路径派发归一到主 repo 实体 + project 取主 repo 名；陌生目录（非 worktree）仍拒（gt-ac14）
+H5=$(mktemp -d); AH5="$H5/agora"
+AGORA_HOME="$AH5" AGORA_PKG="$PKG" bash "$PKG/scripts/init.sh" >/dev/null 2>&1
+R5="$H5/repo"; mkdir -p "$R5"; cd "$R5" && git init -q . && echo FIXED > app.txt \
+  && git add -A && git -c user.name=t -c user.email=t@local commit -qm init
+W5="$H5/repo__wt-test__10212359"; git -C "$R5" worktree add -q "$W5" 2>/dev/null
+mkdir -p "$AH5/wiki/entities"
+printf -- '---\nname: tester\ndirs:\n  - %s\ncan_spawn: true\n---\n' "$R5" > "$AH5/wiki/entities/tester.md"
+(cd "$AH5" && git add -A && AGORA_MECHANICAL=1 git commit -qm entities >/dev/null)
+OUT=$(TITLE="worktree 任务" VERIFY="true" PROJECT_DIR="$W5" AGORA_HOME="$AH5" bash "$AH5/scripts/task-create.sh")
+XW=$(echo "$OUT" | sed -n 's/.*"task":"\(gt-[0-9a-f]*\)".*/\1/p')
+rm -f "$AH5"/raw/dispatches/*.live
+OUT=$(AGORA_RUNTIME=true AGORA_HOME="$AH5" bash "$AH5/scripts/dispatch.sh" --actor tester@repo --project "$W5" --task "$XW" 2>&1)
+echo "$OUT" | grep -q '"child_actor":"tester@repo"' && ok "worktree 路径派发归属主 repo 实体（project=repo）" || fail "worktree 路径派发（$OUT）"
+rm -f "$AH5"/raw/dispatches/*.live
+OUT=$(AGORA_RUNTIME=true AGORA_HOME="$AH5" bash "$AH5/scripts/dispatch.sh" --actor tester@repo --project "$H5/no-such-repo" --task "$XW" 2>&1)
+echo "$OUT" | grep -q NOT_REGISTERED && ok "陌生目录（非 worktree）仍拒派发" || fail "陌生目录应拒（$OUT）"
+# server 侧：worktree cwd 身份裁决归属主实体、写路径可用、不误注册 worktree 实体页（gt-ac14）
+cd "$W5" && python3 - "$PKG/server/agora_mcp.py" "$AH5" <<'PYEOF' && ok "worktree cwd 身份裁决归属主实体（who.you=tester@repo）" || fail "worktree cwd 身份裁决异常"
+import json, subprocess, sys, os
+p = subprocess.Popen(["python3", sys.argv[1]], env={**os.environ, "AGORA_HOME": sys.argv[2]},
+                     stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+def rpc(m, ps=None, i=1):
+    p.stdin.write(json.dumps({"jsonrpc":"2.0","id":i,"method":m,"params":ps or {}})+"\n"); p.stdin.flush()
+    return json.loads(p.stdout.readline())
+rpc("initialize", {})
+r = json.loads(rpc("tools/call", {"name":"agora_who","arguments":{}}, 2)["result"]["content"][0]["text"])
+assert r.get("you") == "tester@repo", r.get("you")
+r = json.loads(rpc("tools/call", {"name":"agora_task_create","arguments":{"title":"wt 自干"}}, 3)["result"]["content"][0]["text"])
+assert r.get("task","").startswith("gt-"), r
+p.stdin.close()
+PYEOF
+! ls "$AH5"/wiki/entities/repo__wt-*.md >/dev/null 2>&1 && ok "worktree cwd 不自动注册实体页" || fail "worktree cwd 被误注册实体页"
+rm -rf "$H5"
+
 echo "===== 身份裁决不冻结（2026-10-20 gt-9f24 事故回归） ====="
 # server 启动早于实体页覆盖：启动期 auto-register 因同名页 O_EXCL 撞名让位 → 匿名；
 # 旧代码冻结终身（共享 server 08:39 启动早于 10:14 实体页 → 派生会话写路径全拒）；

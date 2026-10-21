@@ -31,23 +31,17 @@ DEPTH="${AGORA_DEPTH:-0}"; NEXT=$((DEPTH+1))
 LIVE=$(find "$AGORA_HOME/raw/dispatches" -name '*.live' 2>/dev/null | wc -l)
 [[ $LIVE -ge $MAX_SPAWN ]] && fail QUOTA_EXCEEDED "live dispatches $LIVE >= max $MAX_SPAWN" 8
 
-# 子会话身份：名册目录前缀匹配（最深优先）
-CHILD=$(PYTHONPATH="$(cd "$(dirname "$0")" && pwd)${PYTHONPATH:+:$PYTHONPATH}" python3 - "$AGORA_HOME" "$PDIR" <<'PYEOF'
-import sys, glob, os
+# 子会话身份：名册目录前缀匹配（最深优先）；worktree 路径归一主 repo（口径在 agora_lib.resolve_entity，gt-ac14）
+R=$(PYTHONPATH="$(cd "$(dirname "$0")" && pwd)${PYTHONPATH:+:$PYTHONPATH}" python3 - "$AGORA_HOME" "$PDIR" <<'PYEOF'
+import sys, os
 import agora_lib as lib
-home, target = sys.argv[1], os.path.realpath(sys.argv[2])
-best = None
-for f in glob.glob(f"{home}/wiki/entities/*.md"):
-    if not lib.valid_entity_name(os.path.basename(f)[:-3]): continue   # 畸形实体名不参与子身份解析
-    txt = open(f, encoding="utf-8").read()
-    for d in lib.entity_dirs(txt):
-        d = os.path.expanduser(d)
-        if (target + "/").startswith(os.path.realpath(d) + "/") or target == os.path.realpath(d):
-            if best is None or len(d) > len(best[1]): best = (os.path.basename(f)[:-3], d)
-print(best[0] if best else "")
+home, path = sys.argv[1], sys.argv[2]
+r = lib.resolve_entity(home, path)
+print(f"{r[0]}\n{r[1]}\n{r[2]}" if r else "")
 PYEOF
 )
-[[ -z "$CHILD" ]] && fail NOT_REGISTERED "no roster entry for $PDIR" 9
+CHILD=$(sed -n 1p <<<"$R"); PROOT=$(sed -n 3p <<<"$R")
+[[ -z "$CHILD" || -z "$PROOT" ]] && fail NOT_REGISTERED "no roster entry for $PDIR" 9
 
 # 保险丝 4：落账（dispatched 事件）
 DID="d-$(date +%s%N | sha1sum | cut -c1-8)"
@@ -56,7 +50,7 @@ LOG="raw/dispatches/$DID.log"
 # 在场优先：目标项目已有活会话 → 只通知不派生
 # sessions.map 按机器隔离（格式：<host> <agent> <session> <ts>）——他机的活会话
 # 无法被本机通知桥触达，不算"在场"；跨机派活走 task_create + mention 异步路径
-PROJNAME=$(basename "$PDIR")
+PROJNAME=$(basename "$PROOT")
 if grep -q "^$(hostname) $CHILD " "$AGORA_HOME/scripts/sessions.map" 2>/dev/null; then
   bash "$AGORA_HOME/scripts/post.sh" --actor "$ACTOR" --project "$PROJNAME" --event ack \
     --body "dispatch $TASK notified via bridge" --mention "$CHILD" >/dev/null
