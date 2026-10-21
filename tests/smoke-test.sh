@@ -1043,7 +1043,7 @@ mkdir -p "$W5/src"
 rm -f "$AH5"/raw/dispatches/*.live
 OUT=$(AGORA_RUNTIME=true AGORA_HOME="$AH5" bash "$AH5/scripts/dispatch.sh" --actor tester@repo --project "$W5/src" --task "$XW" 2>&1)
 echo "$OUT" | grep -q '"child_actor":"tester@repo"' && ok "worktree 子目录派发归属主 repo 实体" || fail "worktree 子目录派发（$OUT）"
-cd "$W5/src" && python3 - "$PKG/server/agora_mcp.py" "$AH5" <<'PYEOF' && ok "worktree 子目录身份裁决归属主实体" || fail "worktree 子目录身份裁决异常"
+cd "$W5/src" && python3 - "$PKG/server/agora_mcp.py" "$AH5" "$XW" <<'PYEOF' && ok "worktree 子目录身份裁决归属主实体" || fail "worktree 子目录身份裁决异常"
 import json, subprocess, sys, os
 p = subprocess.Popen(["python3", sys.argv[1]], env={**os.environ, "AGORA_HOME": sys.argv[2]},
                      stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
@@ -1053,6 +1053,8 @@ def rpc(m, ps=None, i=1):
 rpc("initialize", {})
 r = json.loads(rpc("tools/call", {"name":"agora_who","arguments":{}}, 2)["result"]["content"][0]["text"])
 assert r.get("you") == "tester@repo", r.get("you")
+r = json.loads(rpc("tools/call", {"name":"agora_post","arguments":{"event":"plan","task":sys.argv[3],"body":"子目录实施计划"}}, 3)["result"]["content"][0]["text"])
+assert r.get("shard","").endswith("/repo.md"), r   # plan 落账 + project 归一主 repo 名（v1.30）
 p.stdin.close()
 PYEOF
 ls "$AH5"/wiki/entities/ | grep -q "^src\.md$" && fail "子目录 cwd 误注册 src 实体页" || ok "子目录 cwd 不误注册实体页"

@@ -77,9 +77,9 @@ PROJECT = ACTOR.split("@")[1] if ACTOR else None
 INSTRUCTIONS = f"""你已接入 Agora 广场——AI 协作的异步账本，仓库 {HOME}。
 ① 身份：{ACTOR or '未注册（只读，可 proposal 自报名）'}（按 cwd 裁决）。
 ② 开场：agora_sync → agora_check_mail → agora_board（owner=me）。
-③ 干活：task_create 建任务；post(claimed) 认领；常发 progress；done 必附 commit+evidence，verify 由机械层真跑；受阻/取消/返工/损坏/争议发 blocked/cancelled/reopened/diagnosed/escalated。
+③ 干活：task_create 建任务；post(claimed) 认领；常发 progress；派生先 post(plan) 待 ack；done 必附 commit+evidence，verify 机械层真跑；受阻/取消/返工发 blocked/cancelled/reopened/diagnosed/escalated。
 ④ 协作：agora_who 查名册再 mention；agora_history 查全程；can_spawn 者可本机 dispatch。
-⑤ 跨仓：项目外修改不径改——先查名册：未覆盖目标仓则建实体页，再 task_create(verify)→dispatch；细节读 wiki topics/delegation。
+⑤ 跨仓：项目外修改不径改——先查名册：未覆盖目标仓则建实体页，再 task_create(verify)→dispatch；细节读 topics/delegation。
 ⑥ 铁律：只经工具写广场；wiki 只改自己的页；一切只追加。细节读广场仓 docs/AGENTS.md 与 CONVENTIONS.md。"""
 
 # ---------- 工具 schema（schema 即文档） ----------
@@ -88,7 +88,7 @@ T = {"type": "object", "additionalProperties": False}
 TOOLS = [
  {"name": "agora_post", "description": "发事件（写日志唯一入口）。done 必带 commit+evidence 且机械层会真实执行 verify；claimed 撞车仍落账，仅在 derived 中标注 claim_conflict:<先认领者>；dispatched 请改用 agora_dispatch。",
   "inputSchema": {**T, "properties": {
-    "event": {"type": "string", "enum": ["claimed","done","blocked","diagnosed","escalated","retired","proposal","ack","progress","cancelled","reopened","attached"]},
+    "event": {"type": "string", "enum": ["claimed","done","blocked","diagnosed","escalated","retired","proposal","ack","progress","cancelled","reopened","attached","plan"]},
     "task": {"type": "string", "description": "gt-xxxx，任务类事件必填"},
     "commit": {"type": "string"}, "evidence": {"type": "string"},
     "conclusion": {"type": "string"}, "reason": {"type": "string"},
@@ -164,7 +164,7 @@ def call(name, a):
     if name == "agora_post":
         if not ACTOR and a.get("event") != "proposal": return None, need_actor()
         actor = ACTOR or f"anon@{os.path.basename(CWD)}"
-        args = ["--actor", actor, "--project", PROJECT or os.path.basename(CWD), "--event", a["event"]]
+        args = ["--actor", actor, "--project", PROJECT or os.path.basename(lib.main_repo_of(CWD) or CWD), "--event", a["event"]]
         for k in ("task","commit","evidence","conclusion","reason","body","idem"):
             if a.get(k): args += [f"--{k}", a[k]]
         if a.get("mention"): args += ["--mention", ",".join(a["mention"])]
@@ -255,13 +255,13 @@ def call(name, a):
     if name == "agora_who":
         lib.soft_sync(SCRIPTS, HOME)
         roster = []
+        cw = lib.main_repo_of(CWD) or CWD   # worktree cwd 归一主 repo（gt-ac14）；hoist 出实体循环
         for f in sorted(glob.glob(f"{HOME}/wiki/entities/*.md")):
             if not lib.valid_entity_name(os.path.basename(f)[:-3]): continue   # 畸形实体名不入名册
             txt = open(f, encoding="utf-8").read()
             dirs = lib.entity_dirs(txt)
             rm = re.search(r'^role:\s*(\S+)', txt, re.M)
             here = False
-            cw = lib.main_repo_of(CWD) or CWD   # worktree cwd 归一主 repo 再判覆盖（gt-ac14）
             for d in dirs:
                 if lib.covers(CWD, d) or lib.covers(cw, d): here = True   # 直判优先、归一兜底——对齐 resolve_entity 两段口径
             roster.append({"name": os.path.basename(f)[:-3], "dirs": dirs,

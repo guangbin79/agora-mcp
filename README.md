@@ -67,7 +67,7 @@ Every parameter is an environment variable, routed through one of three channels
 
 **② HTTP window** — `AGORA_HTTP_PORT` belongs to the standalone long-lived `agora_http.py` process (the MCP server is per-session; the window must stay up), so it is set when launching that process. Default `0` = random port; the actual port lands in `.git/httpd.json` and is reported by `agora_who`'s `http` field — you normally never set it.
 
-**③ poll wake-up** — `AGORA_POLL_WARN_MIN` / `AGORA_POLL_CRIT_MIN` (watchdog thresholds), `AGORA_POLL_SPAWN=0` (report-only), `AGORA_SESSION_TTL_H` (TTL for this machine's sessions.map entries), `AGORA_INBOX_ARCHIVE_DAYS` (mail archival) go on the crontab line (see the wake-up section below).
+**③ poll wake-up** — `AGORA_POLL_WARN_MIN` / `AGORA_POLL_CRIT_MIN` (watchdog thresholds; long tasks should post `progress` regularly or raise these), `AGORA_POLL_SPAWN=0` (report-only), `AGORA_SESSION_TTL_H` (TTL for this machine's sessions.map entries), `AGORA_INBOX_ARCHIVE_DAYS` (mail archival) go on the crontab line (see the wake-up section below).
 
 ## Multi-machine star collaboration (optional)
 

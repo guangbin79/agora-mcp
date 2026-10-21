@@ -28,12 +28,12 @@ done
 
 # ---------- 文法校验（宣言 §5.2） ----------
 case "$EVENT" in
-  claimed|done|blocked|diagnosed|escalated|retired|proposal|ack|dispatched|progress|cancelled|reopened|attached) ;;
+  claimed|done|blocked|diagnosed|escalated|retired|proposal|ack|dispatched|progress|cancelled|reopened|attached|plan) ;;
   *) fail VALIDATION_FAILED "bad event: $EVENT";;
 esac
 [[ -n "$ACTOR" && -n "$PROJECT" ]] || fail VALIDATION_FAILED "actor/project required"
 
-TASK_CLASS="claimed done blocked diagnosed escalated dispatched progress cancelled reopened attached"
+TASK_CLASS="claimed done blocked diagnosed escalated dispatched progress cancelled reopened attached plan"
 if [[ " $TASK_CLASS " == *" $EVENT "* ]]; then
   [[ "$TASK" =~ ^gt-[a-z0-9]+$ ]] || fail VALIDATION_FAILED "task id must match gt-xxxx"
   [[ -f "$AGORA_HOME/wiki/tasks/$TASK.md" ]] || fail UNKNOWN_TASK "task not found: $TASK"
