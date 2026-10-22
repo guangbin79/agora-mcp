@@ -76,23 +76,30 @@ PROJECT = ACTOR.split("@")[1] if ACTOR else None
 
 def dispatched_child_actor():
     """gt-eefd：dispatch 派生子会话的会话上下文身份。dispatch.sh spawn 时经 env 注入
-    AGORA_LIVEF（<run>.live 标记）与 AGORA_PDIR（派发目标目录），子会话的 MCP server
-    继承同一 env——据此反查 dispatched 记录取 child_actor，不依赖调用方自觉显式传 actor
-    （共享 MCP 进程级 ACTOR 归 dispatcher，gt-49fb）。按 run id 反查而非按 task：
-    同任务多派（gt-b12d 实证）各 run 天然不歧义。非派生子会话返回 None，走进程级 ACTOR。"""
-    livef, pdir = os.environ.get("AGORA_LIVEF"), os.environ.get("AGORA_PDIR")
-    if not (livef or pdir):
-        return None
-    run = os.path.basename(livef)[:-5] if livef else ""   # 剥 .live 后缀 = dispatch id
-    if run:
-        for _, _, e in lib.iter_events(HOME):
-            if e.get("event") == "dispatched" and os.path.basename(e.get("run", "")) == f"{run}.log":
-                r = lib.resolve_entity(HOME, e.get("target") or pdir or "")
-                if e.get("child") and r:
-                    return f"{e['child']}@{os.path.basename(r[2])}"
-                break   # 记录在但残缺 → 退按目标目录现裁决
-    r = lib.resolve_entity(HOME, pdir or "")   # 记录缺失（清理/跨日）兜底：与 dispatch.sh 同口径
-    return f"{r[0]}@{os.path.basename(r[2])}" if r else None
+    AGORA_LIVEF（raw/dispatches/<DID>.log.live）与 AGORA_PDIR（派发目标目录），子会话的
+    MCP server 继承同一 env——据此反查 dispatched 记录取 child_actor，不依赖调用方自觉
+    显式传 actor（共享 MCP 进程级 ACTOR 归 dispatcher，gt-49fb）。按 run id 反查而非按
+    task：同任务多派（gt-b12d 实证）各 run 天然不歧义。非派生子会话返回 None，走进程级
+    ACTOR。读失败/记录残缺一律退化（pdir 现裁决或 None），绝不拖垮 server。"""
+    try:
+        livef, pdir = os.environ.get("AGORA_LIVEF"), os.environ.get("AGORA_PDIR")
+        if not (livef or pdir):
+            return None
+        run = os.path.basename(livef or "")   # 实形状 <DID>.log.live——后缀逐层剥
+        for suf in (".live", ".log"):
+            if run.endswith(suf):
+                run = run[:-len(suf)]
+        if run:
+            for _, _, e in lib.iter_events(HOME):
+                if e.get("event") == "dispatched" and os.path.basename(e.get("run", "")) == f"{run}.log":
+                    r = lib.resolve_entity(HOME, e.get("target") or pdir or "")
+                    if e.get("child") and lib.valid_entity_name(e["child"]) and r:
+                        return f"{e['child']}@{os.path.basename(r[2])}"
+                    break   # 记录在但 child 非法/残缺 → 退按目标目录现裁决
+        r = lib.resolve_entity(HOME, pdir or "")   # 记录缺失（清理/跨日）兜底：与 dispatch.sh 同口径
+        return f"{r[0]}@{os.path.basename(r[2])}" if r else None
+    except Exception:
+        return None   # 账本坏字节/并发替换等读失败：退进程级 ACTOR，不拖垮 server
 
 INSTRUCTIONS = f"""你已接入 Agora 广场——AI 协作的异步账本，仓库 {HOME}。
 ① 身份：{ACTOR or '未注册（只读，可 proposal 自报名）'}（按 cwd 裁决）。
