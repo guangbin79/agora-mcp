@@ -1174,6 +1174,19 @@ assert you() == "late@late", f"后到覆盖应立即生效，实际 {you()}"
 p.stdin.close()
 PYEOF
 
+echo "===== task_create idem 幂等＋注入守卫（全量委托 L1 Task1） ====="
+rm -f /tmp/agora-pwn-l1
+OUT=$(TITLE="幂等任务k1" VERIFY="true" PROJECT_DIR="$PROJ" IDEM=k1 TC)
+ID1=$(echo "$OUT" | sed -n 's/.*"task":"\(gt-[0-9a-f]*\)".*/\1/p')
+OUT=$(TITLE="幂等任务k1-retry" VERIFY="true" PROJECT_DIR="$PROJ" IDEM=k1 TC)
+ID2=$(echo "$OUT" | sed -n 's/.*"task":"\(gt-[0-9a-f]*\)".*/\1/p')
+[[ -n "$ID1" && "$ID1" = "$ID2" ]] && ok "idem 同 key 重试返回同任务" || fail "idem 同 key 重试返回同任务"
+OUT=$( TITLE='x$(touch /tmp/agora-pwn-l1)' VERIFY="true" PROJECT_DIR="$PROJ" TC ) >/dev/null 2>&1
+test ! -f /tmp/agora-pwn-l1 && ok "title \$(..) 不被求值（守卫）" || fail "title \$(..) 不被求值（守卫）"
+grep -q "^idem: k1$" "$AGORA_HOME/wiki/tasks/$ID1.md" && ok "idem 写入 frontmatter" || fail "idem 写入 frontmatter"
+OUT=$(TITLE="无幂等键" TC); NID=$(echo "$OUT" | sed -n 's/.*"task":"\(gt-[0-9a-f]*\)".*/\1/p')
+grep -q "^idem:" "$AGORA_HOME/wiki/tasks/$NID.md" && fail "无 IDEM 不写 idem 行" || ok "无 IDEM 不写 idem 行"
+
 echo
 echo "===== 结果: $PASS 通过, $FAIL 失败 ====="
 rm -rf "$T"

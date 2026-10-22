@@ -149,7 +149,8 @@ TOOLS = [
     "verify": {"type": "string", "description": "完成判据命令，done 时机械层真跑"},
     "project_dir": {"type": "string", "description": "verify 执行目录"},
     "deps": {"type": "array", "items": {"type": "string"}},
-    "parent": {"type": "string", "description": "父任务 gt-xxxx；被引用即成为计划根，看板自动聚合进度"}},
+    "parent": {"type": "string", "description": "父任务 gt-xxxx；被引用即成为计划根，看板自动聚合进度"},
+    "idem": {"type": "string", "description": "可选幂等键；同 key 重复创建原样返回既有任务（重试不建新页）"}},
    "required": ["title"]}},
  {"name": "agora_history", "description": "任务全程事件链（审计/复盘/交接用，按权威顺序返回；读前自动与远端尽力同步）。",
   "inputSchema": {**T, "properties": {
@@ -276,6 +277,7 @@ def call(name, a):
         if a.get("project_dir"): env["PROJECT_DIR"] = a["project_dir"]
         if a.get("deps"): env["DEPS"] = ",".join(a["deps"])
         if a.get("parent"): env["PARENT"] = a["parent"]
+        if a.get("idem"): env["IDEM"] = a["idem"]
         return run_script("task-create.sh", [], extra_env=env)
     if name == "agora_history":
         lib.soft_sync(SCRIPTS, HOME)

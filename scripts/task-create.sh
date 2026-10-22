@@ -15,7 +15,7 @@ AGORA_HOME="${AGORA_HOME:-$HOME/agora}"
 
 [ -z "${TITLE:-}" ] && { echo '{"error":"TITLE_REQUIRED","hint":"需要 TITLE"}' >&2; exit 2; }
 # frontmatter 单行字段禁止换行/回车（否则撕裂 yaml 头，甚至注入伪字段）
-for v in TITLE VERIFY PROJECT_DIR PARENT; do
+for v in TITLE VERIFY PROJECT_DIR PARENT IDEM; do
   case "${!v:-}" in
     *$'\n'*|*$'\r'*) echo "{\"error\":\"VALIDATION_FAILED\",\"hint\":\"$v 不得含换行\"}" >&2; exit 2;;
   esac
@@ -66,8 +66,21 @@ if [ -n "${DEPS:-}" ]; then
 fi
 
 # 同锁写入 + commit（与 post.sh 串行化；有远端时锁内先 pull 后 push）
-(
+# 子 shell 输出被捕获：短路路径输出既有任务 JSON（exit 0 只退出子 shell），外层见非空即透传终止
+SHORTOUT=$( (
   flock -w "${AGORA_LOCK_WAIT:-5}" 9 || { echo '{"error":"LOCK_TIMEOUT"}' >&2; exit 3; }
+  # idem 幂等短路（锁内：防并发同 key 双建）——命中即原样返回既有任务，零写入零 commit。
+  # 只在 frontmatter（首对 --- 之间）精确行匹配，防正文伪命中
+  if [ -n "${IDEM:-}" ]; then
+    for f in "$TASKS_DIR"/gt-*.md; do
+      [ -f "$f" ] || continue
+      if sed -n '2,/^---$/p' "$f" | grep -qxF "idem: $IDEM"; then
+        FOUND=$(basename "$f" .md)
+        printf '{"task":"%s","path":"wiki/tasks/%s.md"}' "$FOUND" "$FOUND"
+        exit 0
+      fi
+    done
+  fi
   bash "$AGORA_HOME/scripts/sync.sh" pre >/dev/null 2>&1 || true
   {
     echo "---"
@@ -78,6 +91,7 @@ fi
     [ -n "${VERIFY:-}" ]       && echo "verify: $VERIFY"
     [ -n "${PROJECT_DIR:-}" ]  && echo "project_dir: $PROJECT_DIR"
     [ -n "${PARENT:-}" ]       && echo "parent: $PARENT"
+    [ -n "${IDEM:-}" ]         && echo "idem: $IDEM"
     echo "---"
     echo
     echo "${BODY:-（无描述）}"
@@ -88,6 +102,7 @@ fi
   git add "wiki/tasks/$TASK_ID.md" board/
   git commit -q -m "task: create $TASK_ID $TITLE"
   bash "$AGORA_HOME/scripts/sync.sh" post >/dev/null 2>&1 || true
-) 9>"$AGORA_HOME/.git/post.lock"
+) 9>"$AGORA_HOME/.git/post.lock" )
+if [ -n "$SHORTOUT" ]; then printf '%s\n' "$SHORTOUT"; exit 0; fi
 
 printf '{"task":"%s","path":"wiki/tasks/%s.md"}\n' "$TASK_ID" "$TASK_ID"
