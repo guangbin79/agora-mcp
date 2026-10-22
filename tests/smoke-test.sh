@@ -1246,6 +1246,54 @@ DSPQ --task "$F1" 2>&1 | grep -q QUOTA_EXCEEDED && ok "配额账本化：4 活�
 POST tester@proj --event cancelled --task "$D1" >/dev/null; POST tester@proj --event cancelled --task "$E1" >/dev/null
 DSPQ --task "$F1" 2>/dev/null | grep -q '"mode":"spawned"' && ok "终态出集后配额放行" || fail "终态出集后配额放行"
 
+echo "===== dispatch 发射加固＋凭据预写＋wt 免在场优先（全量委托 L1 Task4） ====="
+rm -f "$AGORA_HOME/scripts/sessions.map"
+for _t in $(python3 - "$AGORA_HOME" <<'PYEOF'
+import glob, re, sys
+home = sys.argv[1]; disp, terminal = {}, set()
+for f in sorted(glob.glob(f"{home}/log/*/*.md")):
+    try: lines = open(f, encoding="utf-8").read().splitlines()
+    except OSError: continue
+    for line in lines:
+        m = re.search(r"task:(gt-[0-9a-f]{4,})", line)
+        if not m: continue
+        t = m.group(1)
+        if "event:dispatched" in line: disp[t] = 1
+        elif any(f"event:{e}" in line for e in ("done","merged","cancelled")): terminal.add(t)
+print(" ".join(t for t in disp if t not in terminal))
+PYEOF
+); do POST tester@proj --event cancelled --task "$_t" >/dev/null 2>&1; done
+FAKE="$T/fakert"; printf '#!/bin/bash\n[ "$1" = "--version" ] && exit 0\nexit 1\n' > "$FAKE"; chmod +x "$FAKE"
+DSPRAW() { AGORA_RUNTIME="${RT:-echo}" AGORA_VERIFY_WIN="${VW:-2}" bash "$AGORA_HOME/scripts/dispatch.sh" --actor tester@proj --project "${P:-$PROJ}" "$@"; }
+# ① 假 runtime 秒死：SPAWN_DIED＋diagnosed（日志尾）＋恰一次重试＋凭据重写
+G1=$(TID "$(TITLE="加固" VERIFY=true PROJECT_DIR="$PROJ" WT=1 IDEM=t4a TC)")
+WTD1=$(ls -d "$T"/proj__wt-${G1}__* | head -1)
+mkdir -p "$WTD1/.omo/agora-delegation"; echo wrong-content > "$WTD1/.omo/agora-delegation/${G1}.md"
+OUT=$(RT="$FAKE" DSPRAW --task "$G1" 2>&1); RC=$?
+[[ $RC -ne 0 ]] && echo "$OUT" | grep -q SPAWN_DIED && ok "假 runtime 秒死→SPAWN_DIED 失败 JSON" || fail "假 runtime 秒死→SPAWN_DIED 失败 JSON"
+RL=$(ls -t "$AGORA_HOME"/raw/dispatches/*.log | head -1)
+[ "$(grep -c '^EXIT:' "$RL")" -eq 2 ] && ok "恰一次重试（两 EXIT 行）" || fail "恰一次重试（EXIT 行数 $(grep -c '^EXIT:' "$RL" 2>/dev/null)）"
+cat "$AGORA_HOME"/log/*/*.md | grep -F "task:$G1" | grep "event:diagnosed" | grep -q "EXIT" && ok "diagnosed 落账含日志尾" || fail "diagnosed 落账含日志尾"
+grep -q "wrong-content" "$WTD1/.omo/agora-delegation/${G1}.md" && fail "凭据预写重写（错内容被覆盖）" || ok "凭据预写重写（错内容被覆盖）"
+grep -q "^gt: $G1$" "$WTD1/.omo/agora-delegation/${G1}.md" && grep -q "^worktree: $WTD1$" "$WTD1/.omo/agora-delegation/${G1}.md" && ok "凭据内容含 gt-id＋树路径" || fail "凭据内容含 gt-id＋树路径"
+POST tester@proj --event cancelled --task "$G1" >/dev/null 2>&1
+# ② wt 免在场优先：sessions.map 在场 → wt 任务仍 spawned；非 wt 对照 notified
+printf '%s tester sess-fake %s\n' "$(hostname)" "$(date +%s)" >> "$AGORA_HOME/scripts/sessions.map"
+G2=$(TID "$(TITLE="在场豁免" VERIFY=true PROJECT_DIR="$PROJ" WT=1 IDEM=t4b TC)")
+DSPRAW --task "$G2" 2>/dev/null | grep -q '"mode":"spawned"' && ok "wt 任务免在场优先（spawned）" || fail "wt 任务免在场优先"
+N1=$(TID "$(TITLE="在场对照" VERIFY=true PROJECT_DIR="$PROJ" TC)")
+DSPRAW --task "$N1" 2>/dev/null | grep -q '"mode":"notified"' && ok "非 wt 在场优先照旧（notified 对照）" || fail "非 wt 在场对照"
+# ③ 预检零残留：project_dir 不存在 → SPAWN_PRECHECK 且账本无 dispatched
+N2=$(TID "$(TITLE="预检" VERIFY=true PROJECT_DIR="$PROJ" TC)")
+OUT=$(P="$PROJ/dead" DSPRAW --task "$N2" 2>&1)
+echo "$OUT" | grep -q SPAWN_PRECHECK && ok "预检失败 SPAWN_PRECHECK" || fail "预检失败 SPAWN_PRECHECK"
+cat "$AGORA_HOME"/log/*/*.md | grep -F "task:$N2" | grep -q "event:dispatched" && fail "预检失败零落账" || ok "预检失败零落账"
+# ④ 树误删→锚点重建→spawn 成功
+G3=$(TID "$(TITLE="重建" VERIFY=true PROJECT_DIR="$PROJ" WT=1 IDEM=t4c TC)")
+WTD3=$(ls -d "$T"/proj__wt-${G3}__* | head -1); rm -rf "$WTD3"
+DSPRAW --task "$G3" 2>/dev/null | grep -q '"mode":"spawned"' && ok "树误删自动重建（spawned）" || fail "树误删自动重建"
+[ -d "$WTD3" ] && ok "重建树目录存在" || fail "重建树目录存在"
+
 echo
 echo "===== 结果: $PASS 通过, $FAIL 失败 ====="
 rm -rf "$T"
