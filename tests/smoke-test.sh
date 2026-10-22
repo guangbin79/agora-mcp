@@ -1187,6 +1187,26 @@ grep -q "^idem: k1$" "$AGORA_HOME/wiki/tasks/$ID1.md" && ok "idem 写入 frontma
 OUT=$(TITLE="无幂等键" TC); NID=$(echo "$OUT" | sed -n 's/.*"task":"\(gt-[0-9a-f]*\)".*/\1/p')
 grep -q "^idem:" "$AGORA_HOME/wiki/tasks/$NID.md" && fail "无 IDEM 不写 idem 行" || ok "无 IDEM 不写 idem 行"
 
+echo "===== wt 建树＋wt_dir/wt_host＋回填归一（全量委托 L1 Task2） ====="
+OUT=$(TITLE="wt任务" VERIFY="true" PROJECT_DIR="$PROJ" WT=1 IDEM=wt-a TC)
+WTID=$(echo "$OUT" | sed -n 's/.*"task":"\(gt-[0-9a-f]*\)".*/\1/p')
+WTD=$(ls -d "$T"/proj__wt-${WTID}__* 2>/dev/null | head -1)
+[ -n "$WTD" ] && [ -d "$WTD" ] && ok "WT=1 建树（命名 proj__wt-gt-x__ts）" || fail "WT=1 建树（命名 proj__wt-gt-x__ts）"
+[ -n "$(git -C "$PROJ" branch --list "wt/$WTID")" ] && ok "分支 wt/gt-x 生成" || fail "分支 wt/gt-x 生成"
+grep -q "^wt: true$" "$AGORA_HOME/wiki/tasks/$WTID.md" && grep -q "^wt_dir: $WTD$" "$AGORA_HOME/wiki/tasks/$WTID.md" && grep -q "^wt_host: $(hostname)$" "$AGORA_HOME/wiki/tasks/$WTID.md" && ok "frontmatter wt/wt_dir/wt_host" || fail "frontmatter wt/wt_dir/wt_host"
+OUT=$(TITLE="无wt任务" VERIFY="true" PROJECT_DIR="$PROJ" TC); PLAIN=$(echo "$OUT" | sed -n 's/.*"task":"\(gt-[0-9a-f]*\)".*/\1/p')
+grep -q "^wt" "$AGORA_HOME/wiki/tasks/$PLAIN.md" && fail "无 WT 不写 wt 字段" || ok "无 WT 不写 wt 字段"
+# 回填归一：PROJECT_DIR 传 worktree 路径 → 项目页按主仓注册命中回填
+printf -- '---\nname: proj\npath: %s\nverify: "true"\n---\n' "$PROJ" > "$AGORA_HOME/wiki/projects/proj.md"
+git -C "$PROJ" worktree add -q "$T/projwt2" 2>/dev/null
+OUT=$(TITLE="归一回填" PROJECT_DIR="$T/projwt2" WT=1 IDEM=wt-b TC)
+grep -q '^verify: "true"$' "$AGORA_HOME/wiki/tasks/$(echo "$OUT" | sed -n 's/.*"task":"\(gt-[0-9a-f]*\)".*/\1/p').md" && ok "worktree 路径 verify 回填归一命中" || fail "worktree 路径 verify 回填归一命中"
+# 建树幂等：同 IDEM+WT 重试 → 树仅一棵
+OUT=$(TITLE="wt任务重试" VERIFY="true" PROJECT_DIR="$PROJ" WT=1 IDEM=wt-a TC)
+[ "$(ls -d "$T"/proj__wt-${WTID}__* 2>/dev/null | wc -l)" -eq 1 ] && ok "同 IDEM+WT 重试不建第二棵树" || fail "同 IDEM+WT 重试不建第二棵树"
+# WT 无 project_dir 拒
+TITLE="坏wt" WT=1 TC 2>/dev/null; [[ $? -eq 2 ]] && ok "WT 缺 project_dir 被拒(rc=2)" || fail "WT 缺 project_dir 被拒(rc=2)"
+
 echo
 echo "===== 结果: $PASS 通过, $FAIL 失败 ====="
 rm -rf "$T"

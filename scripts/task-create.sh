@@ -24,10 +24,15 @@ if [ -n "${VERIFY:-}" ] && [ -z "${PROJECT_DIR:-}" ]; then
   echo '{"error":"VERIFY_NEEDS_PROJECT_DIR","hint":"verify 与 project_dir 必须同时提供"}' >&2; exit 2
 fi
 # verify fallback：项目页注册过该目录的默认 verify 则回填（编排大脑无需重复提供验收命令）
+# 归一口径：PROJECT_DIR 经 agora_lib.main_repo_of 归一到主仓再匹配（worktree 路径同样命中，设计 §五）
 if [ -n "${PROJECT_DIR:-}" ] && [ -z "${VERIFY:-}" ]; then
   VERIFY=$(AGORA_HOME="$AGORA_HOME" PROJECT_DIR="$PROJECT_DIR" python3 - <<'PYEOF'
-import os, glob, re
-home = os.environ["AGORA_HOME"]; target = os.path.realpath(os.path.expanduser(os.environ["PROJECT_DIR"]))
+import os, glob, re, sys
+home = os.environ["AGORA_HOME"]
+sys.path.insert(0, os.path.join(home, "scripts"))
+import agora_lib
+raw = os.path.expanduser(os.environ["PROJECT_DIR"])
+target = os.path.realpath(agora_lib.main_repo_of(raw) or raw)
 for f in glob.glob(f"{home}/wiki/projects/*.md"):
     txt = open(f, encoding="utf-8").read()
     pm = re.search(r'^path:\s*(\S+)\s*$', txt, re.M)
@@ -39,6 +44,10 @@ PYEOF
 fi
 if [ -n "${PROJECT_DIR:-}" ] && [ -z "${VERIFY:-}" ]; then
   echo '{"error":"PROJECT_DIR_NEEDS_VERIFY","hint":"project_dir 需要 verify：显式提供，或在该目录的项目页（wiki/projects/）注册默认 verify"}' >&2; exit 2
+fi
+# WT=1（agora 建树）必须有 verify 合同——只给可验收任务建树（设计 §五）
+if [ "${WT:-0}" = "1" ] && { [ -z "${PROJECT_DIR:-}" ] || [ -z "${VERIFY:-}" ]; }; then
+  echo '{"error":"WT_NEEDS_VERIFY","hint":"WT=1 需要 project_dir 与 verify（agora 只给可验收任务建树）"}' >&2; exit 2
 fi
 [ -n "${PROJECT_DIR:-}" ] && [ ! -d "$PROJECT_DIR" ] && {
   echo "{\"error\":\"PROJECT_DIR_NOT_FOUND\",\"hint\":\"目录不存在: $PROJECT_DIR\"}" >&2; exit 2; }
@@ -59,6 +68,30 @@ for i in 1 2 3 4 5; do
 done
 [ -f "$TASKS_DIR/$TASK_ID.md" ] && { echo '{"error":"ID_ALLOC_FAILED","hint":"重试"}' >&2; exit 2; }
 
+# idem 命中判定（唯一口径：frontmatter 精确行匹配）——锁外快路径与锁内权威复检共用
+idem_lookup() {
+  [ -n "${IDEM:-}" ] || return 1
+  for f in "$TASKS_DIR"/gt-*.md; do
+    [ -f "$f" ] || continue
+    if sed -n '2,/^---$/p' "$f" | grep -qxF "idem: $IDEM"; then basename "$f" .md; return 0; fi
+  done
+  return 1
+}
+# idem 快路径（无锁预检）：命中直接短路返回，连树都不建（权威判定仍在锁内复检兜并发窗口）
+FOUND=$(idem_lookup) && { printf '{"task":"%s","path":"wiki/tasks/%s.md"}\n' "$FOUND" "$FOUND"; exit 0; }
+
+# WT=1：agora 建专用 worktree（flock 外——外部 git 操作不占账本锁；v1.29 修订边界）
+# 命名 ../<REPO>__wt-<gt-id>__<MMDDHHMM>（agora 自有命名域，GC 前缀口径）；分支 wt/<gt-id>
+WT_DIR=""; WT_MAIN=""
+if [ "${WT:-0}" = "1" ]; then
+  MR=$(realpath "$PROJECT_DIR")
+  WT_MAIN=$(PYTHONPATH="$AGORA_HOME/scripts" python3 -c 'import sys, agora_lib
+p = sys.argv[1]; m = agora_lib.main_repo_of(p); print(m or p)' "$MR")
+  WT_DIR="$(dirname "$WT_MAIN")/$(basename "$WT_MAIN")__wt-${TASK_ID}__$(date +%m%d%H%M)"
+  git -C "$WT_MAIN" worktree add -q -b "wt/$TASK_ID" "$WT_DIR" \
+    || { echo '{"error":"WORKTREE_CREATE_FAILED","hint":"git worktree add 失败（详见 stderr）"}' >&2; exit 2; }
+fi
+
 # deps yaml 行
 DEPS_YAML="[]"
 if [ -n "${DEPS:-}" ]; then
@@ -69,18 +102,14 @@ fi
 # 子 shell 输出被捕获：短路路径输出既有任务 JSON（exit 0 只退出子 shell），外层见非空即透传终止
 SHORTOUT=$( (
   flock -w "${AGORA_LOCK_WAIT:-5}" 9 || { echo '{"error":"LOCK_TIMEOUT"}' >&2; exit 3; }
-  # idem 幂等短路（锁内：防并发同 key 双建）——命中即原样返回既有任务，零写入零 commit。
-  # 只在 frontmatter（首对 --- 之间）精确行匹配，防正文伪命中
-  if [ -n "${IDEM:-}" ]; then
-    for f in "$TASKS_DIR"/gt-*.md; do
-      [ -f "$f" ] || continue
-      if sed -n '2,/^---$/p' "$f" | grep -qxF "idem: $IDEM"; then
-        FOUND=$(basename "$f" .md)
-        printf '{"task":"%s","path":"wiki/tasks/%s.md"}' "$FOUND" "$FOUND"
-        exit 0
-      fi
-    done
-  fi
+  # idem 权威复检（锁内）：快路径后、建树后到此的并发窗口兜底——他方同 key 已落页则
+  # 拆本方刚建的树（分支含 WIP 不可能有——刚建未派发）并返回既有任务
+  FOUND=$(idem_lookup) && {
+    [ -n "$WT_DIR" ] && { git -C "$WT_MAIN" worktree remove --force "$WT_DIR" 2>/dev/null
+                          git -C "$WT_MAIN" branch -D "wt/$TASK_ID" 2>/dev/null; }
+    printf '{"task":"%s","path":"wiki/tasks/%s.md"}' "$FOUND" "$FOUND"
+    exit 0
+  }
   bash "$AGORA_HOME/scripts/sync.sh" pre >/dev/null 2>&1 || true
   {
     echo "---"
@@ -92,6 +121,7 @@ SHORTOUT=$( (
     [ -n "${PROJECT_DIR:-}" ]  && echo "project_dir: $PROJECT_DIR"
     [ -n "${PARENT:-}" ]       && echo "parent: $PARENT"
     [ -n "${IDEM:-}" ]         && echo "idem: $IDEM"
+    [ "${WT:-0}" = "1" ] && { echo "wt: true"; echo "wt_dir: $WT_DIR"; echo "wt_host: $(hostname)"; }
     echo "---"
     echo
     echo "${BODY:-（无描述）}"
