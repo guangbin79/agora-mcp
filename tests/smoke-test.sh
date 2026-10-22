@@ -1313,6 +1313,72 @@ POST tester@proj --event merged --task "$V2" >/dev/null 2>&1 \
 POST tester@proj --event merged --task "$V1" --commit "$H" >/dev/null \
   && ok "merged 缺省 branch=project_dir 当前分支" || fail "merged 缺省 branch"
 
+echo "===== merge.sh 合并闭环（全量委托 L1 Task6） ====="
+rm -f "$AGORA_HOME/scripts/sessions.map"
+for _t in $(python3 - "$AGORA_HOME" <<'PYEOF'
+import glob, re, sys
+home = sys.argv[1]; disp, terminal = {}, set()
+for f in sorted(glob.glob(f"{home}/log/*/*.md")):
+    try: lines = open(f, encoding="utf-8").read().splitlines()
+    except OSError: continue
+    for line in lines:
+        m = re.search(r"task:(gt-[0-9a-f]{4,})", line)
+        if not m: continue
+        t = m.group(1)
+        if "event:dispatched" in line: disp[t] = 1
+        elif any(f"event:{e}" in line for e in ("done","merged","cancelled")): terminal.add(t)
+print(" ".join(t for t in disp if t not in terminal))
+PYEOF
+); do POST tester@proj --event cancelled --task "$_t" >/dev/null 2>&1; done
+MERGE() { bash "$AGORA_HOME/scripts/merge.sh" --actor tester@proj --task "$1"; }
+LEDEV() { cat "$AGORA_HOME"/log/*/*.md 2>/dev/null | grep -F "task:$1" | grep "event:$2"; }
+MKWT() { TID "$(TITLE="$1" VERIFY="$2" PROJECT_DIR="$PROJ" WT=1 IDEM="$3" TC)"; }
+WTCOMMIT() { echo "$2" > "$1/marker-$3"; git -C "$1" add -A >/dev/null; git -C "$1" -c user.name=t -c user.email=t@l commit -qm "$3"; }
+# ① 跨仓正常 ff 合并＋merged＋清树
+M1=$(MKWT "合并" "grep -q MERGED \$PWD/main-file" t6a); W1=$(ls -d "$T"/proj__wt-${M1}__*)
+echo MERGED > "$W1/main-file"; git -C "$W1" add -A; git -C "$W1" -c user.name=t -c user.email=t@l commit -qm m1
+MERGE "$M1" 2>/dev/null | grep -q merged && ok "① ff 合并闭环 JSON" || fail "① ff 合并闭环"
+grep -q MERGED "$PROJ/main-file" && ok "① 主仓含合并内容" || fail "① 主仓含合并内容"
+LEDEV "$M1" merged | grep -q "event:merged" && ok "① merged 落账" || fail "① merged 落账"
+[ ! -d "$W1" ] && [ -z "$(git -C "$PROJ" branch --list "wt/$M1")" ] && ok "① 树已清＋分支已删" || fail "① 树已清＋分支已删"
+# ② 集成 verify FAIL→原子回滚＋blocked＋reopened
+M2=$(MKWT "回滚" "false" t6b); W2=$(ls -d "$T"/proj__wt-${M2}__*)
+WTCOMMIT "$W2" x m2; PRE2=$(git -C "$PROJ" rev-parse HEAD)
+MERGE "$M2" >/dev/null 2>&1 && fail "② verify FAIL 拒（fail JSON）" || ok "② verify FAIL 拒（fail JSON）"
+[ "$(git -C "$PROJ" rev-parse HEAD)" = "$PRE2" ] && ok "② 主支零痕迹（原子回滚）" || fail "② 主支零痕迹"
+LEDEV "$M2" blocked | grep -q "event:blocked" && LEDEV "$M2" reopened | grep -q "event:reopened" && ok "② blocked→reopened 落账" || fail "② blocked→reopened 落账"
+# ③ non-ff→NOT_FF＋blocked＋reopened
+M3=$(MKWT "非快进" "true" t6c); W3=$(ls -d "$T"/proj__wt-${M3}__*)
+WTCOMMIT "$W3" x m3; echo ahead > "$PROJ/ahead-file"; git -C "$PROJ" add -A; git -C "$PROJ" -c user.name=t -c user.email=t@l commit -qm ahead
+OUT=$(MERGE "$M3" 2>&1); echo "$OUT" | grep -q NOT_FF && ok "③ non-ff NOT_FF" || fail "③ non-ff NOT_FF"
+LEDEV "$M3" blocked | grep -q "event:blocked" && LEDEV "$M3" reopened | grep -q "event:reopened" && ok "③ blocked→reopened" || fail "③ blocked→reopened"
+# ④ 删树→锚点重建→合并
+M4=$(MKWT "重建合并" "true" t6d); W4=$(ls -d "$T"/proj__wt-${M4}__*)
+WTCOMMIT "$W4" x m4; rm -rf "$W4"
+MERGE "$M4" 2>/dev/null | grep -q merged && ok "④ 树误删重建后合并" || fail "④ 树误删重建后合并"
+# ⑤ 幂等补账：目标已含→仅补 merged、HEAD 不动
+M5=$(MKWT "补账" "true" t6e); W5=$(ls -d "$T"/proj__wt-${M5}__*)
+WTCOMMIT "$W5" x m5; H5B=$(git -C "$PROJ" rev-parse HEAD)
+git -C "$PROJ" merge -q --ff-only "wt/$M5" 2>/dev/null; H5M=$(git -C "$PROJ" rev-parse HEAD)
+MERGE "$M5" 2>/dev/null | grep -q merged && ok "⑤ 幂等补账 JSON" || fail "⑤ 幂等补账"
+[ "$(git -C "$PROJ" rev-parse HEAD)" = "$H5M" ] && [ "$(LEDEV "$M5" merged | grep -c merged)" -eq 1 ] && ok "⑤ 无第二次合并痕迹（HEAD 不动＋merged 恰一条）" || fail "⑤ 幂等痕迹"
+[ ! -d "$W5" ] && ok "⑤ 幂等路径也清树" || fail "⑤ 幂等路径也清树"
+# ⑥ 同仓链：MC(dispatcher_task=MB) 合并目标=上游 wt 分支（下游先 rebase 到上游分支——链式协议形态）
+MB=$(MKWT "上游" "true" t6f); WB=$(ls -d "$T"/proj__wt-${MB}__*)
+MC=$(MKWT "下游" "true" t6g); WC=$(ls -d "$T"/proj__wt-${MC}__*)
+AGORA_RUNTIME=echo bash "$AGORA_HOME/scripts/dispatch.sh" --actor tester@proj --project "$PROJ" --task "$MC" --dispatcher-task "$MB" >/dev/null 2>&1
+WTCOMMIT "$WB" up upstream; WTCOMMIT "$WC" down downstream
+git -C "$WC" rebase -q "wt/$MB"   # 下游基到上游分支（否则两独立分支分叉必非快进）
+DC=$(git -C "$WC" rev-parse HEAD); PREMAIN=$(git -C "$PROJ" rev-parse HEAD)
+MERGE "$MC" 2>/dev/null | grep -q merged && ok "⑥ 同仓链合并 JSON" || fail "⑥ 同仓链合并"
+git -C "$WB" merge-base --is-ancestor "$DC" HEAD 2>/dev/null && ok "⑥ 上游树已含下游提交" || fail "⑥ 上游树已含下游提交"
+[ "$(git -C "$PROJ" rev-parse HEAD)" = "$PREMAIN" ] && ok "⑥ 主仓不动" || fail "⑥ 主仓不动"
+# ⑦ 脏目标守卫
+M7=$(MKWT "脏目标" "true" t6h); W7=$(ls -d "$T"/proj__wt-${M7}__*)
+WTCOMMIT "$W7" x m7; printf 'dirty\n' >> "$PROJ/app.txt"   # 已跟踪文件的未提交修改（untracked 已放行）
+MERGE "$M7" 2>&1 | grep -q TARGET_DIRTY && ok "⑦ 脏目标（tracked 修改）拒绝合并" || fail "⑦ 脏目标拒绝合并"
+git -C "$PROJ" checkout -q -- app.txt
+
 echo
 echo "===== 结果: $PASS 通过, $FAIL 失败 ====="
 rm -rf "$T"
