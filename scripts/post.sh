@@ -13,14 +13,14 @@ export LC_ALL=C
 fail() { python3 -c 'import json,sys; print(json.dumps({"code":sys.argv[1],"message":sys.argv[2]}, ensure_ascii=False), file=sys.stderr)' "$1" "$2"; exit "${3:-2}"; }   # 值经 json.dumps 全量转义：stderr 恒为合法 JSON（含任意控制字符），无手写转义可漂移
 # ---------- 参数解析 ----------
 ACTOR=""; PROJECT=""; EVENT=""; TASK=""; COMMIT=""; EVIDENCE=""
-CONCLUSION=""; REASON=""; BODY=""; MENTION=""; IDEM=""; TARGET=""; CHILD=""; RUN=""; DTASK=""
+CONCLUSION=""; REASON=""; BODY=""; MENTION=""; IDEM=""; TARGET=""; CHILD=""; RUN=""; DTASK=""; BRANCH=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --actor) ACTOR="$2";; --project) PROJECT="$2";; --event) EVENT="$2";;
     --task) TASK="$2";; --commit) COMMIT="$2";; --evidence) EVIDENCE="$2";;
     --conclusion) CONCLUSION="$2";; --reason) REASON="$2";; --body) BODY="$2";;
     --mention) MENTION="$2";; --idem) IDEM="$2";; --target) TARGET="$2";;
-    --child) CHILD="$2";; --run) RUN="$2";; --dispatcher-task) DTASK="$2";;
+    --child) CHILD="$2";; --run) RUN="$2";; --dispatcher-task) DTASK="$2";; --branch) BRANCH="$2";;
     *) fail VALIDATION_FAILED "unknown arg: $1";;
   esac; shift 2
 done
@@ -28,12 +28,12 @@ done
 
 # ---------- 文法校验（宣言 §5.2） ----------
 case "$EVENT" in
-  claimed|done|blocked|diagnosed|escalated|retired|proposal|ack|dispatched|progress|cancelled|reopened|attached|plan) ;;
+  claimed|done|blocked|diagnosed|escalated|retired|proposal|ack|dispatched|progress|cancelled|reopened|attached|plan|merged) ;;
   *) fail VALIDATION_FAILED "bad event: $EVENT";;
 esac
 [[ -n "$ACTOR" && -n "$PROJECT" ]] || fail VALIDATION_FAILED "actor/project required"
 
-TASK_CLASS="claimed done blocked diagnosed escalated dispatched progress cancelled reopened attached plan"
+TASK_CLASS="claimed done blocked diagnosed escalated dispatched progress cancelled reopened attached plan merged"
 if [[ " $TASK_CLASS " == *" $EVENT "* ]]; then
   [[ "$TASK" =~ ^gt-[a-z0-9]+$ ]] || fail VALIDATION_FAILED "task id must match gt-xxxx"
   [[ -f "$AGORA_HOME/wiki/tasks/$TASK.md" ]] || fail UNKNOWN_TASK "task not found: $TASK"
@@ -44,6 +44,7 @@ fi
 [[ "$EVENT" == diagnosed && -z "$CONCLUSION" ]] && fail VALIDATION_FAILED "diagnosed requires conclusion"
 [[ "$EVENT" == retired && -z "$REASON" ]] && fail VALIDATION_FAILED "retired requires reason"
 [[ "$EVENT" == dispatched && -z "$TARGET" ]] && fail VALIDATION_FAILED "dispatched requires target"
+[[ "$EVENT" == merged && -z "$COMMIT" ]] && fail VALIDATION_FAILED "merged requires commit（合并后分支 HEAD；集成 verify 由 merge.sh 顺序契约前置）"
 [[ "$MENTION" == *all* ]] && fail VALIDATION_FAILED "@all forbidden in v0"
 # mention 即 inbox 目录名：拒绝路径成分（../ 与 /），防路由写出 inbox/ 之外
 if [[ -n "$MENTION" ]]; then
@@ -54,7 +55,7 @@ if [[ -n "$MENTION" ]]; then
   done
 fi
 # 字段值禁止 | 与换行（ABNF: value 不含 "|" 与 LF）——MENTION/ACTOR/PROJECT/IDEM 同环（账本行完整性；idem 换行=整行伪造原语）
-for v in "$TASK" "$COMMIT" "$EVIDENCE" "$CONCLUSION" "$REASON" "$BODY" "$TARGET" "$CHILD" "$RUN" "$DTASK" "$MENTION" "$ACTOR" "$PROJECT" "$IDEM"; do
+for v in "$TASK" "$COMMIT" "$EVIDENCE" "$CONCLUSION" "$REASON" "$BODY" "$TARGET" "$CHILD" "$RUN" "$DTASK" "$BRANCH" "$MENTION" "$ACTOR" "$PROJECT" "$IDEM"; do
   [[ "$v" == *"|"* || "$v" == *$'\n'* ]] && fail VALIDATION_FAILED "field value contains | or newline"
 done
 # IDEM 亦占 \S+ 槽（idem:）：空白撕裂行解析
@@ -71,18 +72,33 @@ if [[ "$EVENT" == dispatched ]]; then
     && fail VALIDATION_FAILED "bad dispatcher name from actor: $_DN（实体名不得含 | / .. , \\ 或换行）"
 fi
 
-# ---------- 验证门（宣言 §6：done 由机械层执行 verify 背书） ----------
+# ---------- 验证门（宣言 §6：done 由机械层执行 verify 背书；两段制——wt_dir 优先） ----------
 DERIVED=()
 if [[ "$EVENT" == done ]]; then
   TASK_PAGE="$AGORA_HOME/wiki/tasks/$TASK.md"
   VERIFY=$(grep -m1 '^verify:' "$TASK_PAGE" | sed 's/^verify:[[:space:]]*//; s/^"\(.*\)"$/\1/' || true)
   PROJDIR=$(grep -m1 '^project_dir:' "$TASK_PAGE" | sed 's/^project_dir:[[:space:]]*//; s/^"\(.*\)"$/\1/' || true)
+  WTDIR=$(grep -m1 '^wt_dir:' "$TASK_PAGE" | sed 's/^wt_dir:[[:space:]]*//; s/^"\(.*\)"$/\1/' || true)
   [[ -z "$VERIFY" ]] && fail VALIDATION_FAILED "task $TASK has no verify: command"
-  VERIFY_OUT=$(cd "${PROJDIR:-$AGORA_HOME}" && timeout "${AGORA_VERIFY_TIMEOUT:-300}" bash -c "$VERIFY" 2>&1 | tail -c 2048) && RC=0 || RC=$?
+  VERIFY_OUT=$(cd "${WTDIR:-${PROJDIR:-$AGORA_HOME}}" && timeout "${AGORA_VERIFY_TIMEOUT:-300}" bash -c "$VERIFY" 2>&1 | tail -c 2048) && RC=0 || RC=$?
   if [[ $RC -ne 0 ]]; then
     EVENT="verify_failed"; DERIVED+=("verify_failed")
     VERIFY_NOTE=$(echo "$VERIFY_OUT" | tail -5 | tr '\n' ' ' | tr -d '|')
   fi
+fi
+
+# ---------- merged 机械校验（v1.32：顺序契约——post.sh 不跑 verify，只验 commit==目标分支 HEAD 防绕过） ----------
+if [[ "$EVENT" == "merged" ]]; then
+  MPAGE="$AGORA_HOME/wiki/tasks/$TASK.md"
+  [[ -f "$MPAGE" ]] || fail VALIDATION_FAILED "task page missing: $TASK"
+  MPDIR=$(grep -m1 '^project_dir:' "$MPAGE" | sed 's/^project_dir:[[:space:]]*//; s/^"\(.*\)"$/\1/' || true)
+  MBR="$BRANCH"
+  if [ -z "$MBR" ]; then
+    MBR=$(git -C "$MPDIR" symbolic-ref -q --short HEAD 2>/dev/null || echo HEAD)
+  fi
+  MHEAD=$(git -C "$MPDIR" rev-parse --verify --quiet "$MBR" 2>/dev/null) \
+    || fail VALIDATION_FAILED "branch 不可解析: $MBR（project_dir=$MPDIR）"
+  [[ "$COMMIT" = "$MHEAD" ]] || fail MERGE_COMMIT_MISMATCH "commit≠branch HEAD（$COMMIT vs $MBR=$MHEAD）" 4
 fi
 
 # ---------- 线性化点：flock 内完成 拉取+校验+写入+提交+推导+推送 ----------

@@ -1294,6 +1294,25 @@ WTD3=$(ls -d "$T"/proj__wt-${G3}__* | head -1); rm -rf "$WTD3"
 DSPRAW --task "$G3" 2>/dev/null | grep -q '"mode":"spawned"' && ok "树误删自动重建（spawned）" || fail "树误删自动重建"
 [ -d "$WTD3" ] && ok "重建树目录存在" || fail "重建树目录存在"
 
+echo "===== verify 两段制＋merged 事件（全量委托 L1 Task5） ====="
+V1=$(TID "$(TITLE="树上验收" VERIFY="test -f ok-marker" PROJECT_DIR="$PROJ" WT=1 IDEM=t5a TC)")
+WTV1=$(ls -d "$T"/proj__wt-${V1}__* | head -1)
+touch "$WTV1/ok-marker"   # 只在树内——主仓没有
+POST tester@proj --event claimed --task "$V1" >/dev/null
+POST tester@proj --event done --task "$V1" --commit HEAD --evidence "树上过门" >/dev/null \
+  && ok "done verify 在 wt_dir 执行（树内标记命中）" || fail "done verify 在 wt_dir 执行"
+V2=$(TID "$(TITLE="merged载体" VERIFY="true" PROJECT_DIR="$PROJ" TC)")
+POST tester@proj --event claimed --task "$V2" >/dev/null
+BR=$(git -C "$PROJ" symbolic-ref --short HEAD); H=$(git -C "$PROJ" rev-parse HEAD)
+POST tester@proj --event merged --task "$V2" --commit "$H" --branch "$BR" >/dev/null \
+  && ok "merged 落账（commit==branch HEAD）" || fail "merged 落账"
+POST tester@proj --event merged --task "$V2" --commit "0000000000000000000000000000000000000000" --branch "$BR" >/dev/null 2>&1 \
+  && fail "merged commit≠HEAD 被拒" || ok "merged commit≠HEAD 被拒"
+POST tester@proj --event merged --task "$V2" >/dev/null 2>&1 \
+  && fail "merged 缺 commit 被拒" || ok "merged 缺 commit 被拒"
+POST tester@proj --event merged --task "$V1" --commit "$H" >/dev/null \
+  && ok "merged 缺省 branch=project_dir 当前分支" || fail "merged 缺省 branch"
+
 echo
 echo "===== 结果: $PASS 通过, $FAIL 失败 ====="
 rm -rf "$T"
