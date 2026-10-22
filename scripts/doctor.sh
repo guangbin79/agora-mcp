@@ -177,4 +177,26 @@ if [[ -f "$AGORA_HOME/.git/MERGE_HEAD" ]]; then
   fi
 else ok "合并状态（无中断残留）"; fi
 
+# 9. 孤儿 wt 树（__wt-gt-* 目录在、任务页缺失——FMEA B4：只报告不删，poll GC 亦不删此类）
+WT_ORPHAN=$(PYTHONPATH="$(cd "$(dirname "$0")" && pwd)${PYTHONPATH:+:$PYTHONPATH}" python3 - <<'PYEOF'
+import glob, os, re
+import agora_lib as lib
+HOME = os.environ["AGORA_HOME"]
+roots = set()
+for f in glob.glob(f"{HOME}/wiki/entities/*.md") + glob.glob(f"{HOME}/wiki/projects/*.md"):
+    txt = open(f, encoding="utf-8").read()
+    for d in lib.entity_dirs(txt) + re.findall(r'^path:\s*(\S+)\s*$', txt, re.M):
+        roots.add(os.path.dirname(os.path.realpath(os.path.expanduser(d))))
+out = []
+for r in sorted(roots):
+    for wd in glob.glob(os.path.join(r, "*__wt-gt-*")):
+        if not os.path.isdir(wd): continue
+        m = re.search(r'__wt-(gt-[0-9a-f]{4,})__', os.path.basename(wd))
+        if m and not os.path.exists(f"{HOME}/wiki/tasks/{m.group(1)}.md"):
+            out.append(wd)
+print("\n".join(out))
+PYEOF
+)
+[[ -z "$WT_ORPHAN" ]] && ok "孤儿 wt 树（缺任务页）" || warn "缺任务页的 wt 树（B4 只报告不删）: $WT_ORPHAN（人工确认后 git worktree remove）"
+
 [[ $FAIL -eq 0 ]] && echo "== doctor: ALL GREEN ==" || { echo "== doctor: FAILURES PRESENT =="; exit 1; }

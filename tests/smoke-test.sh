@@ -1379,6 +1379,130 @@ WTCOMMIT "$W7" x m7; printf 'dirty\n' >> "$PROJ/app.txt"   # 已跟踪文件的�
 MERGE "$M7" 2>&1 | grep -q TARGET_DIRTY && ok "⑦ 脏目标（tracked 修改）拒绝合并" || fail "⑦ 脏目标拒绝合并"
 git -C "$PROJ" checkout -q -- app.txt
 
+echo "===== poll 补档：重派/孤儿/豁免/GC/host（全量委托 L1 Task7） ====="
+rm -f "$AGORA_HOME/scripts/sessions.map"
+for _t in $(python3 - "$AGORA_HOME" <<'PYEOF'
+import glob, re, sys
+home = sys.argv[1]; disp, terminal = {}, set()
+for f in sorted(glob.glob(f"{home}/log/*/*.md")):
+    try: lines = open(f, encoding="utf-8").read().splitlines()
+    except OSError: continue
+    for line in lines:
+        m = re.search(r"task:(gt-[0-9a-f]{4,})", line)
+        if not m: continue
+        t = m.group(1)
+        if "event:dispatched" in line: disp[t] = 1
+        elif any(f"event:{e}" in line for e in ("done","merged","cancelled")): terminal.add(t)
+print(" ".join(t for t in disp if t not in terminal))
+PYEOF
+); do POST tester@proj --event cancelled --task "$_t" >/dev/null 2>&1; done
+POLLT() { AGORA_MERGE_WAIT_MIN=0 AGORA_ORPHAN_MIN=0 AGORA_WT_GRACE_MIN=0 AGORA_DISPATCH_TIMEOUT=0 \
+           AGORA_MAX_SPAWN=9 AGORA_RUNTIME=echo bash "$AGORA_HOME/scripts/poll.sh" 2>/dev/null; }
+LEV() { cat "$AGORA_HOME"/log/*/*.md 2>/dev/null | grep -E "(^|[|] )task:$1( |$)" | grep "event:$2"; }
+MKWT2() { TID "$(TITLE="$1" VERIFY="true" PROJECT_DIR="$PROJ" WT=1 IDEM="$2" TC)"; }
+# ① done-unmerged：poll → diagnosed（未合并）＋恢复性重派上游
+PU=$(MKWT2 "上游u" t7a); PD_=$(MKWT2 "下游d" t7b)
+AGORA_RUNTIME=echo bash "$AGORA_HOME/scripts/dispatch.sh" --actor tester@proj --project "$PROJ" --task "$PD_" --dispatcher-task "$PU" >/dev/null 2>&1
+WU=$(ls -d "$T"/proj__wt-${PD_}__*); echo w > "$WU/wfile"; git -C "$WU" add -A; git -C "$WU" -c user.name=t -c user.email=t@l commit -qm d
+POST tester@proj --event claimed --task "$PD_" >/dev/null
+POST tester@proj --event done --task "$PD_" --commit HEAD --evidence ok >/dev/null
+POLLT >/dev/null
+LEV "$PD_" diagnosed | grep -q "未合并" && ok "① done-unmerged→diagnosed" || fail "① done-unmerged→diagnosed"
+[ "$(LEV "$PU" dispatched | grep -c event:dispatched)" -ge 1 ] && ok "① 上游被恢复性重派" || fail "① 上游被恢复性重派"
+git -C "$PROJ" merge -q --ff-only "wt/$PD_" 2>/dev/null
+POST tester@proj --event merged --task "$PD_" --commit "$(git -C "$PROJ" rev-parse HEAD)" --branch "$(git -C "$PROJ" symbolic-ref --short HEAD)" >/dev/null
+POLLT >/dev/null
+[ "$(LEV "$PD_" diagnosed | grep -c "未合并")" -eq 1 ] && ok "① merged 后不再诊断" || fail "① merged 后不再诊断"
+# ② 重派上限：3 次后第 4 次 escalated、不再派
+QU=$(MKWT2 "上限u" t7c); QD=$(MKWT2 "上限d" t7d)
+AGORA_RUNTIME=echo bash "$AGORA_HOME/scripts/dispatch.sh" --actor tester@proj --project "$PROJ" --task "$QD" --dispatcher-task "$QU" >/dev/null 2>&1
+WQ=$(ls -d "$T"/proj__wt-${QD}__*); echo q > "$WQ/qfile"; git -C "$WQ" add -A; git -C "$WQ" -c user.name=t -c user.email=t@l commit -qm q
+POST tester@proj --event claimed --task "$QD" >/dev/null
+POST tester@proj --event done --task "$QD" --commit HEAD --evidence ok >/dev/null
+for i in 1 2 3 4; do POLLT >/dev/null; done
+ND=$(LEV "$QU" dispatched | grep -c event:dispatched)
+LEV "$QD" escalated | grep -q "event:escalated" && [ "$ND" -eq 3 ] && ok "② 3 次重派后第 4 次 escalated（重派 $ND 次）" || fail "② 上限（dispatched=$ND）"
+# ③ 孤儿 dispatched（无 run log）→ diagnosed＋重派；有 log 不命中
+OO=$(MKWT2 "孤儿" t7e)
+POST tester@proj --event dispatched --task "$OO" --target "$PROJ" --child tester --run "raw/dispatches/d-orphan1.log" >/dev/null
+OL=$(MKWT2 "有log" t7f)
+POST tester@proj --event dispatched --task "$OL" --target "$PROJ" --child tester --run "raw/dispatches/d-orphan2.log" >/dev/null
+mkdir -p "$AGORA_HOME/raw/dispatches"; echo x > "$AGORA_HOME/raw/dispatches/d-orphan2.log"
+POLLT >/dev/null
+LEV "$OO" diagnosed | grep -q "孤儿" && ok "③ 孤儿 dispatched→diagnosed＋重派" || fail "③ 孤儿档"
+[ "$(LEV "$OL" diagnosed | grep -c "孤儿")" -eq 0 ] && ok "③ 有 run log 不命中孤儿档" || fail "③ 有 log 误命中"
+# ④ GC：终态＋宽限尽＋clean→删；dirty→留；宽限内→留；缺页树 doctor 报告
+GT=$(MKWT2 "gc净树" t7g); WG=$(ls -d "$T"/proj__wt-${GT}__*)
+echo g > "$WG/gfile"; git -C "$WG" add -A; git -C "$WG" -c user.name=t -c user.email=t@l commit -qm g
+POST tester@proj --event claimed --task "$GT" >/dev/null
+POST tester@proj --event done --task "$GT" --commit HEAD --evidence ok >/dev/null
+git -C "$PROJ" merge -q --ff-only "wt/$GT" 2>/dev/null
+POST tester@proj --event merged --task "$GT" --commit "$(git -C "$PROJ" rev-parse HEAD)" --branch "$(git -C "$PROJ" symbolic-ref --short HEAD)" >/dev/null
+DT=$(MKWT2 "gc脏树" t7h); WD=$(ls -d "$T"/proj__wt-${DT}__*)
+echo d > "$WD/dfile"; git -C "$WD" add -A; git -C "$WD" -c user.name=t -c user.email=t@l commit -qm d
+POST tester@proj --event claimed --task "$DT" >/dev/null
+POST tester@proj --event done --task "$DT" --commit HEAD --evidence ok >/dev/null
+git -C "$PROJ" merge -q --ff-only "wt/$DT" 2>/dev/null
+POST tester@proj --event merged --task "$DT" --commit "$(git -C "$PROJ" rev-parse HEAD)" --branch "$(git -C "$PROJ" symbolic-ref --short HEAD)" >/dev/null
+echo uncommitted > "$WD/dirty-file"
+GR=$(MKWT2 "gc宽限" t7i); WR=$(ls -d "$T"/proj__wt-${GR}__*)
+echo r > "$WR/rfile"; git -C "$WR" add -A; git -C "$WR" -c user.name=t -c user.email=t@l commit -qm r
+POST tester@proj --event claimed --task "$GR" >/dev/null
+POST tester@proj --event done --task "$GR" --commit HEAD --evidence ok >/dev/null
+git -C "$PROJ" merge -q --ff-only "wt/$GR" 2>/dev/null
+POST tester@proj --event merged --task "$GR" --commit "$(git -C "$PROJ" rev-parse HEAD)" --branch "$(git -C "$PROJ" symbolic-ref --short HEAD)" >/dev/null
+AGORA_MERGE_WAIT_MIN=0 AGORA_ORPHAN_MIN=0 AGORA_WT_GRACE_MIN=9999 AGORA_DISPATCH_TIMEOUT=0 AGORA_MAX_SPAWN=9 AGORA_RUNTIME=echo \
+  bash "$AGORA_HOME/scripts/poll.sh" >/dev/null 2>&1   # 宽限大：全留
+[ -d "$WR" ] && ok "④ 宽限内不删" || fail "④ 宽限内不删"
+POLLT >/dev/null   # 宽限 0：净树删、脏树留
+[ ! -d "$WG" ] && ok "④ 终态＋宽限尽＋clean→删" || fail "④ 净树未删"
+[ -d "$WD" ] && ok "④ dirty 树只报告不删" || fail "④ dirty 树被误删"
+rm -f "$WD/dirty-file"
+OR=$(MKWT2 "缺页树" t7j); WO=$(ls -d "$T"/proj__wt-${OR}__*)
+rm -f "$AGORA_HOME/wiki/tasks/$OR.md"
+bash "$AGORA_HOME/scripts/doctor.sh" 2>/dev/null | grep -q "__wt-" && ok "④ 缺任务页树 doctor 报告" || fail "④ doctor 未报告缺页树"
+[ -d "$WO" ] && ok "④ 缺页树不删" || fail "④ 缺页树被误删"
+# ⑤ parent 链 watchdog ×4 豁免：改写观察时钟模拟 45min 无事件
+PT_=$(TID "$(TITLE="豁免母" TC)"); CN=$(TID "$(TITLE="豁免子" PARENT="$PT_" TC)")
+POST tester@proj --event claimed --task "$PT_" >/dev/null; POST tester@proj --event claimed --task "$CN" >/dev/null
+AGORA_MERGE_WAIT_MIN=9999 AGORA_ORPHAN_MIN=9999 AGORA_WT_GRACE_MIN=9999 AGORA_DISPATCH_TIMEOUT=9999 \
+  bash "$AGORA_HOME/scripts/poll.sh" >/dev/null 2>&1   # 只为武装观察时钟
+python3 - "$AGORA_HOME" <<'PYEOF'
+import json, os, sys, time
+f = f"{sys.argv[1]}/.git/poll-state.json"
+s = json.load(open(f))
+for t, e in s.get("_activity", {}).items():
+    if isinstance(e, dict): e["since"] = time.time() - 45*60
+json.dump(s, open(f, "w"))
+PYEOF
+AGORA_MERGE_WAIT_MIN=9999 AGORA_ORPHAN_MIN=9999 AGORA_WT_GRACE_MIN=9999 AGORA_DISPATCH_TIMEOUT=9999 \
+  bash "$AGORA_HOME/scripts/poll.sh" >/dev/null 2>&1
+[ -z "$(LEV "$PT_" diagnosed)" ] && [ -n "$(LEV "$CN" diagnosed)" ] \
+  && ok "⑤ parent 链挂活子任务→母任务 ×4 豁免（子正常诊断）" || fail "⑤ 豁免口径"
+# ⑥ wt_host 异机→mention 拾取跳过
+HO=$(MKWT2 "异机" t7k)
+sed -i "s/^wt_host: .*/wt_host: other-host-99/" "$AGORA_HOME/wiki/tasks/$HO.md"
+AGORA_HOME="$AGORA_HOME" python3 - "$AGORA_HOME" "$HO" <<'PYEOF'
+import os, sys, time
+home, task = sys.argv[1], sys.argv[2]
+name = "tester"
+os.makedirs(f"{home}/inbox/{name}", exist_ok=True)
+open(f"{home}/inbox/{name}/{int(time.time()*1e9):019d}.md", "w").write(
+    f"- from:x@y | ts:0 | ref:x | summary:todo {task}\n")
+PYEOF
+R=$(AGORA_MERGE_WAIT_MIN=9999 AGORA_ORPHAN_MIN=9999 AGORA_WT_GRACE_MIN=9999 AGORA_DISPATCH_TIMEOUT=9999 \
+  bash "$AGORA_HOME/scripts/poll.sh" 2>/dev/null)
+echo "$R" | grep -q "$HO" && echo "$R" | grep -q "wt_host" && [ -z "$(LEV "$HO" dispatched)" ] \
+  && ok "⑥ wt_host 异机任务拾取跳过（held）" || fail "⑥ host 限定"
+# ⑦ stale-live 回归（既有档）
+SL=$(MKWT2 "滞留" t7l)
+POST tester@proj --event claimed --task "$SL" >/dev/null
+POST tester@proj --event dispatched --task "$SL" --target "$PROJ" --child tester --run "raw/dispatches/d-stale.log" >/dev/null
+touch "$AGORA_HOME/raw/dispatches/d-stale.log.live"; touch -d '2 hours ago' "$AGORA_HOME/raw/dispatches/d-stale.log.live"
+AGORA_MERGE_WAIT_MIN=9999 AGORA_ORPHAN_MIN=9999 AGORA_WT_GRACE_MIN=9999 AGORA_DISPATCH_TIMEOUT=0 \
+  bash "$AGORA_HOME/scripts/poll.sh" >/dev/null 2>&1
+LEV "$SL" diagnosed | grep -q "滞留" && ok "⑦ .live 滞留→diagnosed（既有档回归）" || fail "⑦ stale-live"
+
 echo
 echo "===== 结果: $PASS 通过, $FAIL 失败 ====="
 rm -rf "$T"

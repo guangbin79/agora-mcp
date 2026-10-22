@@ -46,6 +46,10 @@ HOME = os.environ["AGORA_HOME"]
 WARN = int(os.environ.get("AGORA_POLL_WARN_MIN", "20"))
 CRIT = int(os.environ.get("AGORA_POLL_CRIT_MIN", "40"))
 LIVE_TIMEOUT = int(os.environ.get("AGORA_DISPATCH_TIMEOUT", "30"))
+MERGE_WAIT = int(os.environ.get("AGORA_MERGE_WAIT_MIN", "15"))
+REDISPATCH_MAX = int(os.environ.get("AGORA_REDISPATCH_MAX", "3"))
+ORPHAN_MIN = int(os.environ.get("AGORA_ORPHAN_MIN", "10"))
+WT_GRACE_MIN = int(os.environ.get("AGORA_WT_GRACE_MIN", "60"))
 TTL_H = int(os.environ.get("AGORA_SESSION_TTL_H", "24"))
 ARCH_D = int(os.environ.get("AGORA_INBOX_ARCHIVE_DAYS", "90"))
 SPAWN = os.environ.get("AGORA_POLL_SPAWN", "1") != "0"
@@ -83,7 +87,9 @@ def task_last_refs():
 
 report = {"poll": "ok", "host": HOST, "stalled": [], "suspicious": [], "escalated": [],
           "reopened": [], "spawned": [], "held": [], "stale_live": 0,
-          "sessions_reaped": 0, "mails_archived": 0}
+          "sessions_reaped": 0, "mails_archived": 0,
+          "merge_wait_diag": [], "redispatched": [], "escalated_merge": [],
+          "orphan_diag": [], "wt_removed": [], "wt_kept_dirty": [], "wt_kept_grace": []}
 
 now = time.time()
 
@@ -115,6 +121,45 @@ def task_dispatcher(task):
         if m: return m.group(1)
     return None
 
+def scan_tasks():
+    """task -> {"dispatched":[(actor,run,dispatcher_task)...], "has":set(events), "last":event}。
+    账本推导唯一口径（重派/孤儿/GC/豁免共用）；文件序+行序=时间序近似。"""
+    tasks = {}
+    for f in sorted(glob.glob(f"{HOME}/log/*/*.md")):
+        with open(f, encoding="utf-8") as fh:
+            for line in fh:
+                e = lib.parse_event(line)
+                if not e: continue
+                t = e.get("task") or ""
+                if not re.fullmatch(r"gt-[0-9a-f]+", t): continue
+                d = tasks.setdefault(t, {"dispatched": [], "has": set(), "last": None, "done_open": False})
+                d["last"] = e["event"]
+                d["has"].add(e["event"])
+                if e["event"] == "done": d["done_open"] = True          # done 未闭：merged/cancelled/reopened 才清
+                elif e["event"] in ("merged", "cancelled", "reopened"): d["done_open"] = False
+                if e["event"] == "dispatched":
+                    d["dispatched"].append((e.get("actor", ""), e.get("run", ""), e.get("dispatcher_task", "")))
+    return tasks
+
+TASKS = scan_tasks()
+TERMINALS = {"done", "merged", "cancelled"}
+
+# ×4 豁免集（设计 §六 watchdog）：任务被「活 dispatched 的 dispatcher_task」指向，
+# 或为 in-progress 任务的 parent/deps 上游 —— 有活下级的等待不算 stalled
+exempt = set()
+for t, d in TASKS.items():
+    if d["has"] & TERMINALS or not d["dispatched"]: continue
+    for _, _, up in d["dispatched"]:
+        if up: exempt.add(up)
+for t in {x for x, _ in inprog}:
+    p = f"{HOME}/wiki/tasks/{t}.md"
+    if os.path.exists(p):
+        txt = open(p, encoding="utf-8").read()
+        pm = re.search(r'^parent:\s*(gt-[0-9a-f]+)', txt, re.M)
+        if pm: exempt.add(pm.group(1))
+        dm = re.search(r'^deps:\s*\[([^\]]*)\]', txt, re.M)
+        if dm: exempt.update(re.findall(r'gt-[0-9a-f]+', dm.group(1)))
+
 for task, owner in inprog:
     cur = refs.get(task)
     fp = cur[0] if cur else "none"  # 无事件（仅任务页）也纳入跟踪，自首次观察起计时
@@ -123,8 +168,10 @@ for task, owner in inprog:
         e = {"last_ref": fp, "since": now}   # 初见 / 有新事件：活性时钟归零
         act[task] = e
     age = (now - float(e.get("since", now))) / 60
-    if age <= CRIT:
-        if age > WARN:
+    crit_t = CRIT * 4 if task in exempt else CRIT   # 链上等待豁免：阈值 ×4
+    warn_t = crit_t // 2
+    if age <= crit_t:
+        if age > warn_t:
             report["suspicious"].append({"task": task, "owner": owner, "age_min": int(age)})
         continue
     # 跨机撞窗守卫：发诊断前再见一次全网账本；任务有了新事件（他机看门狗/认领者
@@ -215,6 +262,14 @@ for f in sorted(glob.glob(f"{HOME}/wiki/entities/*.md")):
         task = m.group(1) if m else None
         if not task or not re.search(rf'^- {re.escape(task)}\b', todo_txt, re.M):
             continue  # 无任务 / 已被认领 / 已终结 —— 只推进水位
+        # wt_host 限定（设计 §五）：跨机 wt 任务不本地拾取（他机的树本地不可用）
+        tp = f"{HOME}/wiki/tasks/{task}.md"
+        if os.path.exists(tp):
+            hm = re.search(r'^wt_host:\s*(\S+)', open(tp, encoding="utf-8").read(), re.M)
+            if hm and hm.group(1) != HOST:
+                report["held"].append({"entity": name, "task": task,
+                                       "reason": f"wt_host={hm.group(1)}≠{HOST}，跨机 wt 任务不本地拾取"})
+                continue
         if not (can_spawn and SPAWN):
             report["held"].append({"entity": name, "task": task,
                                    "reason": "can_spawn=false" if not can_spawn else "POLL_SPAWN=0"})
@@ -229,6 +284,112 @@ for f in sorted(glob.glob(f"{HOME}/wiki/entities/*.md")):
             report["held"].append({"entity": name, "task": task,
                                    "reason": r.stderr.strip().splitlines()[-1][:120] if r.stderr else "dispatch failed"})
     if new: state[name] = os.path.basename(new[-1])
+
+# ---------- ②c done-unmerged 恢复性重派档（设计 §六 定案 ii：poll 重派上游 dispatcher） ----------
+mw = state.setdefault("_merge_wait", {})
+for t, d in TASKS.items():
+    page = f"{HOME}/wiki/tasks/{t}.md"
+    txt = open(page, encoding="utf-8").read() if os.path.exists(page) else ""
+    if "wt_dir:" not in txt:
+        mw.pop(t, None); continue
+    # done_open＝done 后无 merged/cancelled/reopened（诊断/blocked 不打断跟踪）
+    if not d.get("done_open") or "merged" in d["has"]:
+        mw.pop(t, None); continue
+    e = mw.get(t)
+    if not isinstance(e, dict):
+        e = {"since": now, "n": 0}; mw[t] = e
+    if (now - float(e.get("since", now))) / 60 < MERGE_WAIT: continue
+    run("sync.sh", ["pre"])   # 撞窗守卫：发诊前再见一次全网账本
+    d2 = scan_tasks().get(t)
+    if not d2 or not d2.get("done_open") or "merged" in d2["has"]:
+        mw.pop(t, None); continue
+    ups = [x[2] for x in d["dispatched"] if x[2]]
+    disp_actor = d["dispatched"][-1][0] if d["dispatched"] else "watchdog"
+    n = int(e.get("n", 0)) + 1
+    if n > REDISPATCH_MAX:
+        r = run("post.sh", ["--actor", WATCHDOG, "--project", "watchdog", "--event", "escalated",
+                            "--task", t,
+                            "--conclusion", f"done 未合并超限：{t} 已 {n-1} 次恢复性重派仍无 merged（上限 {REDISPATCH_MAX}），请 operator/派单方 {disp_actor} 介入",
+                            "--mention", disp_actor.split("@")[0]])
+        if r.returncode == 0: mw.pop(t, None)
+        report["escalated_merge"].append({"task": t, "n": n, "ok": r.returncode == 0})
+        continue
+    r = run("post.sh", ["--actor", WATCHDOG, "--project", "watchdog", "--event", "diagnosed",
+                        "--task", t,
+                        "--conclusion", f"done 未合并：{t} 已 done 且超 {MERGE_WAIT}min 无 merged（第 {n}/{REDISPATCH_MAX} 次提醒），dispatcher 请评审 diff 后 merge.sh 闭环"])
+    if ups and r.returncode == 0 and SPAWN:
+        up = ups[-1]
+        upage = f"{HOME}/wiki/tasks/{up}.md"
+        if os.path.exists(upage):
+            upd = re.search(r'^project_dir:\s*(\S+)', open(upage, encoding="utf-8").read(), re.M)
+            if upd:
+                boot = (f"恢复性重派：你的下级任务 {t} 已 done 未合并。先 agora_history(task={t}) 自查，"
+                        f"再评审其 diff（任务页 wt_dir 的树），然后 bash {HOME}/scripts/merge.sh"
+                        f" --actor {disp_actor} --task {t} 闭环；若 non-ff 先在原树 rebase 到合并目标分支"
+                        f"再重走 verify。完成后继续你自己的任务。")
+                r2 = run("dispatch.sh", ["--actor", disp_actor, "--project", upd.group(1),
+                                         "--task", up, "--prompt", boot])
+                if r2.returncode == 0:
+                    report["redispatched"].append({"upstream": up, "downstream": t, "n": n})
+    mw[t] = {"since": now, "n": n}
+    report["merge_wait_diag"].append({"task": t, "n": n})
+
+# ---------- ②d 孤儿 dispatched 档（FMEA B3：落账后 spawn 前崩溃——run log 缺失＝spawn 未执行） ----------
+orph = state.setdefault("_orphan", {})
+for t, d in TASKS.items():
+    if not d["dispatched"]: orph.pop(t, None); continue
+    if "diagnosed" in d["has"] or d["has"] & TERMINALS:
+        orph.pop(t, None); continue
+    _, runf, _ = d["dispatched"][-1]
+    if runf and os.path.exists(os.path.join(HOME, runf)):
+        orph.pop(t, None); continue
+    e = orph.get(t)
+    if not isinstance(e, dict): e = {"since": now, "n": 0}; orph[t] = e
+    if (now - float(e.get("since", now))) / 60 < ORPHAN_MIN: continue
+    actor = d["dispatched"][-1][0] or "watchdog"
+    n = int(e.get("n", 0)) + 1
+    if n > REDISPATCH_MAX:
+        r = run("post.sh", ["--actor", WATCHDOG, "--project", "watchdog", "--event", "escalated",
+                            "--task", t, "--conclusion", f"孤儿 dispatched 超限：{t} 多轮无 run log（上限 {REDISPATCH_MAX}），请介入",
+                            "--mention", actor.split("@")[0]])
+        if r.returncode == 0: orph.pop(t, None)
+        report["escalated_merge"].append({"task": t, "orphan": True, "n": n, "ok": r.returncode == 0})
+        continue
+    r = run("post.sh", ["--actor", WATCHDOG, "--project", "watchdog", "--event", "diagnosed",
+                        "--task", t,
+                        "--conclusion", f"孤儿 dispatched：{t} 已落账派发但 run log 缺失（spawn 未执行，第 {n}/{REDISPATCH_MAX} 次），恢复性重派"])
+    page = f"{HOME}/wiki/tasks/{t}.md"
+    if r.returncode == 0 and SPAWN and os.path.exists(page):
+        upd = re.search(r'^project_dir:\s*(\S+)', open(page, encoding="utf-8").read(), re.M)
+        if upd:
+            run("dispatch.sh", ["--actor", actor, "--project", upd.group(1), "--task", t,
+                                "--prompt", RECHECK])
+    orph[t] = {"since": now, "n": n}
+    report["orphan_diag"].append({"task": t, "n": n})
+
+# ---------- ④c wt 树 GC（终态＋宽限＋clean→删；dirty/宽限内→报告；缺任务页树归 doctor 只报告） ----------
+gcst = state.setdefault("_wtgc", {})
+for page in glob.glob(f"{HOME}/wiki/tasks/*.md"):
+    t = os.path.basename(page)[:-3]
+    txt = open(page, encoding="utf-8").read()
+    wm = re.search(r'^wt_dir:\s*(\S+)', txt, re.M)
+    if not wm or not os.path.isdir(wm.group(1)): continue
+    d = TASKS.get(t)
+    if not d or not (d["has"] & TERMINALS): continue   # 未终态不 GC
+    e = gcst.get(t)
+    if not isinstance(e, dict): e = {"since": now}; gcst[t] = e
+    if (now - float(e.get("since", now))) / 60 < WT_GRACE_MIN:
+        report["wt_kept_grace"].append(t); continue
+    wtd = wm.group(1)
+    dirty = subprocess.run(["git", "-C", wtd, "status", "--porcelain"],
+                           capture_output=True, text=True).stdout.strip()
+    if dirty:
+        report["wt_kept_dirty"].append(t); continue
+    main_ = lib.main_repo_of(wtd) or wtd
+    subprocess.run(["git", "-C", main_, "worktree", "remove", wtd], capture_output=True)
+    subprocess.run(["git", "-C", main_, "branch", "-q", "-D", f"wt/{t}"], capture_output=True)
+    if not os.path.isdir(wtd):
+        gcst.pop(t, None); report["wt_removed"].append(t)
 
 # ---------- ④a sessions.map TTL 保洁（只清本机条目；他机条目由它自己机器的 poll 清） ----------
 SMAP = f"{HOME}/scripts/sessions.map"
