@@ -1001,6 +1001,53 @@ d=json.loads(sys.stdin.read())
 assert d.get('dedup') is False, d
 " && ok "dispatch 响应 JSON 含 dedup:false（裸布尔）" || fail "dispatch 响应 JSON 缺 dedup:false（$OUT）"
 
+# ⑧ gt-eefd 子会话身份兜底：server cwd=派单方目录（模拟共享 MCP 进程 env 继承），
+#   仅 env 携带 dispatch 上下文 → post 不带 actor 落账 child_actor=worker@target；
+#   显式 actor 恒优先；无 env 对照组照旧进程级 ACTOR（兜底不越权）
+OUT=$(TITLE="身份兜底任务" VERIFY="true" PROJECT_DIR="$TARGET" AGORA_HOME="$AH4" bash "$AH4/scripts/task-create.sh")
+XG=$(echo "$OUT" | sed -n 's/.*"task":"\(gt-[0-9a-f]*\)".*/\1/p')
+bash "$AH4/scripts/post.sh" --actor orch@orch --project target --event dispatched --task "$XG" \
+  --target "$TARGET" --child worker --run "raw/dispatches/d-eefdregress.log" >/dev/null
+touch "$AH4/raw/dispatches/d-eefdregress.live"
+cd "$ORCH" && AGORA_HOME="$AH4" python3 - "$PKG/server/agora_mcp.py" "$AH4" "$TARGET" "$XG" <<'PYEOF' && ok "child_actor 兜底：子会话 post 不带 actor 归 child（gt-eefd）" || fail "child_actor 兜底（gt-eefd）"
+import json, subprocess, sys, os
+srv, home, target, xg = sys.argv[1:5]
+def spawn(dispatch_env):
+    env = {**os.environ, "AGORA_HOME": home, **dispatch_env}
+    p = subprocess.Popen(["python3", srv], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, env=env)
+    def rpc(m, ps=None, i=[0]):
+        i[0] += 1
+        p.stdin.write(json.dumps({"jsonrpc":"2.0","id":i[0],"method":m,"params":ps or {}})+"\n"); p.stdin.flush()
+        return json.loads(p.stdout.readline())
+    rpc("initialize", {})
+    return p, rpc
+def call(rpc, args):
+    return json.loads(rpc("tools/call", {"name":"agora_post","arguments":args})["result"]["content"][0]["text"])
+def actor_of(shard, xg, event):
+    for line in open(f"{home}/{shard}", encoding="utf-8"):
+        if f"task:{xg}" in line and f"event:{event}" in line:
+            for f in line.split("|"):
+                f = f.strip()
+                if f.startswith("actor:"): return f[6:]
+    return None
+# 兜底组：cwd 裁决为 orch@orch（dispatcher），env 携带子会话上下文 → 不带 actor 应归 child_actor
+p1, r1 = spawn({"AGORA_LIVEF": f"{home}/raw/dispatches/d-eefdregress.live", "AGORA_PDIR": target})
+res = call(r1, {"event":"claimed","task":xg})
+assert res.get("shard","").endswith("/target.md"), res
+assert actor_of(res["shard"], xg, "claimed") == "worker@target", open(f"{home}/{res['shard']}", encoding="utf-8").read()
+# 显式 actor 恒优先（env 在场也不覆盖）
+res = call(r1, {"event":"progress","task":xg,"body":"显式","actor":"worker@target"})
+assert actor_of(res["shard"], xg, "progress") == "worker@target", res
+p1.stdin.close()
+# 对照组：无 dispatch env → 照旧进程级 ACTOR（cwd 裁决 orch@orch），行为不变
+p2, r2 = spawn({})
+res = call(r2, {"event":"blocked","task":xg,"reason":"对照"})
+assert res.get("shard","").endswith("/orch.md"), res
+assert actor_of(res["shard"], xg, "blocked") == "orch@orch", res
+p2.stdin.close()
+PYEOF
+rm -f "$AH4/raw/dispatches/d-eefdregress.live"
+
 rm -rf "$H4"
 
 echo "===== dispatch worktree 感知（独立论坛：名册仅主 repo 实体） ====="

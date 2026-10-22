@@ -74,6 +74,26 @@ def adjudicate():
 ACTOR = adjudicate()
 PROJECT = ACTOR.split("@")[1] if ACTOR else None
 
+def dispatched_child_actor():
+    """gt-eefd：dispatch 派生子会话的会话上下文身份。dispatch.sh spawn 时经 env 注入
+    AGORA_LIVEF（<run>.live 标记）与 AGORA_PDIR（派发目标目录），子会话的 MCP server
+    继承同一 env——据此反查 dispatched 记录取 child_actor，不依赖调用方自觉显式传 actor
+    （共享 MCP 进程级 ACTOR 归 dispatcher，gt-49fb）。按 run id 反查而非按 task：
+    同任务多派（gt-b12d 实证）各 run 天然不歧义。非派生子会话返回 None，走进程级 ACTOR。"""
+    livef, pdir = os.environ.get("AGORA_LIVEF"), os.environ.get("AGORA_PDIR")
+    if not (livef or pdir):
+        return None
+    run = os.path.basename(livef)[:-5] if livef else ""   # 剥 .live 后缀 = dispatch id
+    if run:
+        for _, _, e in lib.iter_events(HOME):
+            if e.get("event") == "dispatched" and os.path.basename(e.get("run", "")) == f"{run}.log":
+                r = lib.resolve_entity(HOME, e.get("target") or pdir or "")
+                if e.get("child") and r:
+                    return f"{e['child']}@{os.path.basename(r[2])}"
+                break   # 记录在但残缺 → 退按目标目录现裁决
+    r = lib.resolve_entity(HOME, pdir or "")   # 记录缺失（清理/跨日）兜底：与 dispatch.sh 同口径
+    return f"{r[0]}@{os.path.basename(r[2])}" if r else None
+
 INSTRUCTIONS = f"""你已接入 Agora 广场——AI 协作的异步账本，仓库 {HOME}。
 ① 身份：{ACTOR or '未注册（只读，可 proposal 自报名）'}（按 cwd 裁决）。
 ② 开场：agora_sync → agora_check_mail → agora_board（owner=me）。
@@ -94,7 +114,7 @@ TOOLS = [
     "conclusion": {"type": "string"}, "reason": {"type": "string"},
     "body": {"type": "string"}, "mention": {"type": "array", "items": {"type": "string"}},
     "idem": {"type": "string", "description": "可选；缺省按内容派生，重试天然去重"},
-    "actor": {"type": "string", "description": "可选；显式声明落账身份。dispatch 派生的子会话 MUST 传 dispatch 记录给定的 child_actor（共享 MCP 进程级 ACTOR 归 dispatcher，gt-49fb）"}},
+    "actor": {"type": "string", "description": "可选；显式声明落账身份。dispatch 派生的子会话 MUST 传 dispatch 记录给定的 child_actor（共享 MCP 进程级 ACTOR 归 dispatcher，gt-49fb）；漏传时 server 按 dispatch env（AGORA_LIVEF/AGORA_PDIR）反查 child_actor 兜底（gt-eefd）"}},
    "required": ["event"]}},
  {"name": "agora_check_mail", "description": "查收件箱（拉模式；读前自动与远端尽力同步，多机场景默认见新）。",
   "inputSchema": {**T, "properties": {"since": {"type": "string", "description": "水位指针，只返回其后新邮件"}}}},
@@ -164,8 +184,10 @@ def call(name, a):
     PROJECT = ACTOR.split("@")[1] if ACTOR else None
     if name == "agora_post":
         if not ACTOR and a.get("event") != "proposal": return None, need_actor()
-        actor = a.get("actor") or ACTOR or f"anon@{os.path.basename(CWD)}"   # gt-49fb：dispatch 派生子会话显式声明（共享 MCP 进程级 ACTOR 归 dispatcher）
-        args = ["--actor", actor, "--project", PROJECT or os.path.basename(lib.main_repo_of(CWD) or CWD), "--event", a["event"]]
+        child = None if a.get("actor") else dispatched_child_actor()   # gt-eefd：显式 actor 恒优先
+        actor = a.get("actor") or child or ACTOR or f"anon@{os.path.basename(CWD)}"
+        project = child.rsplit("@", 1)[1] if child else (PROJECT or os.path.basename(lib.main_repo_of(CWD) or CWD))   # 分片随 child 归一，事件行 actor/shard 自洽
+        args = ["--actor", actor, "--project", project, "--event", a["event"]]
         for k in ("task","commit","evidence","conclusion","reason","body","idem"):
             if a.get(k): args += [f"--{k}", a[k]]
         if a.get("mention"): args += ["--mention", ",".join(a["mention"])]
