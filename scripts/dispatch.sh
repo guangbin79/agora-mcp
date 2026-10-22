@@ -106,6 +106,18 @@ if [ -n "$WT_DIR" ]; then
         || fail SPAWN_PRECHECK "树重建失败（重建分支）: $WT_DIR" 9
     fi
   fi
+  # setup 钩子（设计 §五环境完备）：项目页 setup: 命令在树内先跑（装环境；预检段执行＝失败零落账）
+  SETUPCMD=""
+  for pf in "$AGORA_HOME"/wiki/projects/*.md; do
+    [ -f "$pf" ] || continue
+    _pp=$(sed -n 's/^path:[[:space:]]*//p' "$pf" | head -1)
+    [ -z "$_pp" ] && continue
+    [ "$(realpath "$_pp" 2>/dev/null)" = "$WT_MAIN" ] && { SETUPCMD=$(sed -n 's/^setup:[[:space:]]*//p' "$pf" | head -1); break; }
+  done
+  if [ -n "$SETUPCMD" ]; then
+    (cd "$WT_DIR" && timeout "${AGORA_SETUP_TIMEOUT:-600}" bash -c "$SETUPCMD") >/dev/null 2>&1 \
+      || fail SETUP_FAILED "项目页 setup: 在树内失败（cmd: $SETUPCMD；装环境未完成不派生）" 9
+  fi
 fi
 
 # 在场优先：目标项目已有活会话 → 只通知不派生（wt 任务豁免——在场会话无树凭据，notified 必死）
@@ -118,7 +130,7 @@ if [ -z "$WT_DIR" ] && grep -q "^$(hostname) $CHILD " "$AGORA_HOME/scripts/sessi
   exit 0
 fi
 
-BOOT="你是广场派生的一次性工作会话。按开场仪式查收信、看看板；你的任务是 $TASK（读 wiki/tasks/$TASK.md，按 verify 要求验收）。动手实施前先 agora_post(event=plan, task=$TASK) 落实施计划——dispatcher ack（mention 你）后再动工；等待超 30min 无 ack 可自行放行并在 plan 评论注明。每完成一个里程碑（阶段完成/关键决策/受阻）agora_post(event=progress, task=$TASK) 刷新看板。完成后 agora_post(event=done) 并结束。${PROMPT:+ 补充指示：$PROMPT}"
+BOOT="你是广场派生的一次性工作会话。按开场仪式查收信、看看板；你的任务是 $TASK（读 wiki/tasks/$TASK.md，按 verify 要求验收）。若任务页有 wt_dir：你在该专用树内开发——新鲜树缺 node_modules/venv 等环境，先装环境再验收（项目页 setup: 已由 dispatch 预跑）。动手实施前先 agora_post(event=plan, task=$TASK) 落实施计划——dispatcher ack（mention 你）后再动工；等待超 30min 无 ack 可自行放行并在 plan 评论注明。每完成一个里程碑 agora_post(event=progress, task=$TASK) 刷新看板。你不自己合并——done 即止（树上 commit＋自验），合并由 dispatcher 走 merge.sh；需改第三仓照常 task_create＋dispatch 下钻（受深度/配额约束）；等待下级时 post progress 后退出，由 poll 恢复性重派唤醒。若你是恢复性重派：先 agora_history(task=$TASK) 自查进度、git status/log 查半成品，接着做。合并阶段 non-ff 冲突：先在原树 rebase 到合并目标分支，重走 verify 再试。完成后 agora_post(event=done) 并结束。${PROMPT:+ 补充指示：$PROMPT}"
 # 注入防御：PROMPT/PDIR 均不可信（PROMPT 可能来自他机邮件摘要）。一律走 env 传数据 +
 # 单引号脚本，bash -c 体内不出现任何外部插值
 

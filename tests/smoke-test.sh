@@ -1503,6 +1503,41 @@ AGORA_MERGE_WAIT_MIN=9999 AGORA_ORPHAN_MIN=9999 AGORA_WT_GRACE_MIN=9999 AGORA_DI
   bash "$AGORA_HOME/scripts/poll.sh" >/dev/null 2>&1
 LEV "$SL" diagnosed | grep -q "滞留" && ok "⑦ .live 滞留→diagnosed（既有档回归）" || fail "⑦ stale-live"
 
+echo "===== BOOT 链式协议＋setup 钩子（全量委托 L1 Task8） ====="
+for _t in $(python3 - "$AGORA_HOME" <<'PYEOF'
+import glob, re, sys
+home = sys.argv[1]; disp, terminal = {}, set()
+for f in sorted(glob.glob(f"{home}/log/*/*.md")):
+    try: lines = open(f, encoding="utf-8").read().splitlines()
+    except OSError: continue
+    for line in lines:
+        m = re.search(r"task:(gt-[0-9a-f]{4,})", line)
+        if not m: continue
+        t = m.group(1)
+        if "event:dispatched" in line: disp[t] = 1
+        elif any(f"event:{e}" in line for e in ("done","merged","cancelled")): terminal.add(t)
+print(" ".join(t for t in disp if t not in terminal))
+PYEOF
+); do POST tester@proj --event cancelled --task "$_t" >/dev/null 2>&1; done
+# 项目页 setup: 钩子——spawn 前在树内执行
+printf 'setup: touch %s/setup-marker\n' "$T" >> "$AGORA_HOME/wiki/projects/proj.md"
+B1=$(TID "$(TITLE="setup钩子" VERIFY="true" PROJECT_DIR="$PROJ" WT=1 IDEM=t8a TC)")
+AGORA_RUNTIME=echo AGORA_VERIFY_WIN=2 bash "$AGORA_HOME/scripts/dispatch.sh" --actor tester@proj --project "$PROJ" --task "$B1" 2>/dev/null | grep -q '"mode":"spawned"' \
+  && ok "setup 任务派发 spawned" || fail "setup 任务派发"
+[ -f "$T/setup-marker" ] && ok "setup: 在树内（spawn 前）执行（侧效文件）" || fail "setup 执行"
+BOOTJSON=$(AGORA_RUNTIME=echo AGORA_VERIFY_WIN=2 bash "$AGORA_HOME/scripts/dispatch.sh" --actor tester@proj --project "$PROJ" --task "$B1" 2>/dev/null)
+# setup 失败→零落账零 spawn
+sed -i 's|^setup: .*|setup: exit 1|' "$AGORA_HOME/wiki/projects/proj.md"
+B2=$(TID "$(TITLE="setup失败" VERIFY="true" PROJECT_DIR="$PROJ" WT=1 IDEM=t8b TC)")
+OUT=$(AGORA_RUNTIME=echo AGORA_VERIFY_WIN=2 bash "$AGORA_HOME/scripts/dispatch.sh" --actor tester@proj --project "$PROJ" --task "$B2" 2>&1)
+echo "$OUT" | grep -q SETUP_FAILED && ok "setup 失败→SETUP_FAILED" || fail "setup 失败 JSON"
+cat "$AGORA_HOME"/log/*/*.md | grep -E "(^|[|] )task:$B2( |$)" | grep -q "event:dispatched" && fail "setup 失败零落账" || ok "setup 失败零落账"
+sed -i 's|^setup: .*|setup: true|' "$AGORA_HOME/wiki/projects/proj.md"
+# BOOT 关键词（从账本 dispatched 的 BOOT 不可见——直接源码断言＋行为断言走 grep 源文件）
+for kw in "装环境" "不自己合并" "恢复性重派" "rebase"; do
+  grep -q "$kw" "$AGORA_HOME/scripts/dispatch.sh" && ok "BOOT 含「$kw」" || fail "BOOT 含「$kw」"
+done
+
 echo
 echo "===== 结果: $PASS 通过, $FAIL 失败 ====="
 rm -rf "$T"
