@@ -1207,6 +1207,45 @@ OUT=$(TITLE="wt任务重试" VERIFY="true" PROJECT_DIR="$PROJ" WT=1 IDEM=wt-a TC
 # WT 无 project_dir 拒
 TITLE="坏wt" WT=1 TC 2>/dev/null; [[ $? -eq 2 ]] && ok "WT 缺 project_dir 被拒(rc=2)" || fail "WT 缺 project_dir 被拒(rc=2)"
 
+echo "===== dispatch 深度默认3＋账本推导＋配额账本化（全量委托 L1 Task3） ====="
+rm -f "$AGORA_HOME/scripts/sessions.map"   # 前序桥段残留会触发在场优先降级 notified
+# 清场：前序段落的活 dispatched（账本口径）全部 cancelled 出集——本段配额计数需净场
+for _t in $(python3 - "$AGORA_HOME" <<'PYEOF'
+import glob, re, sys
+home = sys.argv[1]; disp, terminal = {}, set()
+for f in sorted(glob.glob(f"{home}/log/*/*.md")):
+    try: lines = open(f, encoding="utf-8").read().splitlines()
+    except OSError: continue
+    for line in lines:
+        m = re.search(r"task:(gt-[0-9a-f]{4,})", line)
+        if not m: continue
+        t = m.group(1)
+        if "event:dispatched" in line: disp[t] = 1
+        elif any(f"event:{e}" in line for e in ("done","merged","cancelled")): terminal.add(t)
+print(" ".join(t for t in disp if t not in terminal))
+PYEOF
+); do POST tester@proj --event cancelled --task "$_t" >/dev/null 2>&1; done
+DSP()  { AGORA_RUNTIME=echo AGORA_MAX_SPAWN=9 bash "$AGORA_HOME/scripts/dispatch.sh" --actor tester@proj --project "$PROJ" "$@"; }
+DSPQ() { AGORA_RUNTIME=echo bash "$AGORA_HOME/scripts/dispatch.sh" --actor tester@proj --project "$PROJ" "$@"; }
+TID() { echo "$1" | sed -n 's/.*"task":"\(gt-[0-9a-f]*\)".*/\1/p'; }
+D1=$(TID "$(TITLE="深度a" VERIFY=true PROJECT_DIR="$PROJ" TC)"); D2=$(TID "$(TITLE="深度b" VERIFY=true PROJECT_DIR="$PROJ" TC)")
+D3=$(TID "$(TITLE="深度c" VERIFY=true PROJECT_DIR="$PROJ" TC)")
+E1=$(TID "$(TITLE="链a" VERIFY=true PROJECT_DIR="$PROJ" TC)"); E2=$(TID "$(TITLE="链b" VERIFY=true PROJECT_DIR="$PROJ" TC)")
+E3=$(TID "$(TITLE="链c" VERIFY=true PROJECT_DIR="$PROJ" TC)"); F1=$(TID "$(TITLE="配额" VERIFY=true PROJECT_DIR="$PROJ" TC)")
+# ① env 深度：默认 3 下 DEPTH=0/1 放行、DEPTH=2 拒
+AGORA_DEPTH=0 DSP --task "$D1" 2>/dev/null | grep -q '"mode":"spawned"' && ok "深度默认3：DEPTH=0 放行" || fail "深度默认3：DEPTH=0 放行"
+AGORA_DEPTH=1 DSP --task "$D2" 2>/dev/null | grep -q '"mode":"spawned"' && ok "深度默认3：DEPTH=1 放行" || fail "深度默认3：DEPTH=1 放行"
+AGORA_DEPTH=2 DSP --task "$D3" 2>&1 | grep -q DEPTH_EXCEEDED && ok "深度默认3：DEPTH=2 拒" || fail "深度默认3：DEPTH=2 拒"
+# ② 账本推导：dispatcher_task 链深度与 env 取 max（配额窗已开至 9 不干扰）
+DSP --task "$E1" >/dev/null 2>&1   # E1 基线派发（depth 1）
+AGORA_DEPTH=0 DSP --task "$E2" --dispatcher-task "$E1" 2>/dev/null | grep -q '"mode":"spawned"' && ok "链派发 E2(dtask=E1) 放行" || fail "链派发 E2(dtask=E1) 放行"
+AGORA_DEPTH=0 DSP --task "$E3" --dispatcher-task "$E2" 2>&1 | grep -q DEPTH_EXCEEDED && ok "账本推导：env=0 但链深 NEXT=3 拒" || fail "账本推导拒（env 0 链深 3）"
+cat "$AGORA_HOME"/log/*/*.md | grep -F "task:$E2" | grep "event:dispatched" | grep -q "dispatcher_task:$E1" && ok "dispatched 落账含 dispatcher_task" || fail "dispatched 落账含 dispatcher_task"
+# ③ 配额账本化（默认 MAX_SPAWN=3）：零 .live 但账本活派发 4 → 拒第 5；终态出集后放行
+DSPQ --task "$F1" 2>&1 | grep -q QUOTA_EXCEEDED && ok "配额账本化：4 活派发（零 .live）拒第 5" || fail "配额账本化拒（零 .live）"
+POST tester@proj --event cancelled --task "$D1" >/dev/null; POST tester@proj --event cancelled --task "$E1" >/dev/null
+DSPQ --task "$F1" 2>/dev/null | grep -q '"mode":"spawned"' && ok "终态出集后配额放行" || fail "终态出集后配额放行"
+
 echo
 echo "===== 结果: $PASS 通过, $FAIL 失败 ====="
 rm -rf "$T"

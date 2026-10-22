@@ -3,12 +3,12 @@
 # 用法: dispatch.sh --actor NAME@PROJ --project DIR --task gt-xxxx [--prompt "..."]
 set -euo pipefail
 AGORA_HOME="${AGORA_HOME:-$HOME/agora}"
-MAX_DEPTH="${AGORA_MAX_DEPTH:-2}"; MAX_SPAWN="${AGORA_MAX_SPAWN:-3}"
+MAX_DEPTH="${AGORA_MAX_DEPTH:-3}"; MAX_SPAWN="${AGORA_MAX_SPAWN:-3}"
 RUNTIME="${AGORA_RUNTIME:-opencode}"
 
-ACTOR=""; PDIR=""; TASK=""; PROMPT=""
+ACTOR=""; PDIR=""; TASK=""; PROMPT=""; DTASK=""
 while [[ $# -gt 0 ]]; do case "$1" in
-  --actor) ACTOR="$2";; --project) PDIR="$2";; --task) TASK="$2";; --prompt) PROMPT="$2";;
+  --actor) ACTOR="$2";; --project) PDIR="$2";; --task) TASK="$2";; --prompt) PROMPT="$2";; --dispatcher-task) DTASK="$2";;
   *) echo '{"code":"VALIDATION_FAILED","message":"unknown arg"}' >&2; exit 2;;
 esac; shift 2; done
 fail() { python3 -c 'import json,sys; print(json.dumps({"code":sys.argv[1],"message":sys.argv[2]}, ensure_ascii=False), file=sys.stderr)' "$1" "$2"; exit "${3:-2}"; }   # $POUT 等嵌值含引号亦合法（评审 MINOR：错误通道 JSON）
@@ -17,19 +17,49 @@ NAME="${ACTOR%%@*}"
 ENTITY="$AGORA_HOME/wiki/entities/$NAME.md"
 [[ -f "$ENTITY" ]] || fail NOT_REGISTERED "caller not in roster: $NAME"
 
-# 注入防御：TASK 是外部输入（可能来自他机邮件摘要），进 bash -c 前强制格式
+# 注入防御：TASK/DTASK 是外部输入（可能来自他机邮件摘要），进 bash -c 前强制格式
 [[ "$TASK" =~ ^gt-[0-9a-f]{4,}$ ]] || fail VALIDATION_FAILED "bad task id: $TASK" 2
+[[ -z "$DTASK" || "$DTASK" =~ ^gt-[0-9a-f]{4,}$ ]] || fail VALIDATION_FAILED "bad dispatcher task id: $DTASK" 2
 
 # 保险丝 1：权限（身份页 can_spawn: true）
 grep -qE '^can_spawn:[[:space:]]*true' "$ENTITY" || fail SPAWN_FORBIDDEN "$NAME lacks can_spawn" 6
 
-# 保险丝 2：深度（AGORA_DEPTH 由父进程环境传入）
+# 保险丝 2/3：深度与配额——env 与账本推导取更大值（v1.32 账本化：L2/API 模式无 env 通道时账本为唯一来源）
+# 账本口径：深度=dispatched 事件 dispatcher_task 链逐跳计数（任务最新 dispatched 为准，环检测兜底）；
+#          配额活跃=dispatched 集 ∩ 无终态事件（done/merged/cancelled 任一即出集）
+LEDGER_NEXT=1; LEDGER_ACTIVE=0
+if read -r LN LA <<<"$(python3 - "$AGORA_HOME" "${DTASK:-}" <<'PYEOF'
+import glob, re, sys
+home = sys.argv[1]; dtask = sys.argv[2] if len(sys.argv) > 2 and sys.argv[2] else ""
+disp, terminal = {}, set()
+for f in sorted(glob.glob(f"{home}/log/*/*.md")):
+    try: lines = open(f, encoding="utf-8").read().splitlines()
+    except OSError: continue
+    for line in lines:
+        if "event:" not in line: continue
+        m = re.search(r"task:(gt-[0-9a-f]{4,})", line)
+        if not m: continue
+        t = m.group(1)
+        if "event:dispatched" in line:
+            d = re.search(r"dispatcher_task:(gt-[0-9a-f]{4,})", line)
+            disp[t] = d.group(1) if d else ""   # 文件序+行序扫描，后见覆盖=最新派发
+        elif any(f"event:{e}" in line for e in ("done", "merged", "cancelled")):
+            terminal.add(t)
+def depth(t, seen):
+    if t not in disp or t in seen: return 0
+    d = disp[t]
+    return 1 if not d else 1 + depth(d, seen | {t})
+nxt = depth(dtask, frozenset()) + 1 if dtask in disp else 1
+print(nxt, sum(1 for t in disp if t not in terminal))
+PYEOF
+)"; then [ -n "$LN" ] && LEDGER_NEXT=$LN; [ -n "$LA" ] && LEDGER_ACTIVE=$LA; fi
 DEPTH="${AGORA_DEPTH:-0}"; NEXT=$((DEPTH+1))
+(( NEXT < LEDGER_NEXT )) && NEXT=$LEDGER_NEXT
 [[ $NEXT -ge $MAX_DEPTH ]] && fail DEPTH_EXCEEDED "depth $NEXT >= max $MAX_DEPTH" 7
 
-# 保险丝 3：配额（.live 标记计数）
 LIVE=$(find "$AGORA_HOME/raw/dispatches" -name '*.live' 2>/dev/null | wc -l)
-[[ $LIVE -ge $MAX_SPAWN ]] && fail QUOTA_EXCEEDED "live dispatches $LIVE >= max $MAX_SPAWN" 8
+ACTIVE=$LIVE; (( ACTIVE < LEDGER_ACTIVE )) && ACTIVE=$LEDGER_ACTIVE
+[[ $ACTIVE -ge $MAX_SPAWN ]] && fail QUOTA_EXCEEDED "active dispatches $ACTIVE >= max $MAX_SPAWN" 8
 
 # 子会话身份：名册目录前缀匹配（最深优先）；worktree 路径归一主 repo（口径在 agora_lib.resolve_entity，gt-ac14）
 R=$(PYTHONPATH="$(cd "$(dirname "$0")" && pwd)${PYTHONPATH:+:$PYTHONPATH}" python3 - "$AGORA_HOME" "$PDIR" <<'PYEOF'
@@ -43,7 +73,7 @@ PYEOF
 CHILD=$(sed -n 1p <<<"$R"); PROOT=$(sed -n 3p <<<"$R")
 [[ -z "$CHILD" || -z "$PROOT" ]] && fail NOT_REGISTERED "no roster entry for $PDIR" 9
 
-# 保险丝 4：落账（dispatched 事件）
+# 保险丝 4：落账（dispatched 事件）——数组拼参＋条件追加 dispatcher_task（链深度登记面）
 DID="d-$(date +%s%N | sha1sum | cut -c1-8)"
 LOG="raw/dispatches/$DID.log"
 
@@ -68,8 +98,9 @@ setsid env AGORA_DEPTH=$NEXT AGORA_HOME="$AGORA_HOME" AGORA_RUNTIME="$RUNTIME" \
   bash -c 'cd "$AGORA_PDIR" && "$AGORA_RUNTIME" run --auto "$AGORA_BOOT" ; rm -f "$AGORA_LIVEF"' \
   >"$AGORA_HOME/$LOG" 2>&1 < /dev/null &
 
-POUT=$(bash "$AGORA_HOME/scripts/post.sh" --actor "$ACTOR" --project "$PROJNAME" --event dispatched \
-  --task "$TASK" --target "$PDIR" --child "$CHILD" --run "$LOG" 2>&1) \
+PARGS=(--actor "$ACTOR" --project "$PROJNAME" --event dispatched --task "$TASK" --target "$PDIR" --child "$CHILD" --run "$LOG")
+[[ -n "$DTASK" ]] && PARGS+=(--dispatcher-task "$DTASK")
+POUT=$(bash "$AGORA_HOME/scripts/post.sh" "${PARGS[@]}" 2>&1) \
   || { printf '%s\n' "$POUT" >&2; fail LEDGER_FAILED "dispatched 落账失败（详情见 stderr 上一行）" 4; }
 DEDUP=$(echo "$POUT" | sed -n 's/.*"dedup":\(true\|false\).*/\1/p')
 case "$DEDUP" in true|false) ;; *) fail LEDGER_FAILED "post.sh 输出异常（无 dedup 键）: $POUT" 4;; esac

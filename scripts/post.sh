@@ -13,14 +13,14 @@ export LC_ALL=C
 fail() { python3 -c 'import json,sys; print(json.dumps({"code":sys.argv[1],"message":sys.argv[2]}, ensure_ascii=False), file=sys.stderr)' "$1" "$2"; exit "${3:-2}"; }   # 值经 json.dumps 全量转义：stderr 恒为合法 JSON（含任意控制字符），无手写转义可漂移
 # ---------- 参数解析 ----------
 ACTOR=""; PROJECT=""; EVENT=""; TASK=""; COMMIT=""; EVIDENCE=""
-CONCLUSION=""; REASON=""; BODY=""; MENTION=""; IDEM=""; TARGET=""; CHILD=""; RUN=""
+CONCLUSION=""; REASON=""; BODY=""; MENTION=""; IDEM=""; TARGET=""; CHILD=""; RUN=""; DTASK=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --actor) ACTOR="$2";; --project) PROJECT="$2";; --event) EVENT="$2";;
     --task) TASK="$2";; --commit) COMMIT="$2";; --evidence) EVIDENCE="$2";;
     --conclusion) CONCLUSION="$2";; --reason) REASON="$2";; --body) BODY="$2";;
     --mention) MENTION="$2";; --idem) IDEM="$2";; --target) TARGET="$2";;
-    --child) CHILD="$2";; --run) RUN="$2";;
+    --child) CHILD="$2";; --run) RUN="$2";; --dispatcher-task) DTASK="$2";;
     *) fail VALIDATION_FAILED "unknown arg: $1";;
   esac; shift 2
 done
@@ -54,7 +54,7 @@ if [[ -n "$MENTION" ]]; then
   done
 fi
 # 字段值禁止 | 与换行（ABNF: value 不含 "|" 与 LF）——MENTION/ACTOR/PROJECT/IDEM 同环（账本行完整性；idem 换行=整行伪造原语）
-for v in "$TASK" "$COMMIT" "$EVIDENCE" "$CONCLUSION" "$REASON" "$BODY" "$TARGET" "$CHILD" "$RUN" "$MENTION" "$ACTOR" "$PROJECT" "$IDEM"; do
+for v in "$TASK" "$COMMIT" "$EVIDENCE" "$CONCLUSION" "$REASON" "$BODY" "$TARGET" "$CHILD" "$RUN" "$DTASK" "$MENTION" "$ACTOR" "$PROJECT" "$IDEM"; do
   [[ "$v" == *"|"* || "$v" == *$'\n'* ]] && fail VALIDATION_FAILED "field value contains | or newline"
 done
 # IDEM 亦占 \S+ 槽（idem:）：空白撕裂行解析
@@ -159,6 +159,7 @@ LINE="- seq:$SEQ | ts:$TS | actor:$ACTOR | event:$EVENT | idem:$IDEM | seen:$PRO
 [[ -n "$TARGET" ]] && LINE="$LINE | target:$TARGET"
 [[ -n "$CHILD" ]] && LINE="$LINE | child:$CHILD"
 [[ -n "$RUN" ]] && LINE="$LINE | run:$RUN"
+[[ -n "$DTASK" ]] && LINE="$LINE | dispatcher_task:$DTASK"
 [[ -n "${VERIFY_NOTE:-}" ]] && LINE="$LINE | verify_output:$VERIFY_NOTE"
 [[ -n "$BODY" ]] && LINE="$LINE | body:$BODY"
 [[ -n "$MENTION" ]] && LINE="$LINE | mention:$MENTION"
