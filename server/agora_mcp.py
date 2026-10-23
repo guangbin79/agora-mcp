@@ -144,7 +144,7 @@ TOOLS = [
     "task": {"type": "string"}, "prompt": {"type": "string"},
     "dispatcher_task": {"type": "string", "description": "可选 gt-xxxx：派发时会话正在做的任务（链深度登记面；缺省时机械层按 actor 最近 claimed 无终态任务推导）"}},
    "required": ["project","task"]}},
- {"name": "agora_task_create", "description": "结构化创建任务页（自动分配 gt-xxxx，frontmatter 由机械层生成，禁止手写任务页）。verify 与 project_dir 必须同时提供；deps/parent 引用必须已存在。",
+ {"name": "agora_task_create", "description": "结构化创建任务页（自动分配 gt-xxxx，frontmatter 由机械层生成，禁止手写任务页）。verify 与 project_dir 必须同时提供；deps/parent 引用必须已存在。命中防呆时 stdout JSON 带 warnings 键（project_dir 为 worktree 形态未带 wt／title<8 字；仅告警不阻断）。",
   "inputSchema": {**T, "properties": {
     "title": {"type": "string"}, "body": {"type": "string"},
     "verify": {"type": "string", "description": "完成判据命令，done 时机械层真跑"},

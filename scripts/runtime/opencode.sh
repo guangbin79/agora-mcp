@@ -12,10 +12,10 @@ jget() { python3 -c "$1" 2>/dev/null; }
 case "$CMD" in
   health)   # GET /api/info → rc0=API 可达
     api GET /api/info >/dev/null ;;
-  create)   # create <dir> → stdout=sid（POST /api/session，location.directory=realpath）
+  create)   # create <dir> [title] → stdout=sid（POST /api/session，location.directory=realpath；title 缺省 agora）
     [ -n "${2:-}" ] || { echo "create: dir required" >&2; exit 2; }
     D=$(realpath "$2")
-    BODY=$(python3 -c 'import json,sys;print(json.dumps({"title":"agora","location":{"directory":sys.argv[1]}}))' "$D")
+    BODY=$(python3 -c 'import json,sys;print(json.dumps({"title":sys.argv[1],"location":{"directory":sys.argv[2]}}))' "${3:-agora}" "$D")
     api POST /api/session -d "$BODY" | jget 'import json,sys;print(json.load(sys.stdin)["data"]["id"])' ;;
   inject)   # inject <sid> <text> → delivery:"queue" 即投即跑（rc0/1）
     [ -n "${2:-}" ] && [ -n "${3:-}" ] || { echo "inject: sid text required" >&2; exit 2; }

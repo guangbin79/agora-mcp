@@ -1208,7 +1208,7 @@ OUT=$(TITLE="wt任务重试" VERIFY="true" PROJECT_DIR="$PROJ" WT=1 IDEM=wt-a TC
 # WT 无 project_dir 拒
 TITLE="坏wt" WT=1 TC 2>/dev/null; [[ $? -eq 2 ]] && ok "WT 缺 project_dir 被拒(rc=2)" || fail "WT 缺 project_dir 被拒(rc=2)"
 
-echo "===== dispatch 深度默认3＋账本推导＋配额账本化（全量委托 L1 Task3） ====="
+echo "===== dispatch 深度默认5＋账本推导＋配额账本化（gt-2845 K3 复审） ====="
 rm -f "$AGORA_HOME/scripts/sessions.map"   # 前序桥段残留会触发在场优先降级 notified
 # 清场：前序段落的活 dispatched（账本口径）全部 cancelled 出集——本段配额计数需净场
 for _t in $(python3 - "$AGORA_HOME" <<'PYEOF'
@@ -1232,19 +1232,22 @@ TID() { echo "$1" | sed -n 's/.*"task":"\(gt-[0-9a-f]*\)".*/\1/p'; }
 D1=$(TID "$(TITLE="深度a" VERIFY=true PROJECT_DIR="$PROJ" TC)"); D2=$(TID "$(TITLE="深度b" VERIFY=true PROJECT_DIR="$PROJ" TC)")
 D3=$(TID "$(TITLE="深度c" VERIFY=true PROJECT_DIR="$PROJ" TC)")
 E1=$(TID "$(TITLE="链a" VERIFY=true PROJECT_DIR="$PROJ" TC)"); E2=$(TID "$(TITLE="链b" VERIFY=true PROJECT_DIR="$PROJ" TC)")
-E3=$(TID "$(TITLE="链c" VERIFY=true PROJECT_DIR="$PROJ" TC)"); F1=$(TID "$(TITLE="配额" VERIFY=true PROJECT_DIR="$PROJ" TC)")
-# ① env 深度：默认 3 下 DEPTH=0/1 放行、DEPTH=2 拒
-AGORA_DEPTH=0 DSP --task "$D1" 2>/dev/null | grep -q '"mode":"spawned"' && ok "深度默认3：DEPTH=0 放行" || fail "深度默认3：DEPTH=0 放行"
-AGORA_DEPTH=1 DSP --task "$D2" 2>/dev/null | grep -q '"mode":"spawned"' && ok "深度默认3：DEPTH=1 放行" || fail "深度默认3：DEPTH=1 放行"
-AGORA_DEPTH=2 DSP --task "$D3" 2>&1 | grep -q DEPTH_EXCEEDED && ok "深度默认3：DEPTH=2 拒" || fail "深度默认3：DEPTH=2 拒"
+E3=$(TID "$(TITLE="链c" VERIFY=true PROJECT_DIR="$PROJ" TC)"); E4=$(TID "$(TITLE="链d" VERIFY=true PROJECT_DIR="$PROJ" TC)")
+E5=$(TID "$(TITLE="链e" VERIFY=true PROJECT_DIR="$PROJ" TC)"); F1=$(TID "$(TITLE="配额" VERIFY=true PROJECT_DIR="$PROJ" TC)")
+# ① env 深度：默认 5 下 NEXT=3/4 放行（DEPTH=2/3）、NEXT=5 拒（DEPTH=4）
+AGORA_DEPTH=2 DSP --task "$D1" 2>/dev/null | grep -q '"mode":"spawned"' && ok "深度默认5：DEPTH=2(NEXT=3) 放行" || fail "深度默认5：DEPTH=2 放行"
+AGORA_DEPTH=3 DSP --task "$D2" 2>/dev/null | grep -q '"mode":"spawned"' && ok "深度默认5：DEPTH=3(NEXT=4) 放行" || fail "深度默认5：DEPTH=3 放行"
+AGORA_DEPTH=4 DSP --task "$D3" 2>&1 | grep -q DEPTH_EXCEEDED && ok "深度默认5：DEPTH=4(NEXT=5) 拒" || fail "深度默认5：DEPTH=4 拒"
 # ② 账本推导：dispatcher_task 链深度与 env 取 max（配额窗已开至 9 不干扰）
 DSP --task "$E1" >/dev/null 2>&1   # E1 基线派发（depth 1）
 AGORA_DEPTH=0 DSP --task "$E2" --dispatcher-task "$E1" 2>/dev/null | grep -q '"mode":"spawned"' && ok "链派发 E2(dtask=E1) 放行" || fail "链派发 E2(dtask=E1) 放行"
-AGORA_DEPTH=0 DSP --task "$E3" --dispatcher-task "$E2" 2>&1 | grep -q DEPTH_EXCEEDED && ok "账本推导：env=0 但链深 NEXT=3 拒" || fail "账本推导拒（env 0 链深 3）"
+AGORA_DEPTH=0 DSP --task "$E3" --dispatcher-task "$E2" 2>/dev/null | grep -q '"mode":"spawned"' && ok "账本链 NEXT=3 放行（默认5语义）" || fail "账本链 NEXT=3 应放行"
+AGORA_DEPTH=0 DSP --task "$E4" --dispatcher-task "$E3" 2>/dev/null | grep -q '"mode":"spawned"' && ok "账本链 NEXT=4 放行" || fail "账本链 NEXT=4 应放行"
+AGORA_DEPTH=0 DSP --task "$E5" --dispatcher-task "$E4" 2>&1 | grep -q DEPTH_EXCEEDED && ok "账本推导：env=0 但链深 NEXT=5 拒" || fail "账本推导拒（env 0 链深 5）"
 cat "$AGORA_HOME"/log/*/*.md | grep -F "task:$E2" | grep "event:dispatched" | grep -q "dispatcher_task:$E1" && ok "dispatched 落账含 dispatcher_task" || fail "dispatched 落账含 dispatcher_task"
-# ③ 配额账本化（默认 MAX_SPAWN=3）：零 .live 但账本活派发 4 → 拒第 5；终态出集后放行
-DSPQ --task "$F1" 2>&1 | grep -q QUOTA_EXCEEDED && ok "配额账本化：4 活派发（零 .live）拒第 5" || fail "配额账本化拒（零 .live）"
-POST tester@proj --event cancelled --task "$D1" >/dev/null; POST tester@proj --event cancelled --task "$E1" >/dev/null
+# ③ 配额账本化（默认 MAX_SPAWN=3）：零 .live 但账本活派发 6 → 拒第 7；终态出集后放行
+DSPQ --task "$F1" 2>&1 | grep -q QUOTA_EXCEEDED && ok "配额账本化：6 活派发（零 .live）拒第 7" || fail "配额账本化拒（零 .live）"
+for _cq in "$D1" "$E1" "$E2" "$E3"; do POST tester@proj --event cancelled --task "$_cq" >/dev/null; done
 DSPQ --task "$F1" 2>/dev/null | grep -q '"mode":"spawned"' && ok "终态出集后配额放行" || fail "终态出集后配额放行"
 
 echo "===== dispatch 发射加固＋凭据预写＋wt 免在场优先（全量委托 L1 Task4） ====="
@@ -1749,7 +1752,7 @@ FH="${FAKE_HOME:?FAKE_HOME required}"
 log() { printf '%s\n' "$*" >> "$FH/calls.log"; }
 case "${1:-}" in
   --version) echo "opencode v2.1.2-fake"; exit 0 ;;
-  run) log "run"; exit 0 ;;
+  run) log "run $*"; exit 0 ;;
   api) ;;
   *) echo "bad subcommand" >&2; exit 2 ;;
 esac
@@ -1806,6 +1809,15 @@ S1SID=$(FAKE create "$PROJ" 2>/dev/null)
 case "$S1SID" in ses_*) ok "S1b create 出 sid" ;; *) fail "S1b create 出 sid（got: $S1SID）" ;; esac
 python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); sys.exit(0 if d["location"]["directory"]==sys.argv[2] else 1)' "$FAKE_HOME/create_body.json" "$PROJ" \
   && ok "S1b create 目录绑定" || fail "S1b create 目录绑定"
+# S1f create title 透传（gt-2845②）：create <dir> [title] → body title 透传；缺省 agora
+fake_reset none
+FAKE create "$PROJ" "agora: gt-abc1 标题甲" >/dev/null 2>&1
+python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); sys.exit(0 if d["title"]=="agora: gt-abc1 标题甲" else 1)' "$FAKE_HOME/create_body.json" \
+  && ok "S1f create title 透传" || fail "S1f create title 透传"
+fake_reset none
+FAKE create "$PROJ" >/dev/null 2>&1
+python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); sys.exit(0 if d["title"]=="agora" else 1)' "$FAKE_HOME/create_body.json" \
+  && ok "S1f create title 缺省 agora" || fail "S1f create title 缺省 agora"
 # S1c inject：rc0＋delivery:"queue"＋文本透传；断电 rc1
 fake_reset none
 if FAKE inject ses_fake9 "hello 队列" >/dev/null 2>&1; then ok "S1c inject rc0"; else fail "S1c inject rc0"; fi
@@ -1832,14 +1844,20 @@ OUT=$(POSTD --task "$T2A")
 echo "$OUT" | grep -q '"channel":"api"' && echo "$OUT" | grep -q '"session":"ses_' \
   && ok "S2a API 派生输出 channel+session" || fail "S2a API 派生输出（got: $OUT）"
 LEV "$T2A" dispatched | grep -q 'session:ses_' && ok "S2a sid 落账 session:ses_*" || fail "S2a sid 落账"
+python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); t=d.get("title",""); sys.exit(0 if t.startswith("agora: "+sys.argv[2]+" ") and t.endswith("API派生") and len(t.split(" ",2)[2])<=60 else 1)' "$FAKE_HOME/create_body.json" "$T2A" \
+  && ok "S2e create title 格式 agora: <task> <title截60>" || fail "S2e create title 格式（$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("title",""))' "$FAKE_HOME/create_body.json" 2>/dev/null)）"
 T2B=$(TID "$(TITLE="API回落" VERIFY="true" PROJECT_DIR="$PROJ" TC)")
 fake_reset health_fail
 OUT=$(POSTD --task "$T2B")
 echo "$OUT" | grep -q '"channel":"api"' && fail "S2b health_fail 未回落 run" || ok "S2b health_fail 回落 run"
-[ "$(LEV "$T2B" dispatched | wc -l)" = 1 ] && ! LEV "$T2B" dispatched | grep -q 'session:' \
-  && ok "S2b 回落零残留（恰一条 dispatched 无 session:）" || fail "S2b 回落残留"
+[ "$(LEV "$T2B" dispatched | wc -l)" = 1 ] && LEV "$T2B" dispatched | grep -q 'session:ses_' \
+  && ok "S2b 回落零残留＋sid 统一承载（恰一条 dispatched 含 session:ses_*）" || fail "S2b 回落残留/sid 缺失"
 RUN2B=$(echo "$OUT" | sed -n 's/.*"run":"\([^"]*\)".*/\1/p')
 grep -q "^EXIT:1=0" "$AGORA_HOME/$RUN2B" 2>/dev/null && ok "S2b run 通道 EXIT:1=0" || fail "S2b run EXIT 缺失"
+SID2B=$(LEV "$T2B" dispatched | sed -n 's/.*session:\(ses_[^| ]*\).*/\1/p')
+grep -q -- "--session $SID2B" "$FAKE_HOME/calls.log" 2>/dev/null \
+  && grep -q -- "--title agora: $T2B " "$FAKE_HOME/calls.log" \
+  && ok "S2b run --session 落预生成 sid＋--title 同名（与账本一致）" || fail "S2b run 参数与账本 sid 不一致"
 T2C=$(MKWT2 "API凭据" t2c); WR2C=$(ls -d "$T"/proj__wt-${T2C}__*)
 fake_reset none
 POSTD --task "$T2C" >/dev/null
@@ -2024,6 +2042,60 @@ refs = {e['ref'].rsplit(':', 1)[0] for e in d['events']}
 assert d['count'] == 3 and evs == ['plan', 'claimed', 'done'], d
 assert all(r.endswith('/.dotfiles.md') for r in refs), refs
 " && ok "T7 history.sh 点分片任务全链可见（plan/claimed/done）" || fail "T7 history.sh 点分片任务全链可见"
+
+echo
+echo "===== A批 K3（gt-2845）：verify 锚点重建＋task_create 防呆＋BOOT 文案＋MAX_DEPTH5 ====="
+# ① verify 锚点重建：删树→done 时原地重建（复用 dispatch/merge 锚点逻辑）
+R1=$(MKWT2 "锚点重建" gtr1); WR1=$(ls -d "$T"/proj__wt-${R1}__*)
+rm -rf "$WR1"
+POST tester@proj --event done --task "$R1" --commit HEAD --evidence ok >/dev/null 2>&1
+[ -d "$WR1" ] && [ "$(LEV "$R1" done | wc -l)" = 1 ] \
+  && ok "verify 锚点重建：删树后 done 原地重建＋verify 真跑" || fail "verify 锚点重建成功路径（树在: [ -d $WR1 ]）"
+# ① 双缺失失败路径：树删＋分支删→VERIFY_FAILED 不回退 project_dir
+R2=$(MKWT2 "双缺失" gtr2); WR2=$(ls -d "$T"/proj__wt-${R2}__*)
+rm -rf "$WR2"; git -C "$PROJ" worktree prune; git -C "$PROJ" branch -D "wt/$R2" >/dev/null 2>&1
+OUT=$(POST tester@proj --event done --task "$R2" --commit HEAD --evidence ok 2>&1); RC=$?
+[[ $RC -ne 0 ]] && echo "$OUT" | grep -q VERIFY_FAILED && [ ! -d "$WR2" ] \
+  && ok "verify 双缺失：VERIFY_FAILED 明确报错（禁回退 project_dir）" || fail "verify 双缺失路径（rc=$RC out=$OUT）"
+# ④ task_create 防呆：worktree 形态 project_dir 未带 wt＋title<8 字 → warnings 不阻断
+mkdir -p "$T/fk__wt-x"; touch "$T/fk__wt-x/.git"; mkdir -p "$T/fk"
+OUT=$(TITLE="短" VERIFY="true" PROJECT_DIR="$T/fk__wt-x" TC); RC=$?
+TIDW=$(echo "$OUT" | sed -n 's/.*"task":"\(gt-[0-9a-f]*\)".*/\1/p')
+[[ $RC -eq 0 ]] && [[ "$TIDW" =~ ^gt- ]] && echo "$OUT" | grep -q '__wt-' \
+  && echo "$OUT" | grep -q '\.git 为文件' && echo "$OUT" | grep -q 'title 少于 8 字' \
+  && [ -f "$AGORA_HOME/wiki/tasks/$TIDW.md" ] \
+  && ok "task_create 防呆：两告警触发＋不阻断" || fail "task_create 防呆（rc=$RC out=$OUT）"
+OUT=$(TITLE="足够长的正常标题" VERIFY="true" PROJECT_DIR="$T/fk" TC)
+echo "$OUT" | grep -q 'warnings' && fail "task_create 防呆误触发（$OUT）" || ok "task_create 干净输入零 warnings"
+# ⑥ BOOT 文案：删「等 dispatcher ack 30min」，改「post(plan) 后即开工不等 ack；commit 前重读账本」
+B1=$(TID "$(TITLE="BOOT文案任务标题够长" VERIFY=true PROJECT_DIR="$PROJ" TC)")
+BOUT=$(AGORA_RUNTIME=echo AGORA_MAX_SPAWN=99 bash "$AGORA_HOME/scripts/dispatch.sh" --actor tester@proj --project "$PROJ" --task "$B1")
+RLOG="$AGORA_HOME/$(echo "$BOUT" | sed -n 's/.*"run":"\([^"]*\)".*/\1/p')"
+grep -q "post(plan) 后即开工不等 ack" "$RLOG" && grep -q "commit 前重读账本" "$RLOG" && ! grep -q "30min" "$RLOG" \
+  && ok "BOOT 文案对齐 delegation §七（删等 ack 30min）" || fail "BOOT 文案未对齐（$RLOG, out=$BOUT）"
+# ⑧ 截断触达＋无 title 行回退（评审 ocr-8：[:60] 此前从未被超长输入触达）
+T70=$(printf '甲%.0s' $(seq 1 70))
+L1=$(TID "$(TITLE="$T70" VERIFY=true PROJECT_DIR="$PROJ" TC)")
+LOUT=$(AGORA_RUNTIME=echo AGORA_MAX_SPAWN=99 bash "$AGORA_HOME/scripts/dispatch.sh" --actor tester@proj --project "$PROJ" --task "$L1")
+LLOG="$AGORA_HOME/$(echo "$LOUT" | sed -n 's/.*"run":"\([^"]*\)".*/\1/p')"
+python3 -c 'import re,sys
+line=[l for l in open(sys.argv[1],encoding="utf-8") if l.startswith("run --auto")][0]
+t=re.search(r"--title agora: (gt-[0-9a-f]+) (\S+)",line).group(2)
+sys.exit(0 if len(t)==60 and set(t)=={"甲"} else 1)' "$LLOG" \
+  && ok "create/run title 截 60 码点（70 字输入→恰 60）" || fail "title 截断断言（$LLOG）"
+NT=$(TID "$(TITLE="无title行回退任务" VERIFY=true PROJECT_DIR="$PROJ" TC)")
+sed -i '/^title:/d' "$AGORA_HOME/wiki/tasks/$NT.md"
+NOUT=$(AGORA_RUNTIME=echo AGORA_MAX_SPAWN=99 bash "$AGORA_HOME/scripts/dispatch.sh" --actor tester@proj --project "$PROJ" --task "$NT")
+NLOG="$AGORA_HOME/$(echo "$NOUT" | sed -n 's/.*"run":"\([^"]*\)".*/\1/p')"
+grep -q -- "--title agora: $NT " "$NLOG" \
+  && ok "无 title 行→CTITLE 回退 agora: <task>（--title 恒非空）" || fail "无 title 行回退（$NLOG, out=$NOUT）"
+# ⑤ MAX_DEPTH 默认5：代码＋规格＋设计＋README 四处一致
+grep -q 'AGORA_MAX_DEPTH:-5' "$PKG/scripts/dispatch.sh" && ! grep -q 'AGORA_MAX_DEPTH:-3' "$PKG/scripts/dispatch.sh" \
+  && grep -q 'AGORA_MAX_DEPTH=5' "$PKG/docs/Agora接口规格-v1.md" "$PKG/docs/全量委托设计-v1.md" \
+  && ! grep -q 'AGORA_MAX_DEPTH=3' "$PKG/docs/Agora接口规格-v1.md" "$PKG/docs/全量委托设计-v1.md" \
+  && grep -q 'AGORA_MAX_DEPTH` (default 5)' "$PKG/README.md" \
+  && ! grep -q '（默认 2）时拒绝' "$PKG/docs/Agora接口规格-v1.md" \
+  && ok "MAX_DEPTH 默认5：代码＋规格＋设计＋README 同步一致" || fail "MAX_DEPTH 默认值同步不一致"
 
 echo
 echo "===== 结果: $PASS 通过, $FAIL 失败 ====="

@@ -3,7 +3,7 @@
 # 用法: dispatch.sh --actor NAME@PROJ --project DIR --task gt-xxxx [--prompt "..."]
 set -euo pipefail
 AGORA_HOME="${AGORA_HOME:-$HOME/agora}"
-MAX_DEPTH="${AGORA_MAX_DEPTH:-3}"; MAX_SPAWN="${AGORA_MAX_SPAWN:-3}"
+MAX_DEPTH="${AGORA_MAX_DEPTH:-5}"; MAX_SPAWN="${AGORA_MAX_SPAWN:-3}"
 RUNTIME="${AGORA_RUNTIME:-opencode}"
 
 ACTOR=""; PDIR=""; TASK=""; PROMPT=""; DTASK=""
@@ -110,8 +110,15 @@ WT_DIR=""
 [ -f "$PAGE" ] && WT_DIR=$(sed -n 's/^wt_dir:[[:space:]]*//p' "$PAGE" | head -1)
 WT_MAIN=""
 if [ -n "$WT_DIR" ]; then
+  RB_IN=$(realpath "$PDIR" 2>/dev/null) || RB_IN="$PDIR"   # 父链删净时保底裸路径（评审 R2-F1：stderr JSON 契约）
   WT_MAIN=$(PYTHONPATH="$AGORA_HOME/scripts" python3 -c 'import sys, agora_lib
-p = sys.argv[1]; m = agora_lib.main_repo_of(p); print(m or p)' "$(realpath "$PDIR")")
+p = sys.argv[1]; m = agora_lib.main_repo_of(p); print(m or p)' "$RB_IN")
+fi
+# 子会话命名（gt-2845②）：create/--title 同名 "agora: <task-id> <任务title截60字>"（title 按码点截断防劈字）
+CTITLE=""
+if [ -f "$PAGE" ]; then
+  _TT=$(sed -n 's/^title:[[:space:]]*//p' "$PAGE" | head -1 | sed 's/^"\(.*\)"$/\1/; s/[[:space:]]*$//')
+  CTITLE=$(python3 -c 'import sys;print(("agora: "+sys.argv[1]+" "+sys.argv[2][:60]).rstrip())' "$TASK" "$_TT")
 fi
 
 # 预检（落账前，失败零账本残留；SPAWN_PRECHECK 同步可见——失败必须响）
@@ -122,20 +129,31 @@ if [ -n "$WT_DIR" ]; then
   if [ ! -d "$WT_DIR" ]; then
     # 锚点重建（FMEA D2）：分支在→直挂既有分支；分支已删→默认分支重建分支
     # （S1：基点=init.defaultBranch/main/master 序探，不用主仓当前 HEAD——主仓停他支时防漂移）。
-    # prune 先行：目录被 rm 后 .git/worktrees 注册残留会让 add 拒绝同路径重建
-    git -C "$WT_MAIN" worktree prune
-    if git -C "$WT_MAIN" show-ref --verify --quiet "refs/heads/wt/$TASK"; then
-      git -C "$WT_MAIN" worktree add -q "$WT_DIR" "wt/$TASK" \
-        || fail SPAWN_PRECHECK "树重建失败（挂既有分支）: $WT_DIR" 9
-    else
-      DEFBR=""
-      for _c in "$(git -C "$WT_MAIN" config --get init.defaultBranch 2>/dev/null)" main master; do
-        [ -n "$_c" ] && git -C "$WT_MAIN" show-ref --verify --quiet "refs/heads/$_c" && { DEFBR="$_c"; break; }
-      done
-      [ -n "$DEFBR" ] || fail SPAWN_PRECHECK "默认分支不可解析（init.defaultBranch/main/master 均缺）" 9
-      git -C "$WT_MAIN" worktree add -q -b "wt/$TASK" "$WT_DIR" "$DEFBR" \
-        || fail SPAWN_PRECHECK "树重建失败（默认分支基点 $DEFBR）: $WT_DIR" 9
-    fi
+    # prune 先行：目录被 rm 后 .git/worktrees 注册残留会让 add 拒绝同路径重建。
+    # post.lock 同锁互斥（评审 B-1/ocr-6：与 post.sh verify 重建段收敛并发窗）
+    RB_RC=0
+    (
+      flock -w "${AGORA_LOCK_WAIT:-5}" 9 || exit 3
+      git -C "$WT_MAIN" worktree prune
+      if git -C "$WT_MAIN" show-ref --verify --quiet "refs/heads/wt/$TASK"; then
+        git -C "$WT_MAIN" worktree add -q "$WT_DIR" "wt/$TASK" || exit 9
+      else
+        DEFBR=""
+        for _c in "$(git -C "$WT_MAIN" config --get init.defaultBranch 2>/dev/null)" main master; do
+          [ -n "$_c" ] && git -C "$WT_MAIN" show-ref --verify --quiet "refs/heads/$_c" && { DEFBR="$_c"; break; }
+        done
+        [ -n "$DEFBR" ] || exit 8
+        echo "rebuild: 默认分支基点=$DEFBR" >&2   # 评审 R2-F3：rc7 诊断保住基点名（子壳变量不出壳）
+        git -C "$WT_MAIN" worktree add -q -b "wt/$TASK" "$WT_DIR" "$DEFBR" || exit 7
+      fi
+    ) 9>"$AGORA_HOME/.git/post.lock" || RB_RC=$?
+    case "$RB_RC" in
+      0) ;;
+      3) fail SPAWN_PRECHECK "树重建锁超时（post.lock ${AGORA_LOCK_WAIT:-5}s）" 9 ;;
+      8) fail SPAWN_PRECHECK "默认分支不可解析（init.defaultBranch/main/master 均缺）" 9 ;;
+      7) fail SPAWN_PRECHECK "树重建失败（默认分支基点）: $WT_DIR" 9 ;;
+      *) fail SPAWN_PRECHECK "树重建失败（挂既有分支）: $WT_DIR" 9 ;;
+    esac
   fi
   # setup 钩子（设计 §五环境完备）：项目页 setup: 命令在树内先跑（装环境；预检段执行＝失败零落账）
   SETUPCMD=""
@@ -170,7 +188,7 @@ if [ -z "$WT_DIR" ]; then
   fi
 fi
 
-BOOT="你是广场派生的一次性工作会话。按开场仪式查收信、看看板；你的任务是 $TASK（读 wiki/tasks/$TASK.md，按 verify 要求验收）。若任务页有 wt_dir：你在该专用树内开发——新鲜树缺 node_modules/venv 等环境，先装环境再验收（项目页 setup: 已由 dispatch 预跑）。动手实施前先 agora_post(event=plan, task=$TASK) 落实施计划——dispatcher ack（mention 你）后再动工；等待超 30min 无 ack 可自行放行并在 plan 评论注明。每完成一个里程碑 agora_post(event=progress, task=$TASK) 刷新看板。你不自己合并——done 即止（树上 commit＋自验），合并由 dispatcher 走 merge.sh；需改第三仓照常 task_create＋dispatch 下钻（受深度/配额约束）；等待下级时 post progress 后退出，由 poll 恢复性重派唤醒。若你是恢复性重派：先 agora_history(task=$TASK) 自查进度、git status/log 查半成品，接着做。合并阶段 non-ff 冲突：先在原树 rebase 到合并目标分支，重走 verify 再试。完成后 agora_post(event=done) 并结束。${PROMPT:+ 补充指示：$PROMPT}"
+BOOT="你是广场派生的一次性工作会话。按开场仪式查收信、看看板；你的任务是 $TASK（读 wiki/tasks/$TASK.md，按 verify 要求验收）。若任务页有 wt_dir：你在该专用树内开发——新鲜树缺 node_modules/venv 等环境，先装环境再验收（项目页 setup: 已由 dispatch 预跑）。动手实施前先 agora_post(event=plan, task=$TASK) 落实施计划——post(plan) 后即开工不等 ack；commit 前重读账本。每完成一个里程碑 agora_post(event=progress, task=$TASK) 刷新看板。你不自己合并——done 即止（树上 commit＋自验），合并由 dispatcher 走 merge.sh；需改第三仓照常 task_create＋dispatch 下钻（受深度/配额约束）；等待下级时 post progress 后退出，由 poll 恢复性重派唤醒。若你是恢复性重派：先 agora_history(task=$TASK) 自查进度、git status/log 查半成品，接着做。合并阶段 non-ff 冲突：先在原树 rebase 到合并目标分支，重走 verify 再试。完成后 agora_post(event=done) 并结束。${PROMPT:+ 补充指示：$PROMPT}"
 # 注入防御：PROMPT/PDIR 均不可信（PROMPT 可能来自他机邮件摘要）。一律走 env 传数据 +
 # 单引号脚本，bash -c 体内不出现任何外部插值
 
@@ -179,12 +197,14 @@ BOOT="你是广场派生的一次性工作会话。按开场仪式查收信、�
 # 保 LEDGER_FAILED→零工作不变量；create/health 失败发生在落账前 → API=0 回落 run（账本与纯 run 一致，零残留）
 SID=""
 if [ "$API" = 1 ]; then
-  SID=$(timeout 20 bash "$RT" create "$PDIR" 2>/dev/null) || SID=""
+  SID=$(timeout 20 bash "$RT" create "$PDIR" "$CTITLE" 2>/dev/null) || SID=""
   [ -z "$SID" ] && API=0
 fi
-PARGS=(--actor "$ACTOR" --project "$PROJNAME" --event dispatched --task "$TASK" --target "$PDIR" --child "$CHILD" --run "$LOG")
+# gt-2845③：run 通道预生成外部 sid——spike 实证服务端接受 run --session 外部 id（2026-10-23，ses_<26> rc0 回显同 id）；
+# dispatched session: 两通道统一承载子 sid（api=create 返回，run=预生成经 --session 落会话）
+[ -z "$SID" ] && SID="ses_$(head -c64 /dev/urandom | base64 | tr -dc 'a-zA-Z0-9' | head -c26)"
+PARGS=(--actor "$ACTOR" --project "$PROJNAME" --event dispatched --task "$TASK" --target "$PDIR" --child "$CHILD" --run "$LOG" --session "$SID")
 [[ -n "$DTASK" ]] && PARGS+=(--dispatcher-task "$DTASK")
-[[ -n "$SID" ]] && PARGS+=(--session "$SID")
 POUT=$(bash "$AGORA_HOME/scripts/post.sh" "${PARGS[@]}" 2>&1) \
   || { printf '%s\n' "$POUT" >&2; fail LEDGER_FAILED "dispatched 落账失败（详情见 stderr 上一行）" 4; }
 DEDUP=$(echo "$POUT" | sed -n 's/.*"dedup":\(true\|false\).*/\1/p')
@@ -200,11 +220,12 @@ spawn_attempt() {
     printf 'gt: %s\nworktree: %s\ndispatched: %s\n' "$TASK" "$(realpath "$WT_DIR")" "$(date -Is)" \
       > "$WT_DIR/.omo/agora-delegation/$TASK.md"
   fi
+  echo "SESSION:$_try=$SID" >> "$AGORA_HOME/$LOG"
   touch "$AGORA_HOME/$LOG.live"
   setsid env AGORA_DEPTH=$NEXT AGORA_HOME="$AGORA_HOME" AGORA_RUNTIME="$RUNTIME" \
     AGORA_BOOT="$BOOT" AGORA_PDIR="$PDIR" AGORA_LIVEF="$AGORA_HOME/$LOG.live" \
-    AGORA_LOGF="$AGORA_HOME/$LOG" AGORA_TRY="$_try" \
-    bash -c 'cd "$AGORA_PDIR" && "$AGORA_RUNTIME" run --auto "$AGORA_BOOT"; rc=$?; echo "EXIT:$AGORA_TRY=$rc" >> "$AGORA_LOGF"; rm -f "$AGORA_LIVEF"' \
+    AGORA_LOGF="$AGORA_HOME/$LOG" AGORA_TRY="$_try" AGORA_SID="$SID" AGORA_CTITLE="$CTITLE" \
+    bash -c 'cd "$AGORA_PDIR" && "$AGORA_RUNTIME" run --auto --session "$AGORA_SID" --title "$AGORA_CTITLE" "$AGORA_BOOT"; rc=$?; echo "EXIT:$AGORA_TRY=$rc" >> "$AGORA_LOGF"; rm -f "$AGORA_LIVEF"' \
     >>"$AGORA_HOME/$LOG" 2>&1 < /dev/null &
   for _w in $(seq 1 "${AGORA_VERIFY_WIN:-10}"); do
     _rc=$(sed -n "s/^EXIT:$_try=//p" "$AGORA_HOME/$LOG" 2>/dev/null | tail -1)

@@ -47,7 +47,7 @@ Every parameter is an environment variable, routed through one of three channels
 **① MCP server channel** — set in the MCP client config's `environment` block; the server passes its environment through to the mechanical-layer scripts verbatim:
 
 - `AGORA_HOME` (forum repo location, default `~/agora`), `AGORA_RUNTIME` (runtime used by dispatch, default `opencode`)
-- `AGORA_MAX_SPAWN` / `AGORA_MAX_DEPTH` (dispatch fuses), `AGORA_LOCK_WAIT` (write-lock wait seconds), `AGORA_SYNC_REQUIRED=1` (hard-fail on sync failure instead of degrading)
+- `AGORA_MAX_SPAWN` (default 3) / `AGORA_MAX_DEPTH` (default 5) (dispatch fuses), `AGORA_LOCK_WAIT` (write-lock wait seconds), `AGORA_SYNC_REQUIRED=1` (hard-fail on sync failure instead of degrading)
 - `AGORA_REMOTE` (star-collaboration remote, SSH only) and `AGORA_SIGN_KEY` (SSH signing key for mechanical commits) may also live here, but they only take effect at the server's **first bootstrap** (init.sh runs only when no repo exists). To add/change the remote afterwards, re-run the idempotent init.sh: `AGORA_REMOTE=git@hub:agora.git bash ~/agora/scripts/init.sh`
 
 ```json
