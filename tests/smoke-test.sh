@@ -395,6 +395,7 @@ N1=$(cat "$AGORA_HOME"/log/*/watchdog.md | grep -c ".live 滞留")
 AGORA_RUNTIME=true bash "$AGORA_HOME/scripts/poll.sh" >/dev/null
 N2=$(cat "$AGORA_HOME"/log/*/watchdog.md | grep -c ".live 滞留")
 [[ "$N1" == "$N2" ]] && ok "stale .live 不重复提醒" || fail "stale .live 不重复提醒（$N1→$N2）"
+rm -f "$AGORA_HOME/raw/dispatches/$DID_TEST.live"   # gt-2153：清 stale 标记——teardown 轮询须零等待
 # 只报告模式：SPAWN=0 → held 不派生
 OUT=$(TITLE="poll只报告任务" TC); POLLT2=$(echo "$OUT" | sed -n 's/.*"task":"\(gt-[0-9a-f]*\)".*/\1/p')
 POST rival@proj2 --event progress --task "$POLLT2" --mention tester --body "再来一单" >/dev/null
@@ -1611,6 +1612,7 @@ touch "$AGORA_HOME/raw/dispatches/d-stale.log.live"; touch -d '2 hours ago' "$AG
 AGORA_MERGE_WAIT_MIN=9999 AGORA_ORPHAN_MIN=9999 AGORA_WT_GRACE_MIN=9999 AGORA_DISPATCH_TIMEOUT=0 \
   bash "$AGORA_HOME/scripts/poll.sh" >/dev/null 2>&1
 LEV "$SL" diagnosed | grep -q "滞留" && ok "⑦ .live 滞留→diagnosed（既有档回归）" || fail "⑦ stale-live"
+rm -f "$AGORA_HOME/raw/dispatches/d-stale.log.live"   # gt-2153：清 stale 标记——teardown 轮询须零等待
 
 echo "===== BOOT 链式协议＋setup 钩子（全量委托 L1 Task8） ====="
 for _t in $(python3 - "$AGORA_HOME" <<'PYEOF'
@@ -2173,7 +2175,153 @@ grep -q 'AGORA_MAX_DEPTH:-5' "$PKG/scripts/dispatch.sh" && ! grep -q 'AGORA_MAX_
   && ok "MAX_DEPTH 默认5：代码＋规格＋设计＋README 同步一致" || fail "MAX_DEPTH 默认值同步不一致"
 
 echo
+echo "===== 多仓关联测试场（B批 gt-2153）：跨仓链/删树重建/中途 cancelled/深度边界＋teardown 竞态 ====="
+# 纯 stub/fake runtime 离线跑；MAX_DEPTH 用 env 显式控制；夹具全在 mktemp $T 内，不触真实账本
+BREMOTE="$T/b-remote.git"; git init -q --bare "$BREMOTE"
+AGORA_REMOTE="file://$BREMOTE" bash "$PKG/scripts/init.sh" >/dev/null 2>&1
+REPA="$T/repa"; REPB="$T/repb"; REPC="$T/repc"
+for _r in "$REPA" "$REPB" "$REPC"; do
+  mkdir -p "$_r"; (cd "$_r" && git init -q . && echo FIXED > app.txt && git add -A && git -c user.name=t -c user.email=t@local commit -qm init)
+done
+mkdir -p "$AGORA_HOME/wiki/entities"
+printf -- '---\nname: borch\ndirs:\n  - %s\ncan_spawn: true\n---\n' "$REPA" > "$AGORA_HOME/wiki/entities/borch.md"
+printf -- '---\nname: bmid\ndirs:\n  - %s\ncan_spawn: true\n---\n' "$REPB" > "$AGORA_HOME/wiki/entities/bmid.md"
+printf -- '---\nname: bleaf\ndirs:\n  - %s\ncan_spawn: false\n---\n' "$REPC" > "$AGORA_HOME/wiki/entities/bleaf.md"
+(cd "$AGORA_HOME" && git add -A && AGORA_MECHANICAL=1 git commit -qm "entities B批测试场" >/dev/null)
+BRANCH=$(git -C "$AGORA_HOME" symbolic-ref --short HEAD)
+[ "$(git -C "$AGORA_HOME" remote get-url origin)" = "file://$BREMOTE" ] \
+  && git -C "$BREMOTE" show-ref --verify -q "refs/heads/$BRANCH" \
+  && ok "测试场远端：file:// bare 经 init.sh AGORA_REMOTE 配置＋push 落 bare" || fail "测试场远端 file://（origin=$(git -C "$AGORA_HOME" remote get-url origin 2>&1)）"
+OUT=$(AGORA_REMOTE="https://agora.example/acme/agora.git" bash "$PKG/scripts/init.sh" 2>&1); RC=$?
+[[ $RC -eq 1 ]] && echo "$OUT" | grep -q "拒绝非 SSH 远端" && [ "$(git -C "$AGORA_HOME" remote get-url origin)" = "file://$BREMOTE" ] \
+  && ok "装饰 https URL 被 init.sh 拒绝（rc=1，origin 不动，不实际推送）" || fail "装饰 https URL 处理（rc=$RC out=$OUT）"
+BDSP() { AGORA_RUNTIME=echo AGORA_MAX_SPAWN=99 bash "$AGORA_HOME/scripts/dispatch.sh" "$@"; }
+
+# ① 同仓链 a→b→c→…（dtask 显式链）：MAX_DEPTH=5 下 depth1..4 全放行，NEXT=5 DEPTH_EXCEEDED；env 显式收紧提前拒
+SA=$(TID "$(TITLE="同仓链根a标题够长" VERIFY=true PROJECT_DIR="$REPA" TC)")
+POST borch@repa --event claimed --task "$SA" >/dev/null
+SB=$(TID "$(TITLE="同仓链b标题够长" VERIFY=true PROJECT_DIR="$REPA" TC)")
+SC=$(TID "$(TITLE="同仓链c标题够长" VERIFY=true PROJECT_DIR="$REPA" TC)")
+SD=$(TID "$(TITLE="同仓链d标题够长" VERIFY=true PROJECT_DIR="$REPA" TC)")
+SE=$(TID "$(TITLE="同仓链e标题够长" VERIFY=true PROJECT_DIR="$REPA" TC)")
+SF=$(TID "$(TITLE="同仓链f标题够长" VERIFY=true PROJECT_DIR="$REPA" TC)")
+SG=$(TID "$(TITLE="同仓链g标题够长" VERIFY=true PROJECT_DIR="$REPA" TC)")
+BDSP --actor borch@repa --project "$REPA" --task "$SB" >/dev/null 2>&1                                # dt机械=SA, depth1
+BDSP --actor borch@repa --project "$REPA" --task "$SC" --dispatcher-task "$SB" >/dev/null 2>&1        # depth2
+BDSP --actor borch@repa --project "$REPA" --task "$SD" --dispatcher-task "$SC" >/dev/null 2>&1        # depth3
+BDSP --actor borch@repa --project "$REPA" --task "$SE" --dispatcher-task "$SD" >/dev/null 2>&1        # depth4
+LEV "$SE" dispatched | grep -q "dispatcher_task:$SD" \
+  && ok "同仓链 a→b→c→d→e 四层派发全落账（dtask 链完整）" || fail "同仓链 dtask 落账缺失"
+BDSP --actor borch@repa --project "$REPA" --task "$SF" --dispatcher-task "$SE" 2>&1 | grep -q DEPTH_EXCEEDED \
+  && ok "深度边界：MAX_DEPTH=5 链深 NEXT=5 DEPTH_EXCEEDED（到顶）" || fail "深度边界 NEXT=5 未拒"
+OUT=$(AGORA_MAX_DEPTH=3 BDSP --actor borch@repa --project "$REPA" --task "$SG" --dispatcher-task "$SC" 2>&1)
+echo "$OUT" | grep -q DEPTH_EXCEEDED \
+  && ok "env 显式 MAX_DEPTH=3：第 4 层（dtask=SC 链深 3）拒" || fail "env 显式边界未拒（$OUT）"
+
+# ② 跨仓链 a 派 b 仓任务，b 再派 c 仓任务：dtask 机械推导＋账本链可重放
+TA=$(TID "$(TITLE="跨仓链根a标题够长" VERIFY=true PROJECT_DIR="$REPA" TC)")
+POST borch@repa --event claimed --task "$TA" >/dev/null
+TB=$(TID "$(TITLE="跨仓b仓任务标题够长" VERIFY=true PROJECT_DIR="$REPB" WT=1 IDEM=btb TC)")
+WRTB=$(ls -d "$T"/repb__wt-${TB}__* 2>/dev/null | head -1)
+[ -d "$WRTB" ] && ok "跨仓 b 树随 task_create 建立（wt_dir 登记）" || fail "跨仓 b 树缺失"
+OUT=$(BDSP --actor borch@repa --project "$REPB" --task "$TB")
+echo "$OUT" | grep -q '"mode":"spawned"' && echo "$OUT" | grep -q '"child_actor":"bmid@repb"' \
+  && ok "跨仓链 a 派 b 仓任务（child=bmid@repb 机械解析）" || fail "跨仓 a→b 派发（$OUT）"
+POST bmid@repb --event claimed --task "$TB" >/dev/null
+TC=$(TID "$(TITLE="跨仓c仓任务标题够长" VERIFY=true PROJECT_DIR="$REPC" TC)")
+OUT=$(BDSP --actor bmid@repb --project "$REPC" --task "$TC")
+echo "$OUT" | grep -q '"mode":"spawned"' && echo "$OUT" | grep -q '"child_actor":"bleaf@repc"' \
+  && ok "跨仓链 b 再派 c 仓任务（child=bleaf@repc）" || fail "跨仓 b→c 派发（$OUT）"
+LEV "$TB" dispatched | head -1 | grep -q "dispatcher_task:$TA" && LEV "$TB" dispatched | head -1 | grep -qF "target:$REPB" \
+  && ok "账本：TB dispatched 含 dispatcher_task:$TA＋target:repb" || fail "TB 账本链缺失"
+LEV "$TC" dispatched | grep -q "dispatcher_task:$TB" && LEV "$TC" dispatched | grep -qF "target:$REPC" \
+  && ok "账本：TC dispatched 含 dispatcher_task:$TB＋target:repc" || fail "TC 账本链缺失"
+PYTHONPATH="$AGORA_HOME/scripts" python3 - "$AGORA_HOME" "$TC" <<'PYEOF' && ok "dispatcher_task 链可重放：账本复算 depth(TC)=2" || fail "链重放 depth≠2"
+import glob, re, sys
+home, tc = sys.argv[1], sys.argv[2]
+disp = {}
+for f in sorted(glob.glob(f"{home}/log/*/*.md") + glob.glob(f"{home}/log/*/.*.md")):
+    try: lines = open(f, encoding="utf-8", errors="replace").read().splitlines()
+    except OSError: continue
+    for line in lines:
+        if "event:dispatched" not in line: continue
+        m = re.search(r"task:(gt-[0-9a-f]{4,})", line)
+        if not m: continue
+        d = re.search(r"dispatcher_task:(gt-[0-9a-f]{4,})", line)
+        disp[m.group(1)] = d.group(1) if d else ""
+def depth(t, seen):
+    if t not in disp or t in seen: return 0
+    d = disp[t]
+    return 1 if not d else 1 + depth(d, seen | {t})
+sys.exit(0 if depth(tc, frozenset()) == 2 else 1)
+PYEOF
+
+# ③ 上游 wt 树删除 → dispatch 锚点重建
+rm -rf "$WRTB"
+OUT=$(BDSP --actor borch@repa --project "$REPB" --task "$TB")
+echo "$OUT" | grep -q '"mode":"spawned"' && [ -d "$WRTB" ] \
+  && ok "上游 wt 树删除后 dispatch 锚点重建（spawned＋目录复在）" || fail "锚点重建（$OUT, [ -d $WRTB ]）"
+
+# ④ D4：链中途 cancelled → done 自动 @ 上行
+POST borch@repa --event cancelled --task "$TB" --reason "链中途取消演练" >/dev/null
+POST borch@repa --event reopened --task "$TB" --reason "上游改判收口" >/dev/null
+POST bmid@repb --event claimed --task "$TB" >/dev/null
+POST bmid@repb --event done --task "$TB" --commit HEAD --evidence "取消后收口" >/dev/null
+TASK="$TB" bash "$AGORA_HOME/scripts/history.sh" | python3 -c "
+import json,sys
+done=[e for e in json.load(sys.stdin)['events'] if e['event']=='done'][-1]
+assert 'borch' in (done.get('mention') or ''), done.get('mention')
+" && ok "D4：链中途 cancelled→done 自动 @ 上行 borch" || fail "D4 上行 mention 缺 borch"
+POST bleaf@repc --event claimed --task "$TC" >/dev/null
+POST bleaf@repc --event done --task "$TC" --commit HEAD --evidence "下游交付" >/dev/null
+TASK="$TC" bash "$AGORA_HOME/scripts/history.sh" | python3 -c "
+import json,sys
+done=[e for e in json.load(sys.stdin)['events'] if e['event']=='done'][-1]
+assert 'bmid' in (done.get('mention') or ''), done.get('mention')
+" && ok "D4：下游 TC done 自动 @ 上行 bmid（其上游 TB 已 cancelled）" || fail "D4 下游 mention 缺 bmid"
+
+# ⑤ 假 runtime EXIT≠0 秒死 → diagnosed＋恰好一次重试（try1 败→try2 成）
+BRT="$T/bretrt"; printf '#!/usr/bin/env bash\n[ "$1" = "--version" ] && exit 0\n[ "${AGORA_TRY:-}" = "1" ] && exit 9\nexit 0\n' > "$BRT"; chmod +x "$BRT"
+R5=$(TID "$(TITLE="秒死重试成功任务" VERIFY=true PROJECT_DIR="$REPA" TC)")
+OUT=$(AGORA_RUNTIME="$BRT" AGORA_MAX_SPAWN=99 bash "$AGORA_HOME/scripts/dispatch.sh" --actor borch@repa --project "$REPA" --task "$R5" 2>&1)
+echo "$OUT" | grep -q '"mode":"spawned"' && ok "假 runtime EXIT≠0 秒死→恰好一次重试后 spawned" || fail "重试成功路径（$OUT）"
+R5LOG="$AGORA_HOME/$(echo "$OUT" | sed -n 's/.*"run":"\([^"]*\)".*/\1/p')"
+grep -q '^EXIT:1=9' "$R5LOG" && grep -q '^EXIT:2=0' "$R5LOG" && [ "$(grep -c '^EXIT:' "$R5LOG")" -eq 2 ] \
+  && ok "恰好一次重试（EXIT:1=9→EXIT:2=0，恰 2 行）" || fail "重试标记异常（$(grep '^EXIT:' "$R5LOG" 2>/dev/null | tr '\n' ' ')）"
+[ "$(cat "$AGORA_HOME"/log/*/*.md 2>/dev/null | grep -F "task:$R5" | grep -c "event:diagnosed")" -eq 1 ] \
+  && ok "秒死 diagnosed 恰好 1 条（重试成功不二次诊断）" || fail "diagnosed 计数异常"
+
+# ⑥ 新会话命名断言：--title agora: gt-xxxx <title>（create/run 同名）
+N6=$(TID "$(TITLE="新会话命名断言用例" VERIFY=true PROJECT_DIR="$REPA" TC)")
+OUT=$(BDSP --actor borch@repa --project "$REPA" --task "$N6")
+N6LOG="$AGORA_HOME/$(echo "$OUT" | sed -n 's/.*"run":"\([^"]*\)".*/\1/p')"
+grep -qF -- "--title agora: $N6 新会话命名断言用例" "$N6LOG" \
+  && ok "新会话命名：--title agora: gt-xxxx <title>" || fail "命名断言（$(grep -o -- "--title agora: $N6 新会话命名断言用例" "$N6LOG" 2>/dev/null | head -1)）"
+
+# ⑦ teardown 竞态修复：.live 有界轮询（清空或超时）再 rm——子会话存活期禁删夹具目录
+SSTUB="$T/bsleeprt"; printf '#!/usr/bin/env bash\n[ "$1" = "--version" ] && exit 0\nsleep 4\nexit 0\n' > "$SSTUB"; chmod +x "$SSTUB"
+TEARDOWN_WAIT=20
+wait_live_clear() {
+  local _i
+  for _i in $(seq 1 "$TEARDOWN_WAIT"); do
+    [ -z "$(find "$AGORA_HOME/raw/dispatches" -name '*.live' 2>/dev/null)" ] && return 0
+    sleep 1
+  done
+  echo "WARN: teardown 轮询 ${TEARDOWN_WAIT}s 后仍见 .live 滞留" >&2
+  return 1
+}
+O7=$(TID "$(TITLE="teardown竞态用例任务" VERIFY=true PROJECT_DIR="$REPA" TC)")
+OUT=$(AGORA_RUNTIME="$SSTUB" AGORA_VERIFY_WIN=1 AGORA_MAX_SPAWN=99 bash "$AGORA_HOME/scripts/dispatch.sh" --actor borch@repa --project "$REPA" --task "$O7")
+echo "$OUT" | grep -q '"mode":"spawned"' && ok "验证窗尽仍活=过：1s 窗口派发返回 spawned" || fail "竞态用例派发（$OUT）"
+O7LOG="$AGORA_HOME/$(echo "$OUT" | sed -n 's/.*"run":"\([^"]*\)".*/\1/p')"
+[ -f "$O7LOG.live" ] && pgrep -f "agora: $O7" >/dev/null \
+  && ok "竞态窗现形：dispatch 返回后 .live 在＋子会话进程活（旧逻辑此时 rm 即孤儿）" || fail "竞态窗未现形"
+wait_live_clear && [ ! -f "$O7LOG.live" ] && ! pgrep -f "agora: $O7" >/dev/null \
+  && ok "teardown 有界轮询：.live 清空＋零孤儿进程" || fail "teardown 轮询后仍有活会话/标记"
+
+echo
 echo "===== 结果: $PASS 通过, $FAIL 失败 ====="
 
+wait_live_clear || true   # gt-2153：rm 夹具前等派发子会话退场（清空或超时再删）
 rm -rf "$T"
 [ "$FAIL" -eq 0 ]
