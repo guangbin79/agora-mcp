@@ -1842,7 +1842,7 @@ echo "===== L2 API 通道批（T1 适配器契约 stub 测 / T2 API 派生 / T3 
 FAKEDIR="$T/fakebin"; FAKE_HOME="$T/fakeapi"; mkdir -p "$FAKEDIR" "$FAKE_HOME"
 cat > "$FAKEDIR/opencode" <<'STUB'
 #!/usr/bin/env bash
-# 假 opencode（smoke 专用）。FAKE_HOME/ctrl: none|health_fail|create_fail|inject_fail|status_dead
+# 假 opencode（smoke 专用）。FAKE_HOME/ctrl: none|health_fail|create_fail|inject_fail|inject_slow|status_dead
 set -u
 FH="${FAKE_HOME:?FAKE_HOME required}"
 log() { printf '%s\n' "$*" >> "$FH/calls.log"; }
@@ -1863,6 +1863,7 @@ CTRL=$(cat "$FH/ctrl" 2>/dev/null || echo none)
 case "$P" in
   */prompt)
     [ "$CTRL" = inject_fail ] && exit 1
+    [ "$CTRL" = inject_slow ] && sleep 2   # C 二期 K5：撑开 inject 窗口让 pgid 落盘可观测
     echo "$D" > "$FH/last_prompt.json"; log "PROMPT-OK $P"
     echo '{"data":{"id":"msg_1"}}'; exit 0 ;;
 esac
@@ -1931,6 +1932,11 @@ fake_reset none
 [ "$(FAKE status ses_x 2>/dev/null)" = "idle" ] && ok "S1e status idle" || fail "S1e status idle"
 fake_reset status_dead
 [ "$(FAKE status ses_x 2>/dev/null)" = "dead" ] && ok "S1e status dead" || fail "S1e status dead"
+# S1g abort：POST /api/session/<sid>/interrupt（C 二期 gt-0a34 spike：v2.1.2 openapi 实证端点在场）
+fake_reset none
+FAKE abort ses_fake9 >/dev/null 2>&1
+grep -q "api POST /api/session/ses_fake9/interrupt" "$FAKE_HOME/calls.log" \
+  && ok "S1g abort 契约 POST /session/{id}/interrupt" || fail "S1g abort（$(tail -1 "$FAKE_HOME/calls.log" 2>/dev/null)）"
 
 # ---- T2: dispatch API 通道（sid 落账 / 回落零残留 / 凭据预写不变 / inject 败兜底） ----
 POSTD() { PATH="$FAKEDIR:$PATH" FAKE_HOME="$FAKE_HOME" AGORA_MAX_SPAWN=99 AGORA_RUNTIME_API=1 bash "$AGORA_HOME/scripts/dispatch.sh" --actor tester@proj --project "$PROJ" "$@"; }
@@ -2525,6 +2531,61 @@ POST tester@proj --event claimed --task "$HD" >/dev/null
 POST tester@proj --event done --task "$HD" --commit HEAD --evidence ok >/dev/null
 POLLT >/dev/null
 [ -d "$WHD" ] && ok "⑩ done 不清（B-C1 回归；窄域仅限 cancelled）" || fail "⑩ done 树被误删"
+
+echo
+echo "===== C 二期（gt-0a34）：kill 能力——pgid 落盘 / 进程组 kill / pid 复用防线 / abort 契约 ====="
+# K1 run 通道 pgid 落盘：阻塞 stub 派发后 .live=数字 pgid 且组长 cmdline 含任务标识（AGORA_TASK 锚点）
+K1=$(TID "$(TITLE="kill能力pgid落盘用例" VERIFY=true PROJECT_DIR="$REPA" TC)")
+OUT=$(AGORA_RUNTIME="$SSTUB" AGORA_VERIFY_WIN=1 AGORA_MAX_SPAWN=99 bash "$AGORA_HOME/scripts/dispatch.sh" --actor borch@repa --project "$REPA" --task "$K1")
+echo "$OUT" | grep -q '"mode":"spawned"' || fail "K1 派发失败（$OUT）"
+K1LOG="$AGORA_HOME/$(echo "$OUT" | sed -n 's/.*"run":"\([^"]*\)".*/\1/p')"
+K1PGID=$(cat "$K1LOG.live" 2>/dev/null)
+case "$K1PGID" in ''|*[!0-9]*) fail "K1 run 通道 pgid 落盘（live 内容: $(cat "$K1LOG.live" 2>/dev/null)）" ;; *) ok "K1 run 通道 pgid 落盘（.live=$K1PGID）" ;; esac
+tr '\0' ' ' <"/proc/$K1PGID/cmdline" 2>/dev/null | grep -q "$K1" \
+  && ok "K1 组长 cmdline 含任务标识（pid 复用校验锚点）" || fail "K1 cmdline 无任务标识"
+# K2 cancel --kill 真杀：进程组消失＋.live 清＋body kill:pgid=＋JSON kill 键
+OUT=$(CANCEL --actor borch@repa --task "$K1" --kill)
+kill -0 -- "-$K1PGID" 2>/dev/null && K2ALIVE=y || K2ALIVE=n
+[[ "$K2ALIVE" = n ]] && [ ! -f "$K1LOG.live" ] \
+  && ok "K2 真杀：进程组消失＋.live 清" || fail "K2（组活=$K2ALIVE live=$([ -f "$K1LOG.live" ] && echo in || echo gone)）"
+LEV "$K1" cancelled | grep -q "kill:pgid=$K1PGID" \
+  && ok "K2 cancelled body 附 kill:pgid=" || fail "K2 body 无 kill 标记（$(LEV "$K1" cancelled | head -1)）"
+echo "$OUT" | grep -q "\"kill\":\"kill:pgid=$K1PGID\"" \
+  && ok "K2 JSON 输出 kill 键" || fail "K2 JSON kill 键（$OUT）"
+# K3 pid 复用不误杀：无辜 setsid sleep 伪造 .live → 不 kill（skipped）＋.live 清
+setsid sleep 30 & K3PID=$!; sleep 0.3
+K3PGID=$(ps -o pgid= -p "$K3PID" 2>/dev/null | tr -d "[:space:]")
+K3=$(TID "$(TITLE="kill复用防误杀用例" VERIFY=true PROJECT_DIR="$REPA" TC)")
+OUT=$(BDSP --actor borch@repa --project "$REPA" --task "$K3")
+K3LOG="$AGORA_HOME/$(echo "$OUT" | sed -n 's/.*"run":"\([^"]*\)".*/\1/p')"
+echo "$K3PGID" > "$K3LOG.live"   # 伪造：live 指向无辜长活进程（cmdline 无任务标识）
+OUT=$(CANCEL --actor borch@repa --task "$K3" --kill)
+kill -0 "$K3PID" 2>/dev/null && K3ALIVE=y || K3ALIVE=n
+[[ "$K3ALIVE" = y ]] && echo "$OUT" | grep -q "skipped-cmdline-mismatch" && [ ! -f "$K3LOG.live" ] \
+  && ok "K3 pid 复用不误杀：无辜进程仍活＋skipped＋.live 清" \
+  || fail "K3（alive=$K3ALIVE out=$OUT）"
+kill "$K3PID" 2>/dev/null || true
+# K4 无 live：--kill 正常取消（kill:no-live，cancelled 照常落账）
+K4=$(TID "$(TITLE="kill无live取消用例" VERIFY=true PROJECT_DIR="$REPA" TC)")
+BDSP --actor borch@repa --project "$REPA" --task "$K4" >/dev/null 2>&1   # echo stub 秒死无 live
+OUT=$(CANCEL --actor borch@repa --task "$K4" --kill)
+echo "$OUT" | grep -q '"kill":"kill:no-live"' && [ -n "$(LEV "$K4" cancelled)" ] \
+  && ok "K4 无 live 正常取消（kill:no-live）" || fail "K4（$OUT）"
+# K5 API 通道 pgid 落盘：inject_slow 撑窗内 .live=数字 pgid，dispatch 返回后零残留
+T2K=$(TID "$(TITLE="API通道pgid落盘用例" VERIFY="true" PROJECT_DIR="$PROJ" TC)")
+echo /nonexist > "$FAKE_HOME/active_dir"   # T5 批在场检测残留：不清则 dispatch 命中「目标有活会话」降级 notified，无 spawn
+fake_reset inject_slow
+POSTD --task "$T2K" >"$T/k5.out" 2>&1 & K5DPID=$!
+K5PGID=""
+for _i in $(seq 1 50); do   # 10s 窗：全量负载下 dispatch 前置（create/落账 git 提交）耗时波动大
+  K5PGID=$(find "$AGORA_HOME/raw/dispatches" -name '*.live' -exec cat {} \; 2>/dev/null | head -1)
+  [ -n "$K5PGID" ] && break
+  sleep 0.2
+done
+case "$K5PGID" in ''|*[!0-9]*) fail "K5 API 通道 pgid 落盘（got: $K5PGID; k5.out: $(cat "$T/k5.out" 2>/dev/null)）" ;; *) ok "K5 API 通道 pgid 落盘（.live=$K5PGID）" ;; esac
+wait "$K5DPID"
+find "$AGORA_HOME/raw/dispatches" -name '*.live' | grep -q . \
+  && fail "K5 API 返回后 live 残留" || ok "K5 API 返回后 .live 零残留"
 
 echo
 echo "===== 结果: $PASS 通过, $FAIL 失败 ====="

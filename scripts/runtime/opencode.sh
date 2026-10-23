@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
-# runtime/opencode.sh —— opencode 服务 API 适配器（设计 §三 L2；契约：health/create/inject/alive/status）
+# runtime/opencode.sh —— opencode 服务 API 适配器（设计 §三 L2；契约：health/create/inject/alive/status/abort）
 # 全部经 `opencode api`；响应形状 {"data":…}／消息新者在前／outcome+time.idle 状态机（v2.1.2 openapi 实证，gt-d154）。
 # spawn 契约＝create+inject 组合：dispatch 两段调用（create 惰性→落账→inject），保 LEDGER_FAILED→零工作不变量。
+# abort（C 二期 gt-0a34 spike）：POST /api/session/{id}/interrupt（v2.1.2 openapi 实证在场）——cancel --kill 的 API 会话中断面。
 # AGORA_RUNTIME≠opencode 或本文件缺失时调用方整体旁路 API 面（stub/替代 runtime 零扰动）。
 set -euo pipefail
-CMD="${1:-}"; [ -n "$CMD" ] || { echo "usage: opencode.sh <health|create|inject|alive|status> ..." >&2; exit 2; }
+CMD="${1:-}"; [ -n "$CMD" ] || { echo "usage: opencode.sh <health|create|inject|alive|status|abort> ..." >&2; exit 2; }
 # 单调用超时：服务僵死不拖垮调用方（post.sh flock 内也走本适配器，必须快速返回）
 api() { timeout "${AGORA_API_TIMEOUT:-15}" opencode api "$@"; }
 jget() { python3 -c "$1" 2>/dev/null; }
@@ -39,5 +40,8 @@ o=d.get("outcome")
 if o in ("failed","interrupted"): print("dead")
 elif o=="succeeded" or d.get("time",{}).get("idle"): print("idle")
 else: print("running")' || { echo dead; exit 0; } ;;
+  abort)    # abort <sid> → POST /api/session/$sid/interrupt（rc0=中断受理；C 二期 gt-0a34 第六契约）
+    [ -n "${2:-}" ] || { echo "abort: sid required" >&2; exit 2; }
+    api POST "/api/session/$2/interrupt" >/dev/null ;;
   *) echo "unknown contract: $CMD" >&2; exit 2 ;;
 esac

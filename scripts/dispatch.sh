@@ -214,19 +214,24 @@ case "$DEDUP" in true|false) ;; *) fail LEDGER_FAILED "post.sh 输出异常（�
 # --auto：无人值守权限放行（未显式 deny 即放行）；子会话 cwd 由 cd 提供（--dir 随 opencode 2.0.32 移除，2026-10-20 实证 exit 1）；AGORA_RUNTIME 覆写为非 opencode 时旗标兼容性自担
 # 验证窗口径：本尝试的 EXIT:<try>=<rc> 行——0=过、非零=秒死、窗口尽仍活=过（长任务）
 spawn_attempt() {
-  local _try="$1" _rc="" _w
+  local _try="$1" _rc="" _w _pgid
   if [ -n "$WT_DIR" ]; then
     mkdir -p "$WT_DIR/.omo/agora-delegation"
     printf 'gt: %s\nworktree: %s\ndispatched: %s\n' "$TASK" "$(realpath "$WT_DIR")" "$(date -Is)" \
       > "$WT_DIR/.omo/agora-delegation/$TASK.md"
   fi
   echo "SESSION:$_try=$SID" >> "$AGORA_HOME/$LOG"
-  touch "$AGORA_HOME/$LOG.live"
+  # C 二期（gt-0a34）：spawn 落子进程组 id 进 .live（cancel --kill 进程面锚点）；AGORA_TASK 进 argv 使 cmdline 含任务标识（pid 复用防线）
   setsid env AGORA_DEPTH=$NEXT AGORA_HOME="$AGORA_HOME" AGORA_RUNTIME="$RUNTIME" \
     AGORA_BOOT="$BOOT" AGORA_PDIR="$PDIR" AGORA_LIVEF="$AGORA_HOME/$LOG.live" \
     AGORA_LOGF="$AGORA_HOME/$LOG" AGORA_TRY="$_try" AGORA_SID="$SID" AGORA_CTITLE="$CTITLE" \
+    AGORA_TASK="$TASK" \
     bash -c 'cd "$AGORA_PDIR" && "$AGORA_RUNTIME" run --auto --session "$AGORA_SID" --title "$AGORA_CTITLE" "$AGORA_BOOT"; rc=$?; echo "EXIT:$AGORA_TRY=$rc" >> "$AGORA_LOGF"; rm -f "$AGORA_LIVEF"' \
+    "$TASK" \
     >>"$AGORA_HOME/$LOG" 2>&1 < /dev/null &
+  _pgid=$(ps -o pgid= -p "$!" 2>/dev/null | tr -d "[:space:]"); _pgid=${_pgid:-$!}
+  printf '%s\n' "$_pgid" > "$AGORA_HOME/$LOG.live"
+  grep -q "^EXIT:$_try=" "$AGORA_HOME/$LOG" 2>/dev/null && rm -f "$AGORA_HOME/$LOG.live" || true   # 秒死竞态：子进程自删 .live 后又被本写入复活
   for _w in $(seq 1 "${AGORA_VERIFY_WIN:-10}"); do
     _rc=$(sed -n "s/^EXIT:$_try=//p" "$AGORA_HOME/$LOG" 2>/dev/null | tail -1)
     [ -n "$_rc" ] && { [ "$_rc" = "0" ] && return 0 || return 1; }
@@ -251,15 +256,18 @@ api_alive_wait() {  # D7 验证窗：轮询 idle——dead=秒死；idle=过；�
   echo "ALIVE:$_try=running" >> "$AGORA_HOME/$LOG"; return 0
 }
 api_spawn_attempt() {  # D2：log/.live/凭据与 run 通道对称（poll 孤儿判据与配额计数不破）
-  local _try="$1" _rc
+  local _try="$1" _rc _ipid
   if [ -n "$WT_DIR" ]; then
     mkdir -p "$WT_DIR/.omo/agora-delegation"
     printf 'gt: %s\nworktree: %s\ndispatched: %s\n' "$TASK" "$(realpath "$WT_DIR")" "$(date -Is)" \
       > "$WT_DIR/.omo/agora-delegation/$TASK.md"
   fi
   echo "SESSION:$_try=$SID" >> "$AGORA_HOME/$LOG"
-  touch "$AGORA_HOME/$LOG.live"
-  if ! timeout 30 bash "$RT" inject "$SID" "$BOOT" 2>>"$AGORA_HOME/$LOG"; then
+  # C 二期（gt-0a34）：setsid 独立进程组（kill -- -pgid 安全），pgid 同落 .live（与 run 通道对称）
+  setsid timeout 30 bash "$RT" inject "$SID" "$BOOT" >>"$AGORA_HOME/$LOG" 2>&1 &
+  _ipid=$!
+  printf '%s\n' "$_ipid" > "$AGORA_HOME/$LOG.live"
+  if ! wait "$_ipid"; then
     echo "INJECT:$_try=fail" >> "$AGORA_HOME/$LOG"; rm -f "$AGORA_HOME/$LOG.live"; return 1
   fi
   api_alive_wait "$_try"; _rc=$?

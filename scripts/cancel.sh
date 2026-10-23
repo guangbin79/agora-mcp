@@ -3,16 +3,20 @@
 # task 省略＝自动推导：当前 actor 最近无终态的已派任务（dispatch.sh:68 active 集口径
 # dispatched∩无终态∩非僵尸，非 claimed 口径）；多活跃时 pick 最近并在 candidates 回全列表。
 # 当前终态 merged/cancelled 拒（ALREADY_TERMINAL；done-unmerged 允许＝放弃未并产出）。
-# 不做任何进程操作（kill 能力归 C 二期）。
-# 用法: cancel.sh --actor NAME@PROJ [--task gt-xxxx] [--reason "..."]
+# C 二期（gt-0a34）--kill：进程面补齐——先 runtime abort（API 会话中断，尽力而为），再按
+# 进程组 kill .live 记录的 pgid（kill -- -pgid）；前置 cmdline 校验含任务标识防 pid 复用误杀；
+# 终了清 .live（兼容 .pid 旁文件）；kill 结果并入 cancelled body（kill: 键）与 JSON 输出。
+# 用法: cancel.sh --actor NAME@PROJ [--task gt-xxxx] [--reason "..."] [--kill]
 set -euo pipefail
 AGORA_HOME="${AGORA_HOME:-$HOME/agora}"
+RUNTIME="${AGORA_RUNTIME:-opencode}"
 fail() { python3 -c 'import json,sys; print(json.dumps({"code":sys.argv[1],"message":sys.argv[2]}, ensure_ascii=False), file=sys.stderr)' "$1" "$2"; exit "${3:-2}"; }
-ACTOR=""; TASK=""; REASON=""
+ACTOR=""; TASK=""; REASON=""; KILL=0
 while [[ $# -gt 0 ]]; do case "$1" in
   --actor) ACTOR="$2";; --task) TASK="$2";; --reason) REASON="$2";;
+  --kill) KILL=1;;   # 单参旗标：禁落尾随 shift 2（越界 rc1）
   *) fail VALIDATION_FAILED "unknown arg: $1";;
-esac; shift 2; done
+esac; if [[ "$1" == "--kill" ]]; then shift 1; else shift 2; fi; done
 [[ -n "$ACTOR" && "$ACTOR" == *@* ]] || fail VALIDATION_FAILED "actor required (NAME@PROJ)"
 [[ -z "$TASK" || "$TASK" =~ ^gt-[0-9a-f]{4,}$ ]] || fail VALIDATION_FAILED "bad task id: $TASK" 2
 PROJECT="${ACTOR##*@}"
@@ -22,6 +26,7 @@ EVAL=$(python3 - "$AGORA_HOME" "$ACTOR" "$TASK" <<'PYEOF'
 import glob, re, sys, json
 home, actor, task = sys.argv[1], sys.argv[2], (sys.argv[3] if len(sys.argv) > 3 else "")
 disp, terminal, last_alive = {}, set(), {}
+runs, sess = {}, {}
 for f in sorted((glob.glob(f"{home}/log/*/*.md") + glob.glob(f"{home}/log/*/.*.md"))):
     try: lines = open(f, encoding="utf-8", errors="replace").read().splitlines()
     except OSError: continue
@@ -34,6 +39,10 @@ for f in sorted((glob.glob(f"{home}/log/*/*.md") + glob.glob(f"{home}/log/*/.*.m
             am = re.search(r"\| actor:(\S+)", line)
             if am and am.group(1) == actor: disp[t] = True   # 只认本 actor 派的
             last_alive[t] = True
+            rm2 = re.search(r"\| run:(\S+)", line)           # C 二期（gt-0a34）：--kill 定位 live/pgid 用
+            if rm2: runs[t] = rm2.group(1)
+            sm = re.search(r"\| session:(\S+)", line)
+            if sm: sess[t] = sm.group(1)
         elif "event:claimed" in line:
             last_alive[t] = True
         elif any(f"event:{e}" in line for e in ("done", "merged", "cancelled")):
@@ -44,9 +53,12 @@ for f in sorted((glob.glob(f"{home}/log/*/*.md") + glob.glob(f"{home}/log/*/.*.m
             last_alive[t] = True
 cands = [t for t in disp if t not in terminal and last_alive.get(t, True)]
 if task:
-    print(json.dumps({"candidates": [task], "pick": task}))
+    print(json.dumps({"candidates": [task], "pick": task,
+                      "run": runs.get(task, ""), "session": sess.get(task, "")}))
 else:
-    print(json.dumps({"candidates": cands, "pick": cands[-1] if cands else ""}))   # 文件序尾＝最近派发
+    pick = cands[-1] if cands else ""   # 文件序尾＝最近派发
+    print(json.dumps({"candidates": cands, "pick": pick,
+                      "run": runs.get(pick, ""), "session": sess.get(pick, "")}))
 PYEOF
 ) || fail INTERNAL "账本重放失败" 4
 PICK=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["pick"])' <<<"$EVAL")
@@ -90,12 +102,40 @@ if [[ -n "$WTD" ]]; then
     TSTAT="clean"; [[ "${DN:-0}" -gt 0 ]] && TSTAT="dirty:$DN"
   fi
 fi
+# C 二期（gt-0a34）：--kill 进程面——runtime abort（API 会话中断，尽力而为）＋进程组 kill（cmdline 校验防 pid 复用）
+KINFO=""
+if [[ "$KILL" == 1 ]]; then
+  KRUN=$(python3 -c 'import json,sys; print(json.load(sys.stdin).get("run",""))' <<<"$EVAL")
+  KSID=$(python3 -c 'import json,sys; print(json.load(sys.stdin).get("session",""))' <<<"$EVAL")
+  if [[ -n "$KSID" && "$RUNTIME" == opencode && -f "$AGORA_HOME/scripts/runtime/opencode.sh" ]]; then
+    timeout 5 bash "$AGORA_HOME/scripts/runtime/opencode.sh" abort "$KSID" >/dev/null 2>&1 || true
+  fi
+  LIVEF=""
+  [[ -n "$KRUN" ]] && LIVEF="$AGORA_HOME/$KRUN.live"
+  if [[ -z "$LIVEF" || ! -f "$LIVEF" ]]; then
+    KINFO="kill:no-live"
+  else
+    PGID=$(head -1 "$LIVEF" 2>/dev/null | tr -d "[:space:]")
+    if [[ ! "$PGID" =~ ^[0-9]+$ ]]; then KINFO="kill:bad-pgid"
+    elif [[ ! -d "/proc/$PGID" ]]; then KINFO="kill:dead-pgid"
+    elif ! tr '\0' ' ' <"/proc/$PGID/cmdline" 2>/dev/null | grep -q "$TASK"; then
+      KINFO="kill:skipped-cmdline-mismatch"   # pid 复用：组长的 cmdline 已非本任务，不杀
+    else
+      kill -TERM -- -"$PGID" 2>/dev/null || true
+      _k=0; while kill -0 -- -"$PGID" 2>/dev/null && (( _k < 10 )); do sleep 0.2; _k=$((_k+1)); done
+      kill -0 -- -"$PGID" 2>/dev/null && kill -KILL -- -"$PGID" 2>/dev/null || true
+      KINFO="kill:pgid=$PGID"
+    fi
+    rm -f "$LIVEF" "${KRUN%.log}.pid"
+  fi
+fi
 bash "$AGORA_HOME/scripts/post.sh" --actor "$ACTOR" --project "$PROJECT" --event cancelled \
-  --task "$TASK" --reason "${REASON:-cancel via agora_cancel}" --body "${WINFO}tree:$TSTAT" >/dev/null \
+  --task "$TASK" --reason "${REASON:-cancel via agora_cancel}" --body "${WINFO}${KINFO:+$KINFO }tree:$TSTAT" >/dev/null \
   || fail POST_FAILED "cancelled 落账失败" 4
-python3 - "$TASK" "$TSTAT" "$EVAL" <<'PYEOF'
+python3 - "$TASK" "$TSTAT" "$EVAL" "$KINFO" <<'PYEOF'
 import json, sys
 print(json.dumps({"task": sys.argv[1], "cancelled": True, "tree": sys.argv[2],
+                  "kill": sys.argv[4],
                   "candidates": json.loads(sys.argv[3])["candidates"]},
                  ensure_ascii=False, separators=(",", ":")))   # 紧凑分隔符：机器面 sed/grep 解析契约（post/dispatch 同款）
 PYEOF

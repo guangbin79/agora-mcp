@@ -166,10 +166,11 @@ TOOLS = [
   "inputSchema": {**T, "properties": {}}},
  {"name": "agora_who", "description": "名册发现：列出全部注册身份（名字/dirs/can_spawn/role；here=当前工作目录是否归属该实体）与项目注册表（projects：名字/path/desc/默认 verify，编排任务前查阅）。读前自动与远端尽力同步，可看到他机实体；mention 与 dispatch 前先查有谁。若本机跑着 HTTP 只读窗口（agora_http.py），返回 http 字段带实际端口（支持随机端口分配场景）。",
   "inputSchema": {**T, "properties": {}}},
- {"name": "agora_cancel", "description": "取消任务：post cancelled（body 附树状态 wt:/tree:），树交 poll GC 自动清理。task 省略＝自动取当前 actor 最近无终态的已派任务（dispatched∩无终态口径，与 dispatch.sh 配额口径同款），多活跃时返回 candidates 列表；当前终态 merged/cancelled 拒。不做进程 kill（kill 能力归 C 二期）。",
+ {"name": "agora_cancel", "description": "取消任务：post cancelled（body 附树状态 wt:/tree: 与 kill 结果 kill:），树交 poll GC 自动清理。task 省略＝自动取当前 actor 最近无终态的已派任务（dispatched∩无终态口径，与 dispatch.sh 配额口径同款），多活跃时返回 candidates 列表；当前终态 merged/cancelled 拒。kill=true（C 二期）＝进程面同杀：先 runtime abort 中断 API 会话，再按 .live 记录的进程组 kill（cmdline 校验含任务标识防 pid 复用误杀），终了清 .live。",
   "inputSchema": {**T, "properties": {
     "task": {"type": "string", "description": "gt-xxxx；省略＝自动推导最近无终态已派任务"},
-    "reason": {"type": "string"}}}},
+    "reason": {"type": "string"},
+    "kill": {"type": "boolean", "description": "true＝连同子会话进程组一并终止（缺省仅账本终态）"}}}},
  {"name": "agora_redispatch", "description": "一键回池重派：尾态 escalated 或 done-unmerged 先 post reopened 再 dispatch 合一（零补充 prompt＝标准 BOOT，任务页 title/verify 由子会话读页获得）。task 省略＝自动取当前 actor 最近可回池任务（多活跃回 candidates）；当前终态 merged/cancelled 与在飞拒。",
   "inputSchema": {**T, "properties": {
     "task": {"type": "string", "description": "gt-xxxx；省略＝自动推导最近可回池任务"}}}},
@@ -339,6 +340,7 @@ def call(name, a):
         args = ["--actor", ACTOR]
         if a.get("task"): args += ["--task", a["task"]]
         if a.get("reason"): args += ["--reason", a["reason"]]
+        if a.get("kill"): args += ["--kill"]
         return run_script("cancel.sh", args)
     if name == "agora_redispatch":
         if not ACTOR: return None, need_actor()
