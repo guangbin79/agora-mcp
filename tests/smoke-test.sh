@@ -564,7 +564,7 @@ grep -q '"delivery": "queue"' "$NB_HOME/last_prompt.json" && grep -q "agora_chec
 echo "- from:x | ts:y | ref:log/z.md:2 | summary:ack gt-0000" > "$AGORA_HOME/inbox/tester/$(date +%s%N)n2.md"
 NB
 [[ $(nb_calls) == 1 ]] && ok "通知桥 60s 去抖" || fail "通知桥 60s 去抖"
-# 新增：显式指死端口 HTTP（模拟无 4096 服务），桥仍照常注入＝不再依赖 HTTP 传输
+# 回归哨兵：桥零消费 AGORA_OPENCODE_URL（死变量）；若传输回退 HTTP 且读它，死端口必败、断言必红
 printf '%s tester2 ses-t2 %s\n' "$(hostname)" "$(date -Iseconds)" >> "$AGORA_HOME/scripts/sessions.map"
 mkdir -p "$AGORA_HOME/inbox/tester2"
 echo "- from:x | ts:y | ref:r2 | summary:ack gt-0000" > "$AGORA_HOME/inbox/tester2/$(date +%s%N).md"

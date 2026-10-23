@@ -34,9 +34,13 @@ notify() { # $1=entity $2=ref
     command -v notify-send >/dev/null 2>&1 && \
       notify-send "Agora 广场" "@$ent 有新消息（$ref），请 agora_check_mail" 2>/dev/null
   else
-    # 传输经 runtime 适配器（opencode api CLI，delivery=queue）；rc 非 0 静默跳过
-    bash "$AGORA_HOME/scripts/runtime/opencode.sh" inject "$sid" \
-      "广场有新 @你的消息（${ref}），请 agora_check_mail" || :
+    # 传输经 runtime 适配器（opencode api CLI，delivery=queue）；守卫同 dispatch.sh:103/post.sh:262
+    # （AGORA_RUNTIME≠opencode 或适配器缺失时旁路），rc 非 0 静默跳过
+    if [[ "${AGORA_RUNTIME:-opencode}" == "opencode" && "${AGORA_RUNTIME_API:-1}" != "0" \
+          && -f "$AGORA_HOME/scripts/runtime/opencode.sh" ]]; then
+      bash "$AGORA_HOME/scripts/runtime/opencode.sh" inject "$sid" \
+        "广场有新 @你的消息（${ref}），请 agora_check_mail" || :
+    fi
   fi
   echo "$now" > "$sf"   # 按注入频率去抖：记录尝试即占频
 }
