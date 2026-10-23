@@ -6,7 +6,7 @@
 set -u
 PKG="${AGORA_PKG:-$(cd "$(dirname "$0")/.." && pwd)}"
 T=$(mktemp -d)
-export AGORA_HOME="$T/agora" AGORA_LOCK_WAIT=30 AGORA_VERIFY_TIMEOUT=30
+export AGORA_HOME="$T/agora" AGORA_LOCK_WAIT=30 AGORA_VERIFY_TIMEOUT=30 AGORA_MAX_SPAWN_GLOBAL=9999   # gt-8c5b：总量闸默认 60 会被长跑累积活派发误触，套件级放大；分域/总量断言各自显式压
 PASS=0; FAIL=0
 ok()   { PASS=$((PASS+1)); echo "ok   | $1"; }
 fail() { FAIL=$((FAIL+1)); echo "FAIL | $1"; }
@@ -1322,7 +1322,7 @@ print(" ".join(t for t in disp if t not in terminal))
 PYEOF
 ); do POST tester@proj --event cancelled --task "$_t" >/dev/null 2>&1; done
 DSP()  { AGORA_RUNTIME=echo AGORA_MAX_SPAWN=9 bash "$AGORA_HOME/scripts/dispatch.sh" --actor tester@proj --project "$PROJ" "$@"; }
-DSPQ() { AGORA_RUNTIME=echo bash "$AGORA_HOME/scripts/dispatch.sh" --actor tester@proj --project "$PROJ" "$@"; }
+DSPQ() { AGORA_RUNTIME=echo AGORA_MAX_SPAWN=3 bash "$AGORA_HOME/scripts/dispatch.sh" --actor tester@proj --project "$PROJ" "$@"; }   # gt-8c5b：默认改 30 后显式钉 3 保语义
 TID() { echo "$1" | sed -n 's/.*"task":"\(gt-[0-9a-f]*\)".*/\1/p'; }
 D1=$(TID "$(TITLE="深度a" VERIFY=true PROJECT_DIR="$PROJ" TC)"); D2=$(TID "$(TITLE="深度b" VERIFY=true PROJECT_DIR="$PROJ" TC)")
 D3=$(TID "$(TITLE="深度c" VERIFY=true PROJECT_DIR="$PROJ" TC)")
@@ -1344,6 +1344,38 @@ cat "$AGORA_HOME"/log/*/*.md | grep -F "task:$E2" | grep "event:dispatched" | gr
 DSPQ --task "$F1" 2>&1 | grep -q QUOTA_EXCEEDED && ok "配额账本化：6 活派发（零 .live）拒第 7" || fail "配额账本化拒（零 .live）"
 for _cq in "$D1" "$E1" "$E2" "$E3"; do POST tester@proj --event cancelled --task "$_cq" >/dev/null; done
 DSPQ --task "$F1" 2>/dev/null | grep -q '"mode":"spawned"' && ok "终态出集后配额放行" || fail "终态出集后配额放行"
+# ④ 配额分域＋全局总闸（gt-8c5b）：域键＝账本 actor 字符串（不细分 host，跨机共享账本同域合并）——A 域满不挡 B；总和超措辞分档
+for _t in $(python3 - "$AGORA_HOME" <<'PYEOF'   # 先清零 tester 域（②③残留 D2/E4/F1 会污染恰好5 的摆法）
+import glob, re, sys
+home = sys.argv[1]
+disp, terminal = {}, set()
+for f in sorted(glob.glob(f"{home}/log/*/*.md")):
+    try: lines = open(f, encoding="utf-8").read().splitlines()
+    except OSError: continue
+    for line in lines:
+        m = re.search(r"task:(gt-[0-9a-f]{4,})", line)
+        if not m: continue
+        t = m.group(1)
+        if "event:dispatched" in line: disp[t] = 1
+        elif any(f"event:{e}" in line for e in ("done","merged","cancelled")): terminal.add(t)
+print(" ".join(t for t in disp if t not in terminal))
+PYEOF
+); do POST tester@proj --event cancelled --task "$_t" >/dev/null 2>&1; done
+mkdir -p "$T/proj-t2"   # tester2 独立覆盖目录：同径 $PROJ 会与 tester 并列二义（resolve_entity 同深 glob 序定胜负），child 归属翻转打碎 S5 在场/K5——实测回归
+printf -- '---\nname: tester2\ndirs:\n  - %s\ncan_spawn: true\n---\n' "$T/proj-t2" > "$AGORA_HOME/wiki/entities/tester2.md"
+(cd "$AGORA_HOME" && git add -A && AGORA_MECHANICAL=1 git commit -qm "entities tester2")
+Q1=$(TID "$(TITLE="分域a1" VERIFY=true PROJECT_DIR="$PROJ" TC)"); Q2=$(TID "$(TITLE="分域a2" VERIFY=true PROJECT_DIR="$PROJ" TC)")
+Q3=$(TID "$(TITLE="分域a3" VERIFY=true PROJECT_DIR="$PROJ" TC)"); Q4=$(TID "$(TITLE="分域a4" VERIFY=true PROJECT_DIR="$PROJ" TC)")
+Q5=$(TID "$(TITLE="分域a5" VERIFY=true PROJECT_DIR="$PROJ" TC)"); Q6=$(TID "$(TITLE="分域a6" VERIFY=true PROJECT_DIR="$PROJ" TC)")
+QB1=$(TID "$(TITLE="分域b1" VERIFY=true PROJECT_DIR="$T/proj-t2" TC)"); QB2=$(TID "$(TITLE="分域b2" VERIFY=true PROJECT_DIR="$T/proj-t2" TC)")
+DSP5() { AGORA_RUNTIME=echo AGORA_MAX_SPAWN=5 bash "$AGORA_HOME/scripts/dispatch.sh" --actor tester@proj --project "$PROJ" "$@"; }
+DSPB() { AGORA_RUNTIME=echo bash "$AGORA_HOME/scripts/dispatch.sh" --actor tester2@proj --project "$T/proj-t2" "$@"; }
+for _t in "$Q1" "$Q2" "$Q3" "$Q4" "$Q5"; do DSP5 --task "$_t" >/dev/null 2>&1; done
+DSP5 --task "$Q6" 2>&1 | grep -q "分域满" && ok "分域：A 域 5/5 满拒 A 第 6（分域措辞）" || fail "分域：A 域满应拒第 6"
+DSPB --task "$QB1" 2>/dev/null | grep -q '"mode":"spawned"' && ok "分域：A 域满不挡 B（B 域 0/30 放行）" || fail "分域：A 域满不应挡 B"
+AGORA_MAX_SPAWN_GLOBAL=6 DSPB --task "$QB2" 2>&1 | grep -q "总量满" && ok "总量闸：A5+B1=6 各域未超总和超，拒（总量措辞）" || fail "总量闸：总和超应拒（总量措辞）"
+for _t in "$Q1" "$Q2" "$Q3" "$Q4" "$Q5"; do POST tester@proj --event cancelled --task "$_t" >/dev/null 2>&1; done
+POST tester2@proj --event cancelled --task "$QB1" >/dev/null 2>&1
 
 echo "===== dispatch 发射加固＋凭据预写＋wt 免在场优先（全量委托 L1 Task4） ====="
 rm -f "$AGORA_HOME/scripts/sessions.map"

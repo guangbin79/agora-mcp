@@ -3,7 +3,7 @@
 # 用法: dispatch.sh --actor NAME@PROJ --project DIR --task gt-xxxx [--prompt "..."]
 set -euo pipefail
 AGORA_HOME="${AGORA_HOME:-$HOME/agora}"
-MAX_DEPTH="${AGORA_MAX_DEPTH:-5}"; MAX_SPAWN="${AGORA_MAX_SPAWN:-3}"
+MAX_DEPTH="${AGORA_MAX_DEPTH:-5}"; MAX_SPAWN="${AGORA_MAX_SPAWN:-30}"; MAX_GLOBAL="${AGORA_MAX_SPAWN_GLOBAL:-60}"
 RUNTIME="${AGORA_RUNTIME:-opencode}"
 
 ACTOR=""; PDIR=""; TASK=""; PROMPT=""; DTASK=""
@@ -12,6 +12,12 @@ while [[ $# -gt 0 ]]; do case "$1" in
   *) echo '{"code":"VALIDATION_FAILED","message":"unknown arg"}' >&2; exit 2;;
 esac; shift 2; done
 fail() { python3 -c 'import json,sys; print(json.dumps({"code":sys.argv[1],"message":sys.argv[2]}, ensure_ascii=False), file=sys.stderr)' "$1" "$2"; exit "${3:-2}"; }   # $POUT 等嵌值含引号亦合法（评审 MINOR：错误通道 JSON）
+# 配额双闸（gt-8c5b 分域）：$1=本 actor 域活跃 vs MAX_SPAWN（他人占满不挡我）；$2=全机活跃总和 vs MAX_GLOBAL（防多会话叠加失控）——两档措辞供调用方辨识
+quota_check() {
+  (( ${1:-0} >= MAX_SPAWN )) && fail QUOTA_EXCEEDED "分域满：actor $ACTOR 活跃 $1/$MAX_SPAWN（他人域不受影响，仅本 actor 域额尽）" 8
+  (( ${2:-0} >= MAX_GLOBAL )) && fail QUOTA_EXCEEDED "总量满：全机活跃总和 $2/$MAX_GLOBAL（各 actor 域未超，叠加达闸）" 8
+  return 0
+}
 
 NAME="${ACTOR%%@*}"
 ENTITY="$AGORA_HOME/wiki/entities/$NAME.md"
@@ -27,12 +33,12 @@ grep -qE '^can_spawn:[[:space:]]*true' "$ENTITY" || fail SPAWN_FORBIDDEN "$NAME 
 # 保险丝 2/3：深度与配额——env 与账本推导取更大值（v1.32 账本化：L2/API 模式无 env 通道时账本为唯一来源）
 # 账本口径：深度=dispatched 事件 dispatcher_task 链逐跳计数（任务最新 dispatched 为准，环检测兜底）；
 #          配额活跃=dispatched 集 ∩ 无终态事件（done/merged/cancelled 任一即出集）
-LEDGER_NEXT=1; LEDGER_ACTIVE=0; LDT=""
-if read -r LN LA LDT <<<"$(python3 - "$AGORA_HOME" "${DTASK:-}" "$ACTOR" <<'PYEOF'
-import glob, re, sys
+LEDGER_NEXT=1; LEDGER_ME=0; LEDGER_TOT=0; LDT=""
+if read -r LN LME LTOT LDT <<<"$(python3 - "$AGORA_HOME" "${DTASK:-}" "$ACTOR" <<'PYEOF'
+import glob, os, re, sys
 home = sys.argv[1]; dtask = sys.argv[2] if len(sys.argv) > 2 and sys.argv[2] else ""
 actor = sys.argv[3] if len(sys.argv) > 3 else ""
-disp, terminal, last_alive, claimed = {}, set(), {}, {}
+disp, terminal, last_alive, claimed, dact, runs = {}, set(), {}, {}, {}, {}
 for f in sorted((glob.glob(f"{home}/log/*/*.md") + glob.glob(f"{home}/log/*/.*.md"))):
     try: lines = open(f, encoding="utf-8", errors="replace").read().splitlines()
     except OSError: continue
@@ -44,6 +50,9 @@ for f in sorted((glob.glob(f"{home}/log/*/*.md") + glob.glob(f"{home}/log/*/.*.m
         if "event:dispatched" in line:
             d = re.search(r"dispatcher_task:(gt-[0-9a-f]{4,})", line)
             disp[t] = d.group(1) if d else ""   # 文件序+行序扫描，后见覆盖=最新派发
+            am = re.search(r"\| actor:(\S+)", line); dact[t] = am.group(1) if am else ""
+            rm_ = re.search(r"[ |]run:(\S+)", line)
+            if rm_: runs[rm_.group(1)] = dact[t]   # .live→actor 归属（分域 .live 计数用）
             last_alive[t] = True
         elif "event:claimed" in line:
             am = re.search(r'\| actor:(\S+)', line)
@@ -65,19 +74,31 @@ if not dtask and actor:
     if cands: dtask = cands[-1]
 nxt = depth(dtask, frozenset()) + 1 if dtask in disp else 1
 # 配额活跃＝dispatched ∩ 无终态 ∩ 非僵尸（last_alive=False＝已死出集；真活由 .live 计数兜底取 max）
-active = sum(1 for t in disp if t not in terminal and last_alive.get(t, True))
-print(nxt, active, dtask)
+# 分域口径（gt-8c5b）：活跃按 actor 归组（dispatched 行 actor 字段，claimed 兜底）；.live 按 run 路径归属 actor；
+# 域值＝域内两组取大；总量＝全局两组取大——总量闸（MAX_SPAWN_GLOBAL）防多会话叠加失控
+by_actor = {}
+for t in disp:
+    if t in terminal or not last_alive.get(t, True): continue
+    a = dact.get(t) or claimed.get(t, "")
+    by_actor[a] = by_actor.get(a, 0) + 1
+live_by, live_tot = {}, 0
+for lf in glob.glob(f"{home}/raw/dispatches/*.live"):
+    live_tot += 1
+    a = runs.get(os.path.relpath(lf[:-5], home))
+    if a is not None: live_by[a] = live_by.get(a, 0) + 1
+me = max(by_actor.get(actor, 0), live_by.get(actor, 0))
+total = max(live_tot, sum(by_actor.values()))
+print(nxt, me, total, dtask)
 PYEOF
-)"; then [ -n "$LN" ] && LEDGER_NEXT=$LN; [ -n "$LA" ] && LEDGER_ACTIVE=$LA; fi
+)"; then [ -n "$LN" ] && LEDGER_NEXT=$LN; LEDGER_ME=${LME:-0}; LEDGER_TOT=${LTOT:-0}
+else LEDGER_TOT=$(find "$AGORA_HOME/raw/dispatches" -name '*.live' 2>/dev/null | wc -l); fi   # 扫描失败退化：.live 总数兜底总量闸（分域漏检可容忍，总量不失守）
 # 推导回填（A-W1）：显式传入优先，机械推导兜底——两者都进 dispatched 落账
 [ -z "$DTASK" ] && [ -n "${LDT:-}" ] && [ "$LDT" != "None" ] && DTASK="$LDT"
 DEPTH="${AGORA_DEPTH:-0}"; NEXT=$((DEPTH+1))
 (( NEXT < LEDGER_NEXT )) && NEXT=$LEDGER_NEXT
 [[ $NEXT -ge $MAX_DEPTH ]] && fail DEPTH_EXCEEDED "depth $NEXT >= max $MAX_DEPTH" 7
 
-LIVE=$(find "$AGORA_HOME/raw/dispatches" -name '*.live' 2>/dev/null | wc -l)
-ACTIVE=$LIVE; (( ACTIVE < LEDGER_ACTIVE )) && ACTIVE=$LEDGER_ACTIVE
-[[ $ACTIVE -ge $MAX_SPAWN ]] && fail QUOTA_EXCEEDED "active dispatches $ACTIVE >= max $MAX_SPAWN" 8
+quota_check "$LEDGER_ME" "$LEDGER_TOT"   # 分域＋总量双闸（gt-8c5b）；.live 计数已并入扫描（域内/全局各自取大）
 
 # 子会话身份：名册目录前缀匹配（最深优先）；worktree 路径归一主 repo（口径在 agora_lib.resolve_entity，gt-ac14）
 R=$(PYTHONPATH="$(cd "$(dirname "$0")" && pwd)${PYTHONPATH:+:$PYTHONPATH}" python3 - "$AGORA_HOME" "$PDIR" <<'PYEOF'
