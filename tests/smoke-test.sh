@@ -1956,6 +1956,26 @@ OUT=$(AGORA_MAX_SPAWN=99 AGORA_RUNTIME_API=0 AGORA_RUNTIME=opencode bash "$AGORA
 echo "$OUT" | grep -q '"mode":"notified"' && ok "S5d 开关关走 sessions.map 旧路" || fail "S5d 旧路失效（got: $OUT）"
 sed -i "\|$(hostname) tester ses_legacy|d" "$AGORA_HOME/scripts/sessions.map"   # 清场：勿污染后续
 
+# ---- T6: done_open 状态机同日跨分片乱序——按 ts 序重放（gt-db15，gt-caf3 last 同源收口） ----
+# 构造：字典序前分片放「晚」闭合事件(T2)、字典序后分片放「早」done(T1)——文件序重放把 done_open 误置 True
+OOD1=gt-dead1   # merged 乱序：诊断处另有 has 集守卫遮蔽（poll.sh "merged" in has），本断言锁定不误诊
+OOD2=gt-beef2   # cancelled 乱序：守卫只查 merged，现状必误诊（红）
+OOD_TS1="2026-10-23T09:00:00+08:00"; OOD_TS2="2026-10-23T10:00:00+08:00"
+OOD_A="$AGORA_HOME/log/$(date +%F)/aaa-ood.md"; OOD_B="$AGORA_HOME/log/$(date +%F)/zzz-ood.md"
+mkdir -p "$(dirname "$OOD_A")" "$(dirname "$OOD_B")"   # 跨午夜翻牌双求值可能落不同日期目录，先建防 cat >> 静默失败
+cat >> "$OOD_A" <<EOF
+- seq:99001 | ts:$OOD_TS2 | actor:tester@proj | event:merged | idem:ood1m | seen:proj@0 | task:$OOD1 | commit:aaa | evidence:ok
+- seq:99002 | ts:$OOD_TS2 | actor:tester@proj | event:cancelled | idem:ood2c | seen:proj@0 | task:$OOD2 | reason:x
+EOF
+cat >> "$OOD_B" <<EOF
+- seq:99003 | ts:$OOD_TS1 | actor:tester@proj | event:done | idem:ood1d | seen:proj@0 | task:$OOD1 | commit:bbb | evidence:ok
+- seq:99004 | ts:$OOD_TS1 | actor:tester@proj | event:done | idem:ood2d | seen:proj@0 | task:$OOD2 | commit:ccc | evidence:ok
+EOF
+for _ood in "$OOD1" "$OOD2"; do printf -- '---\ndispatcher: tester@proj\nwt_dir: /nonexistent/%s\n---\n\n占位任务页（wt_dir 不存在：GC isdir 守卫跳过）\n' "$_ood" > "$AGORA_HOME/wiki/tasks/$_ood.md"; done
+POLLT >/dev/null
+[ -z "$(LEV "$OOD1" diagnosed)" ] && ok "T6 merged 乱序不误诊 done-unmerged" || fail "T6 merged 乱序误诊（got: $(LEV "$OOD1" diagnosed | head -1)）"
+[ -z "$(LEV "$OOD2" diagnosed)" ] && ok "T6 cancelled 乱序不误诊 done-unmerged" || fail "T6 cancelled 乱序误诊（got: $(LEV "$OOD2" diagnosed | head -1)）"
+
 echo
 echo "===== 结果: $PASS 通过, $FAIL 失败 ====="
 

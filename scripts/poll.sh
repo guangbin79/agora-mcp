@@ -123,7 +123,7 @@ def task_dispatcher(task):
 
 def scan_tasks():
     """task -> {"dispatched":[(actor,run,dispatcher_task)...], "has":set(events), "last":event}。
-    账本推导唯一口径（重派/孤儿/GC/豁免共用）；文件序+行序=时间序近似。"""
+    账本推导唯一口径（重派/孤儿/GC/豁免共用）；last/done_open 按 ts 序重放（跨分片文件序≠时间序）。"""
     tasks = {}
     for f in sorted((glob.glob(f"{HOME}/log/*/*.md") + glob.glob(f"{HOME}/log/*/.*.md"))):
         with open(f, encoding="utf-8", errors="replace") as fh:
@@ -136,12 +136,14 @@ def scan_tasks():
                 d["_rows"].append((e.get("ts", ""), e["event"]))
                 d["has"].add(e["event"])
                 d["last_actor"] = e.get("actor", "")
-                if e["event"] == "done": d["done_open"] = True          # done 未闭：merged/cancelled/reopened 才清
-                elif e["event"] in ("merged", "cancelled", "reopened"): d["done_open"] = False
                 if e["event"] == "dispatched":
                     d["dispatched"].append((e.get("actor", ""), e.get("run", ""), e.get("dispatcher_task", ""), e.get("session", "")))
     for d in tasks.values():
-        d["last"] = max(d["_rows"], key=lambda r: r[0])[1] if d["_rows"] else None  # B-M3：last 按 ts 序取——跨分片文件序≠时间序（proj.md 字典序在 watchdog.md 前）
+        rows = sorted(d["_rows"], key=lambda r: r[0])  # gt-caf3/gt-db15：跨分片文件序≠时间序，状态机统一按 ts 序
+        d["last"] = rows[-1][1] if rows else None  # B-M3：last 按 ts 序取尾行——与 done_open 重放同口径（同 ts 平局一致）
+        for _ts, ev in rows:  # gt-db15：done_open 同按 ts 序重放——同日多分片文件名字典序≠时间序
+            if ev == "done": d["done_open"] = True          # done 未闭：merged/cancelled/reopened 才清
+            elif ev in ("merged", "cancelled", "reopened"): d["done_open"] = False
         del d["_rows"]
     return tasks
 
