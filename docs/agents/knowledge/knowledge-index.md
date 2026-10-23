@@ -12,3 +12,4 @@
 - [smoke-teardown-orphan.md](modules/smoke-teardown-orphan.md) — 夹具 teardown 孤儿竞态：.live 有界轮询再 rm、探针匹配面＝实例唯一 mktemp 路径（禁全机按 task id pgrep）、竞态窗先现形再证修复 (2026-10-23, gt-2153)
 - [mention-pickup-loop-breaker.md](modules/mention-pickup-loop-breaker.md) — mention 拾取环断路契约：守卫序 done_open→todo→终态→retired→在飞去重、邮件=通知账本=真值分层、retired 回池须排除 done（gt-bb0b 风暴根因） (2026-10-23, gt-ae6f)
 - [runtime-adapter-guard.md](modules/runtime-adapter-guard.md) — runtime 适配器调用方三重守卫契约（AGORA_RUNTIME/AGORA_RUNTIME_API/-f）、守卫缺失＝静默空转非崩溃、哑 env 哨兵防传输回归 (2026-10-23, gt-2b25)
+- [kill-anchor-contract.md](modules/kill-anchor-contract.md) — kill 锚点契约：cmdline 锚点须进目标 argv（env 赋值 exec 后消失）、单参旗标禁落尾随 shift、标记文件读写双向竞态设防、账本字段进文件/网络操作前形状闸、smoke 假 runtime ctrl 态批前复位 (2026-10-24, gt-0a34)
