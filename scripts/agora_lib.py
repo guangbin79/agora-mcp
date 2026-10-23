@@ -119,8 +119,9 @@ def valid_entity_name(name):
 
 
 def iter_events(home):
-    """全部账本分片 → (shard 相对路径, 行号, 事件 dict)，按权威序逐条产出。"""
-    for f in sorted(glob.glob(os.path.join(home, "log", "*", "*.md"))):
+    """全部账本分片（含点前缀分片如 .dotfiles.md）→ (shard 相对路径, 行号, 事件 dict)，按权威序逐条产出。"""
+    for f in sorted(glob.glob(os.path.join(home, "log", "*", "*.md"))
+                    + glob.glob(os.path.join(home, "log", "*", ".*.md"))):
         shard = os.path.relpath(f, home)
         with open(f, encoding="utf-8") as fh:
             for i, line in enumerate(fh, 1):

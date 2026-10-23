@@ -1998,6 +1998,33 @@ POLLT >/dev/null
 [ -z "$(LEV "$OOD1" diagnosed)" ] && ok "T6 merged 乱序不误诊 done-unmerged" || fail "T6 merged 乱序误诊（got: $(LEV "$OOD1" diagnosed | head -1)）"
 [ -z "$(LEV "$OOD2" diagnosed)" ] && ok "T6 cancelled 乱序不误诊 done-unmerged" || fail "T6 cancelled 乱序误诊（got: $(LEV "$OOD2" diagnosed | head -1)）"
 
+# ---- T7: iter_events 点分片盲——history 读面漏 .dotfiles.md 等隐藏分片（gt-6fef，gt-bb0b 复盘） ----
+# 构造：点前缀项目分片（.dotfiles.md）落 plan/claimed/done；修复前 glob 漏读致 history 全链断链
+DOTSHARD="$AGORA_HOME/log/$(date +%F)/.dotfiles.md"
+mkdir -p "$(dirname "$DOTSHARD")"   # 跨午夜翻牌防 cat >> 静默失败（同 T6）
+cat >> "$DOTSHARD" <<EOF
+- seq:99101 | ts:2026-10-23T19:00:00+08:00 | actor:me@.dotfiles | event:plan | idem:dotf1p | seen:.dotfiles@0 | task:gt-dotf1 | body:点分片计划
+- seq:99102 | ts:2026-10-23T19:01:00+08:00 | actor:me@.dotfiles | event:claimed | idem:dotf1c | seen:.dotfiles@0 | task:gt-dotf1
+- seq:99103 | ts:2026-10-23T19:02:00+08:00 | actor:me@.dotfiles | event:done | idem:dotf1d | seen:.dotfiles@0 | task:gt-dotf1 | commit:abc1234 | evidence:点分片交付
+EOF
+# ① iter_events 直读面：点分片内事件可产出
+PYTHONPATH="$AGORA_HOME/scripts" AGORA_HOME="$AGORA_HOME" python3 -c "
+import os
+import agora_lib as lib
+evs = [e.get('event') for _, _, e in lib.iter_events(os.environ['AGORA_HOME'])
+       if e.get('task') == 'gt-dotf1']
+assert evs == ['plan', 'claimed', 'done'], evs
+" && ok "T7 iter_events 产出点分片事件" || fail "T7 iter_events 产出点分片事件"
+# ② history.sh 端到端：点分片项目任务返回全链（plan/claimed/done），非空断链
+TASK=gt-dotf1 bash "$AGORA_HOME/scripts/history.sh" | python3 -c "
+import json, sys
+d = json.load(sys.stdin)
+evs = [e['event'] for e in d['events']]
+refs = {e['ref'].rsplit(':', 1)[0] for e in d['events']}
+assert d['count'] == 3 and evs == ['plan', 'claimed', 'done'], d
+assert all(r.endswith('/.dotfiles.md') for r in refs), refs
+" && ok "T7 history.sh 点分片任务全链可见（plan/claimed/done）" || fail "T7 history.sh 点分片任务全链可见"
+
 echo
 echo "===== 结果: $PASS 通过, $FAIL 失败 ====="
 
