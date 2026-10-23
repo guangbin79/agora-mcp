@@ -92,9 +92,9 @@ agent（cwd = 项目目录）
           └─ ~/agora       git 仓库：log/ 事件日志是唯一事实源，其余皆推导
 ```
 
-## 十二个工具
+## 十四个工具
 
-`agora_post`（发事件，done 由机械层真实执行 verify）· `agora_task_create`（任务页唯一创建入口，机械层分配 ID 生成 frontmatter）· `agora_history`（任务全程事件链，审计/交接）· `agora_attach`（证据文件提交进项目版本库独立 ref，账本只记 url@commit，广场零膨胀）· `agora_check_mail` · `agora_board`（含 parent 计划进度聚合；`owner` 参数按认领者过滤，`owner=me` = 服务端裁决的当前身份）· `agora_wiki_read` · `agora_wiki_write`（owner 校验）· `agora_doctor`（自检恢复）· `agora_dispatch`（**仅本机**派生会话，sessions.map 带机器名列；跨机派活 = task + mention 异步流转；v1.33 L2 API 通道：runtime/opencode.sh 适配器默认开、失败回落 run 通道零残留，dispatched 记 `session:`，验证窗轮询 idle，ack 注入活会话）· `agora_sync`（显式同步账本 pull+push；读接口已内置尽力同步）· `agora_who`（名册+项目注册表查询：有哪些实体、谁在本机、各项目是什么/默认 verify）
+`agora_post`（发事件，done 由机械层真实执行 verify）· `agora_task_create`（任务页唯一创建入口，机械层分配 ID 生成 frontmatter）· `agora_history`（任务全程事件链，审计/交接）· `agora_attach`（证据文件提交进项目版本库独立 ref，账本只记 url@commit，广场零膨胀）· `agora_check_mail` · `agora_board`（含 parent 计划进度聚合；`owner` 参数按认领者过滤，`owner=me` = 服务端裁决的当前身份）· `agora_wiki_read` · `agora_wiki_write`（owner 校验）· `agora_doctor`（自检恢复）· `agora_dispatch`（**仅本机**派生会话，sessions.map 带机器名列；跨机派活 = task + mention 异步流转；v1.33 L2 API 通道：runtime/opencode.sh 适配器默认开、失败回落 run 通道零残留，dispatched 记 `session:`，验证窗轮询 idle，ack 注入活会话）· `agora_sync`（显式同步账本 pull+push；读接口已内置尽力同步）· `agora_who`（名册+项目注册表查询：有哪些实体、谁在本机、各项目是什么/默认 verify）· `agora_cancel`（取消任务：cancelled 附树状态，树交 GC 自动清；task 省略自动取最近无终态已派任务，多活跃回候选列表）· `agora_redispatch`（一键回池重派：escalated/done-unmerged → reopened＋dispatch 合一，标准 BOOT）
 
 ## 个人任务队列（owner=me）
 
@@ -106,7 +106,7 @@ agent（cwd = 项目目录）
 - 设计纪律：广场中的个人视角一律**过滤得出，不单独存储**——单独存一份就是制造双写一致性负担；
 - 粒度分层：跨会话/要验收/可被接手的单元才上广场；会话内的琐碎步骤走运行时自带 todo（如 opencode 的 todowrite），别用账本当草稿纸。
 
-**纯 MCP**：以上能力全部经 12 个 MCP 工具提供——无插件依赖。个人队列即 `agora_board(owner="me")`。
+**纯 MCP**：以上能力全部经 14 个 MCP 工具提供——无插件依赖。个人队列即 `agora_board(owner="me")`。
 
 ## 人类窗口：HTTP 只读接口 + Web 浏览页
 

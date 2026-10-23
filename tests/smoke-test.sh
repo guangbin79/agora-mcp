@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # smoke-test.sh —— agora-mcp 接口冒烟测试套件（自包含，不污染真实广场）
 # 用法: bash tests/smoke-test.sh   （AGORA_PKG 缺省取包根目录）
-# 覆盖：十二工具 + 事件全生命周期 + 幂等窗口 + 验证门 + 并发 + doctor + MCP 协议 + 双机同步 + HTTP 只读窗口
+# 覆盖：十四工具 + 事件全生命周期 + 幂等窗口 + 验证门 + 并发 + doctor + MCP 协议 + 双机同步 + HTTP 只读窗口
 # 退出码：0 全绿；1 有 FAIL
 set -u
 PKG="${AGORA_PKG:-$(cd "$(dirname "$0")/.." && pwd)}"
@@ -117,7 +117,7 @@ for i in $(seq 1 10); do POST tester@proj --event proposal --body "提案$i" >/d
 S=$(cat "$AGORA_HOME"/log/*/*.md | grep -c "相同提案"); D=$(cat "$AGORA_HOME"/log/*/*.md | grep -c "event:proposal")
 [ "$S" -eq 1 ] && [ "$D" -eq 11 ] && ok "20 并发：相同×10→1，不同×10→10" || fail "20 并发（相同=$S 总=$D，want 1/11）"
 
-echo "===== MCP 协议（十二工具 + 权限） ====="
+echo "===== MCP 协议（十四工具 + 权限） ====="
 cd "$PROJ" && python3 - "$PKG/server/agora_mcp.py" "$PLAN" <<'PYEOF' && ok "MCP 全链" || fail "MCP 全链"
 import json, subprocess, sys
 srv, plan = sys.argv[1], sys.argv[2]
@@ -129,7 +129,7 @@ r = rpc("initialize", {"protocolVersion":"2025-03-26"})
 assert "instructions" in r["result"] and len(r["result"]["instructions"]) < 600  # 含路径插值后的预算
 assert "owner=me" in r["result"]["instructions"]  # 开场仪式含个人队列提示
 tools = [t["name"] for t in rpc("tools/list", i=2)["result"]["tools"]]
-assert len(tools) == 12, tools
+assert len(tools) == 14, tools   # gt-b5e9 C一期：+agora_cancel/agora_redispatch
 r = rpc("tools/call", {"name":"agora_task_create","arguments":{"title":"MCP任务","parent":plan}}, 3)
 tid = json.loads(r["result"]["content"][0]["text"])["task"]
 rpc("tools/call", {"name":"agora_post","arguments":{"event":"claimed","task":tid}}, 4)
@@ -2429,6 +2429,102 @@ O7LOG="$AGORA_HOME/$(echo "$OUT" | sed -n 's/.*"run":"\([^"]*\)".*/\1/p')"
   && ok "竞态窗现形：dispatch 返回后 .live 在＋子会话进程活（旧逻辑此时 rm 即孤儿）" || fail "竞态窗未现形"
 wait_live_clear && [ ! -f "$O7LOG.live" ] && ! pgrep -f "$SSTUB" >/dev/null \
   && ok "teardown 有界轮询：.live 清空＋零孤儿进程" || fail "teardown 轮询后仍有活会话/标记"
+
+echo "===== C一期（gt-b5e9）：cancel 自动推导 / redispatch 合一 / GC 窄域清理 ====="
+CANCEL() { bash "$AGORA_HOME/scripts/cancel.sh" "$@"; }
+RDISP()  { AGORA_RUNTIME=echo AGORA_MAX_SPAWN=99 bash "$AGORA_HOME/scripts/redispatch.sh" "$@"; }
+# ① cancel 省略 task：自动取当前 actor 最近无终态已派任务（dispatched∩无终态口径）＋事件附树状态
+CA1=$(TID "$(TITLE="cancel自动推导用例一" VERIFY=true PROJECT_DIR="$REPA" TC)")
+POST borch@repa --event claimed --task "$CA1" >/dev/null
+BDSP --actor borch@repa --project "$REPA" --task "$CA1" >/dev/null 2>&1
+OUT=$(CANCEL --actor borch@repa)
+echo "$OUT" | grep -q "\"task\":\"$CA1\"" && ok "① cancel 省略 task 自动取最近无终态已派任务" || fail "① 自动推导（$OUT）"
+LEV "$CA1" cancelled | grep -q "tree:none" && ok "① cancelled 事件附树状态（无 wt_dir=none）" || fail "① 树状态缺失（$(LEV "$CA1" cancelled | head -1)）"
+# ② 多活跃返回候选列表：只取最近，其余不误伤
+CA2=$(TID "$(TITLE="cancel多活跃用例二" VERIFY=true PROJECT_DIR="$REPA" TC)")
+BDSP --actor borch@repa --project "$REPA" --task "$CA2" >/dev/null 2>&1
+CA3=$(TID "$(TITLE="cancel多活跃用例三" VERIFY=true PROJECT_DIR="$REPA" TC)")
+BDSP --actor borch@repa --project "$REPA" --task "$CA3" >/dev/null 2>&1
+OUT=$(CANCEL --actor borch@repa)
+echo "$OUT" | grep -q "\"task\":\"$CA3\"" && echo "$OUT" | grep -qF "$CA2" \
+  && [ -z "$(LEV "$CA2" cancelled)" ] && [ -n "$(LEV "$CA3" cancelled)" ] \
+  && ok "② 多活跃：取最近且候选列表含全部活跃（其余不误伤）" || fail "② 多活跃（$OUT）"
+# ③ 已终态再取消拒
+CANCEL --actor borch@repa --task "$CA3" 2>/dev/null
+[[ $? -eq 4 ]] && ok "③ 已终态再取消拒（rc=4）" || fail "③ 终态拒"
+# ④ MCP 双形态：agora_cancel 工具调用自动推导落账（十四工具注册断言在 heredoc 内）
+CA4=$(TID "$(TITLE="cancel MCP双形态用例" VERIFY=true PROJECT_DIR="$REPA" TC)")
+BDSP --actor borch@repa --project "$REPA" --task "$CA4" >/dev/null 2>&1
+rm -f "$T/mcp_cancel_task"
+(cd "$REPA" && python3 - "$PKG/server/agora_mcp.py" "$T/mcp_cancel_task" <<'PYEOF')
+import json, subprocess, sys
+p = subprocess.Popen(["python3", sys.argv[1]], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+def rpc(m, ps=None, i=1):
+    p.stdin.write(json.dumps({"jsonrpc":"2.0","id":i,"method":m,"params":ps or {}})+"\n"); p.stdin.flush()
+    return json.loads(p.stdout.readline())
+rpc("initialize", {})
+tools = [t["name"] for t in rpc("tools/list", i=2)["result"]["tools"]]
+assert "agora_cancel" in tools and "agora_redispatch" in tools, tools
+r = rpc("tools/call", {"name":"agora_cancel","arguments":{}}, 3)
+out = json.loads(r["result"]["content"][0]["text"])
+assert out.get("cancelled") and out.get("candidates"), out
+open(sys.argv[2], "w").write(out["task"])
+p.stdin.close()
+PYEOF
+MCT=$(cat "$T/mcp_cancel_task" 2>/dev/null)
+[[ "$MCT" == "$CA4" ]] && [ -n "$(LEV "$CA4" cancelled)" ] && ok "④ MCP agora_cancel 双形态（注册＋自动推导落账）" || fail "④ MCP cancel（got:$MCT）"
+# ⑤ redispatch escalated 一键回池：reopened＋dispatch 合一（零补充 prompt＝标准 BOOT）
+RE1=$(TID "$(TITLE="redispatch升级回池任务" VERIFY=true PROJECT_DIR="$REPB" WT=1 IDEM=rc1 TC)")
+BDSP --actor borch@repa --project "$REPB" --task "$RE1" >/dev/null 2>&1
+sleep 1   # 跨分片同秒违序防御（G6 先例）：escalated 落 hx 分片，与 repa 分片的 dispatched 错开秒级保因果序
+POST watchdog@hx --event escalated --task "$RE1" --conclusion "stalled 演练升级" >/dev/null
+OUT=$(RDISP --actor borch@repa --task "$RE1")
+echo "$OUT" | grep -q '"mode":"spawned"' && [ "$(LEV "$RE1" reopened | grep -c event:reopened)" -eq 1 ] \
+  && [ "$(LEV "$RE1" dispatched | grep -c event:dispatched)" -eq 2 ] \
+  && ok "⑤ escalated 一键回池：reopened＋重派 spawned" || fail "⑤（$OUT）"
+# ⑥ done-unmerged 一键回池
+RE2=$(TID "$(TITLE="redispatch未并回池任务" VERIFY=true PROJECT_DIR="$REPB" WT=1 IDEM=rc2 TC)")
+BDSP --actor borch@repa --project "$REPB" --task "$RE2" >/dev/null 2>&1
+POST bmid@repb --event claimed --task "$RE2" >/dev/null
+POST bmid@repb --event done --task "$RE2" --commit HEAD --evidence ok >/dev/null
+OUT=$(RDISP --actor borch@repa --task "$RE2")
+echo "$OUT" | grep -q '"mode":"spawned"' && [ -n "$(LEV "$RE2" reopened)" ] \
+  && ok "⑥ done-unmerged 一键回池：reopened＋重派" || fail "⑥（$OUT）"
+# ⑦ in-flight 重派拒
+RE3=$(TID "$(TITLE="redispatch在飞拒用例" VERIFY=true PROJECT_DIR="$REPB" TC)")
+BDSP --actor borch@repa --project "$REPB" --task "$RE3" >/dev/null 2>&1
+OUT=$(RDISP --actor borch@repa --task "$RE3" 2>&1); RC=$?
+[[ $RC -ne 0 ]] && echo "$OUT" | grep -q INFLIGHT && ok "⑦ in-flight 重派拒（rc=$RC）" || fail "⑦（rc=$RC $OUT）"
+# ⑦b redispatch 省略 task：自动取本 actor 最近 done-unmerged 已派任务回池（bmid 的 TC）
+OUT=$(RDISP --actor bmid@repb)
+echo "$OUT" | grep -q '"mode":"spawned"' && echo "$OUT" | grep -qF "\"task\":\"$TC\"" \
+  && [ -n "$(LEV "$TC" reopened)" ] \
+  && ok "⑦b redispatch 省略 task 自动取最近 done-unmerged 回池" || fail "⑦b（$OUT）"
+# ⑧ GC 窄域：cancelled＋仅 .omo/agora-delegation/ 凭据 dirty → 自动清树＋删分支
+HG=$(MKWT2 "窄域gc命中用例" c1); WHG=$(ls -d "$T"/proj__wt-${HG}__*)
+BDSP --actor tester@proj --project "$PROJ" --task "$HG" >/dev/null 2>&1   # 凭据预写 .omo/agora-delegation/
+git -C "$WHG" status --porcelain -uall | grep -q ".omo/agora-delegation/" \
+  && ok "⑧ 夹具自检：凭据文件在树内且构成 dirty" || fail "⑧ 夹具自检（凭据未现形）"
+POST tester@proj --event cancelled --task "$HG" --reason "窄域演练" >/dev/null
+POLLT >/dev/null
+[ ! -d "$WHG" ] && ! git -C "$PROJ" show-ref --verify -q "refs/heads/wt/$HG" \
+  && ok "⑧ 窄域命中：cancelled＋仅凭据 dirty→自动清树＋删分支" || fail "⑧ 窄域未清（tree=$([ -d "$WHG" ] && echo in || echo gone)）"
+# ⑨ 有业务文件不清
+HB=$(MKWT2 "窄域gc业务用例" c2); WHB=$(ls -d "$T"/proj__wt-${HB}__*)
+BDSP --actor tester@proj --project "$PROJ" --task "$HB" >/dev/null 2>&1
+echo biz > "$WHB/bizfile"
+POST tester@proj --event cancelled --task "$HB" --reason "业务留置演练" >/dev/null
+RB=$(POLLT)
+[ -d "$WHB" ] && echo "$RB" | grep -qF "$HB" \
+  && ok "⑨ 有业务文件不清（wt_kept_dirty 只报告）" || fail "⑨（tree=$([ -d "$WHB" ] && echo kept || echo removed)）"
+# ⑩ done 不清（B-C1 回归；done 树含凭据 dirty 也不在窄域）
+HD=$(MKWT2 "done不清回归用例" c3); WHD=$(ls -d "$T"/proj__wt-${HD}__*)
+BDSP --actor tester@proj --project "$PROJ" --task "$HD" >/dev/null 2>&1
+echo dd > "$WHD/ddfile"; git -C "$WHD" add -A; git -C "$WHD" -c user.name=t -c user.email=t@l commit -qm dd
+POST tester@proj --event claimed --task "$HD" >/dev/null
+POST tester@proj --event done --task "$HD" --commit HEAD --evidence ok >/dev/null
+POLLT >/dev/null
+[ -d "$WHD" ] && ok "⑩ done 不清（B-C1 回归；窄域仅限 cancelled）" || fail "⑩ done 树被误删"
 
 echo
 echo "===== 结果: $PASS 通过, $FAIL 失败 ====="

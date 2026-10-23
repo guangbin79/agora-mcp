@@ -132,7 +132,7 @@ def scan_tasks():
                 if not e: continue
                 t = e.get("task") or ""
                 if not re.fullmatch(r"gt-[0-9a-f]+", t): continue
-                d = tasks.setdefault(t, {"dispatched": [], "has": set(), "last": None, "done_open": False, "terminal": False, "inflight": False, "last_actor": "", "_rows": []})
+                d = tasks.setdefault(t, {"dispatched": [], "has": set(), "last": None, "done_open": False, "terminal": False, "inflight": False, "last_actor": "", "last_terminal": None, "_rows": []})
                 d["_rows"].append((e.get("ts", ""), e["event"]))
                 d["has"].add(e["event"])
                 d["last_actor"] = e.get("actor", "")
@@ -144,7 +144,7 @@ def scan_tasks():
         for _ts, ev in rows:  # gt-db15：done_open 同按 ts 序重放——同日多分片文件名字典序≠时间序
             if ev == "done": d["done_open"] = True          # done 未闭：merged/cancelled/reopened 才清
             elif ev in ("merged", "cancelled", "reopened"): d["done_open"] = False
-            if ev in ("merged", "cancelled"): d["terminal"] = True   # gt-99af：当前终态（供 mention 拾取核查棒）
+            if ev in ("merged", "cancelled"): d["terminal"] = True; d["last_terminal"] = ev   # gt-99af：当前终态（mention 核查棒）；gt-b5e9：记明哪一种（GC 窄域判别）
             elif ev == "reopened": d["terminal"] = False     # 返工/恢复重开 → 回到可拾取
             # gt-ae6f 守卫二在飞口径：只计末次 reopened 之后（且未被终态闭合）的 dispatched——
             # reopened 返工清空在飞（历史 dispatched 不永久压制回池任务），merged/cancelled 闭飞
@@ -321,7 +321,8 @@ for f in sorted(glob.glob(f"{HOME}/wiki/entities/*.md")):
             report["spawned"].append({"entity": name, "task": task, "prompt": RECHECK, **out})
             # gt-ae6f 守卫二：派发即回写内存账本视图——同轮后续邮件走在飞去重，至多一派
             dd = TASKS.setdefault(task, {"dispatched": [], "has": set(), "last": None,
-                                         "done_open": False, "terminal": False, "inflight": False, "last_actor": ""})
+                                         "done_open": False, "terminal": False, "inflight": False,
+                                         "last_actor": "", "last_terminal": None})
             dd["dispatched"].append((f"{name}@{os.path.basename(dirs[0])}", out.get("run", ""), "", out.get("session", "")))
             dd["has"].add("dispatched"); dd["last"] = "dispatched"; dd["inflight"] = True
         else:
@@ -554,7 +555,16 @@ if state.get("last_supervise_date") != today_s:
     else:
         report["supervise_failed"] = ((wr.stderr or wr.stdout or "unknown").strip().splitlines() or ["unknown"])[-1][:160]
 
-# ---------- ④c wt 树 GC（终态＋宽限＋clean→删；dirty/宽限内→报告；缺任务页树归 doctor 只报告） ----------
+# ---------- ④c wt 树 GC（终态＋宽限＋clean→删；窄域 dirty 自动清；其余 dirty/宽限内→报告；缺任务页树归 doctor 只报告） ----------
+def _cred_only_dirty(wtd):
+    """窄域判据（gt-b5e9，operator 第 11 条）：porcelain(-uall) 全部为 .omo/agora-delegation/
+    下未跟踪凭据（?? 态）＝无业务文件改动。其余任何状态行（含已暂存/改名）一律不算窄域。"""
+    out = subprocess.run(["git", "-C", wtd, "status", "--porcelain", "-uall"],
+                         capture_output=True, text=True).stdout
+    lines = [l for l in out.splitlines() if l.strip()]
+    return bool(lines) and all(l.startswith("?? ") and l[3:].strip().strip('"').startswith(".omo/agora-delegation/")
+                               for l in lines)
+
 gcst = state.setdefault("_wtgc", {})
 for page in glob.glob(f"{HOME}/wiki/tasks/*.md"):
     t = os.path.basename(page)[:-3]
@@ -570,12 +580,14 @@ for page in glob.glob(f"{HOME}/wiki/tasks/*.md"):
     if (now - float(e.get("since", now))) / 60 < WT_GRACE_MIN:
         report["wt_kept_grace"].append(t); continue
     wtd = wm.group(1)
-    dirty = subprocess.run(["git", "-C", wtd, "status", "--porcelain"],
+    dirty = subprocess.run(["git", "-C", wtd, "status", "--porcelain", "-uall"],
                            capture_output=True, text=True).stdout.strip()
-    if dirty:
+    # gt-b5e9 窄域：当前终态＝cancelled ∧ dirty 仅 .omo/agora-delegation/ 凭据 → 自动清
+    # （cancelled 树凭据 dirty 现状只能人工清，违背终清闭环）；其余 dirty 维持保守只报告
+    if dirty and not (d.get("last_terminal") == "cancelled" and _cred_only_dirty(wtd)):
         report["wt_kept_dirty"].append(t); continue
     main_ = lib.main_repo_of(wtd) or wtd
-    rr = subprocess.run(["git", "-C", main_, "worktree", "remove", wtd],
+    rr = subprocess.run(["git", "-C", main_, "worktree", "remove"] + (["--force"] if dirty else []) + [wtd],
                         capture_output=True, text=True)
     if rr.returncode != 0:
         try: os.rmdir(wtd)   # remove 失败常剩空壳（git 已摘 worktree 元数据）；rmdir 只删空目录，不碰有数据现场

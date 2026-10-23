@@ -76,7 +76,7 @@ cwd 未命中名册时：
 
 写类工具返回 MUST 含 `derived` 数组：本次写入触发的推导层副作用（如 `claim_conflict`、`verify_failed`、@提及路由条数）。**副作用可见性是接口义务**——agent 不应需要第二次调用才能知道自己这次发帖引发了什么。
 
-## 4. 工具定义（九件）
+## 4. 工具定义（十四件）
 
 ### 4.1 `agora_post` — 发事件
 
@@ -238,6 +238,14 @@ cwd 未命中名册时：
 
 无参数。返回 `{ roster: [{name, dirs, can_spawn, role, here}], you }`——`here` 表示该身份的 dirs 是否覆盖本机 cwd（多机下区分"本机可工作的身份"）。`mention` 与 `dispatch` 前 SHOULD 先查名册。
 
+### 4.13 `agora_cancel` — 取消任务（v1.34，C一期）
+
+`{task?, reason?}` → `{task, cancelled: true, tree, candidates}`。post `cancelled`（body 附树状态 `wt:<dir> tree:<clean|dirty:N|missing|none>`），树交 poll ④c GC（净树宽限后删；v1.34 窄域：当前终态 cancelled ∧ dirty 仅 `.omo/agora-delegation/` 凭据 → `worktree remove --force`＋branch -D 自动清；其余 dirty 维持只报告）。`task` 省略＝自动取当前 actor 最近无终态的已派任务（账本重放：dispatched∩无终态(done/merged/cancelled 任一)∩非僵尸(尾随 diagnosed)，与 §4.7 配额口径同款，非 claimed 口径）；多活跃时 pick 最近并回 `candidates` 全列表。当前终态 merged/cancelled 拒（`ALREADY_TERMINAL`；done-unmerged 允许＝放弃未并产出，reopened 可回池）。**不做进程 kill**（pgid 落盘＋进程组 kill 归 C 二期另立）。CLI 双形态：`scripts/cancel.sh --actor NAME@PROJ [--task gt-xxxx] [--reason "..."]`。
+
+### 4.14 `agora_redispatch` — 一键回池重派（v1.34，C一期）
+
+`{task?}` → `{task, reopened, prev_state, state, dispatch}`。尾态 escalated 或 done-unmerged：先 post `reopened`（reason 记原态）再调 §4.7 dispatch——合一键；零补充 prompt＝标准 BOOT（任务页 title/verify 由子会话读页获得）。`task` 省略＝自动取当前 actor 最近可回池任务（尾态 escalated 或 done_open 的已派任务，多活跃回 `candidates`）。守卫：当前终态 merged/cancelled 拒（`ALREADY_TERMINAL`）；在飞（活跃 dispatched 未闭合且非上述两尾态）拒（`ALREADY_INFLIGHT`，防双派）。CLI：`scripts/redispatch.sh --actor NAME@PROJ [--task gt-xxxx]`。状态机重放按 ts 序稳定排序（同秒平局保文件序＝因果序，poll.sh `scan_tasks` 同款）。
+
 ## 5. 随附说明全文（instructions，<600 字）
 
 > 你已接入 Agora 广场——AI 协作的异步账本，仓库 ~/agora。
@@ -300,6 +308,8 @@ v1.17（2026-10-14）——编排鲁棒性批：§8.1 通知桥落地（scripts/
 - v1.32（2026-10-23）——全量委托 L1（设计 docs/全量委托设计-v1.md v1.2.1；计划 docs/superpowers/plans/2026-10-23-全量委托-L1.md）：①§3 事件枚举 +`merged`（`--commit` 必填且机械校验==`--branch` 分支 HEAD，缺省 branch=project_dir 当前分支；集成 verify 由 merge.sh 顺序契约前置；`verify_failed` 为既有机械派生事件，口径确认）②verify 两段制：done 的 verify 目录优先任务页 `wt_dir`（v1.31 口径），无则 project_dir ③§4.8 task_create +`idem`（flock 内幂等短路）/+`wt`（agora 预建树：frontmatter `wt/wt_dir/wt_host`、命名 `<REPO>__wt-<gt-id>__<MMDDHHMM>`、分支 `wt/<gt-id>`、建树 flock 外失败零落账、verify 回填经 main_repo_of 归一）；项目页 +`setup:`（dispatch 树内预跑，失败零落账）④§4.7 dispatch 重构：预检（runtime/project_dir/树锚点重建/setup）→ dispatched 落账先行（+`dispatcher_task:` 字段）→ spawn（`EXIT:<try>=<rc>` 日志标记）→ 验证窗（AGORA_VERIFY_WIN 10s）→ 秒死 diagnosed（日志尾）＋重试 1；凭据预写幂等；wt 免在场优先；深度默认 3＋账本推导取 max；配额账本化与 .live 取 max；删 v1.23 漏改的「HTTP API MUST NOT」残留⑤新脚本 merge.sh：ff-only＋合并目标二分（同仓链→上游 wt 分支/跨仓→默认分支）＋集成 verify＋FAIL 原子回滚（reset --hard；脏目标守卫只拦 tracked 修改）＋blocked→reopened 闭环＋幂等补账＋清树⑥poll 补档：done-unmerged 恢复性重派档（AGORA_MERGE_WAIT_MIN=15 重派上游 dispatcher；AGORA_REDISPATCH_MAX=3 超限 escalated @operator）；孤儿 dispatched 档（AGORA_ORPHAN_MIN=10）；watchdog 对 parent/deps/dispatcher_task 链上活下级阈值 ×4；wt 树 GC（终态＋AGORA_WT_GRACE_MIN=60＋clean→删，dirty 报告不删）；mention 拾取 wt_host 异机跳过；doctor 增缺任务页树报告（只报告不删）⑦BOOT 模板：装环境/不自己合并 done 即止/等待下级退出由重派唤醒/恢复性重派自查/non-ff rebase 指引。测试套件 243 项断言（+74 全量委托 L1，先红后绿）。
 - v1.33（2026-10-23）——全量委托 L2 服务 API 适配层（设计 v1.2.2 spike 实证；计划 docs/superpowers/plans/2026-10-23-全量委托-L2.md，gt-d154）：①新适配器 `scripts/runtime/opencode.sh` 五子命令（health/create/inject/alive/status，全经 `opencode api`，v2.1.2 openapi 实证契约：`{"data":…}` 包裹/outcome+time.idle 状态机/location.directory/delivery:"queue" 即投即跑）②§4.7 通道双轨：`AGORA_RUNTIME_API`（默认开）＋RUNTIME=opencode＋health 预检；两段化落账序 create（惰性）→dispatched(+`session:` 字段)→inject→验证窗轮询 idle（dead=秒死/idle=过/窗口尽仍 running=过）；回落矩阵（落账前失败 run 零残留；落账后 diagnosed＋重试＋run 兜底不重发）；API 模式对称维护 run log/`.live`（孤儿判据与配额计数不破）③§4.1 ack→注入：ack 且任务最新 dispatched 带 `session:` → inject「ack 已落账，继续」best-effort（`inject_failed` 仅 derived；`.git/inject-tickets/<sid>` 幂等）——plan-ack 死锁窗闭合④poll done-unmerged 注入式续跑优先（session:＋wt_host==本机 → inject 续跑 prompt，`redispatched.mode:"injected"`；无 session/失败/跨机 → 回落重派 `mode:"spawned"`）⑤在场检测 alive API 优先、sessions.map 降回退（wt 无条件 spawn 不变）⑥init.sh 补 scripts/runtime/ 子目录安装。测试套件 300 项断言（+36 L2 API 通道批，先红后绿；stub 假 opencode 进 PATH 全离线）。
 - v1.31（2026-10-21）——gt-4ea1 批：§4.4 看板 in-progress 行显示心跳 age（`进展（Nmin前）: body`；跨机钟漂钳零、旧 cache 兼容、畸形 ts 静默）；项目仓新增 `.githooks/pre-push` 全量冒烟钩（`git config core.hooksPath .githooks` 启用；AGORA_SKIP_SMOKE=1 绕过；600s 超时+PID 日志）；post.sh 读取侧收口（gt-4ea1 F）：dispatcher 自动 @ 块前移到写入前（fail=零写入契约恢复完整）、idem 先行计算（哈希不含自动追加 MENTION——幂等语义与 v1.30 前一致）、坏名校验补反斜杠、MENTION 精确匹配（逗号逐项+trim+空值 guard，防子串误吞/空白漏配/set -u fatal）。delegation.md 补 verify 指向约定（project_dir MUST=子会话实际工作区）与 merged 闭环 ack（done ≠ merged）。测试套件 168 项断言（+4：坏名含反斜杠拒 done/零写入无 shard 残留/MENTION 精确匹配/board 心跳 age）。
+
+- v1.34（2026-10-23）——C 一期终态工具（gt-b5e9）：①新工具 `agora_cancel`（§4.13，MCP＋`scripts/cancel.sh` CLI 双形态）：cancelled 落账附树状态、树交 GC；task 省略自动推导（dispatched∩无终态∩非僵尸，§4.7 配额口径同款；多活跃回 candidates）；merged/cancelled 终态拒；不做 kill（C 二期另立）②新工具 `agora_redispatch`（§4.14，`scripts/redispatch.sh`）：escalated/done-unmerged → reopened＋dispatch 合一（标准 BOOT）；task 省略自动推导可回池任务；ALREADY_INFLIGHT/ALREADY_TERMINAL 守卫；状态机 ts 序稳定排序（同秒平局保文件序，防 ev 字典序重排假终态）③poll.sh GC 窄域自动清理（operator 第 11 条）：scan_tasks 增 `last_terminal` 当前终态判别；cancelled ∧ porcelain(-uall) 全为 `.omo/agora-delegation/` 未跟踪凭据 → `worktree remove --force`＋branch -D（原先 cancelled+dirty 树只能人工清）；其余 dirty 维持 wt_kept_dirty 只报告；merged/done 不在窄域（B-C1 防丢数据不变）。测试套件 368 项断言（+10 C一期批：自动推导/候选列表/MCP 双形态/终态拒/escalated 回池/done-unmerged 回池/在飞拒/GC 窄域命中/业务文件不清/done 不清回归，先红后绿；复用 B 批 gt-2153 多仓夹具）。
 
 ## 8. 附录：宿主适配器（可选，不属于协议面）
 
