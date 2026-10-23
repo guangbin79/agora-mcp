@@ -18,7 +18,7 @@ HOME = os.environ["AGORA_HOME"]
 bad = []
 for f in (glob.glob(f"{HOME}/log/*/*.md") + glob.glob(f"{HOME}/log/*/.*.md")):
     seqs = collections.defaultdict(list)
-    with open(f, encoding="utf-8") as fh:
+    with open(f, encoding="utf-8", errors="replace") as fh:
         for line in fh:
             e = lib.parse_event(line)
             if e: seqs[e["actor"]].append(e["seq"])
@@ -38,7 +38,7 @@ HOME = os.environ["AGORA_HOME"]
 bad = []
 for f in sorted((glob.glob(f"{HOME}/log/*/*.md") + glob.glob(f"{HOME}/log/*/.*.md"))):
     last = {}  # (actor, task) -> 上一条 idem
-    with open(f, encoding="utf-8") as fh:
+    with open(f, encoding="utf-8", errors="replace") as fh:
         for i, line in enumerate(fh, 1):
             e = lib.parse_event(line)
             if not e: continue
@@ -84,7 +84,7 @@ HOME = os.environ["AGORA_HOME"]
 timeout = int(os.environ.get("AGORA_DISPATCH_TIMEOUT", "30"))
 last = {}
 for f in (glob.glob(f"{HOME}/log/*/*.md") + glob.glob(f"{HOME}/log/*/.*.md")):
-    with open(f, encoding="utf-8") as fh:
+    with open(f, encoding="utf-8", errors="replace") as fh:
         for line in fh:
             e = lib.parse_event(line)
             if e: last[e["actor"]] = max(last.get(e["actor"], ""), e["ts"])
@@ -94,7 +94,7 @@ for live in glob.glob(f"{HOME}/raw/dispatches/*.live"):
     did = os.path.basename(live)[:-5]
     child = None
     for f in (glob.glob(f"{HOME}/log/*/*.md") + glob.glob(f"{HOME}/log/*/.*.md")):
-        for line in open(f, encoding="utf-8"):
+        for line in open(f, encoding="utf-8", errors="replace"):
             if did in line and "event:dispatched" in line:
                 cm = re.search(r'child:(\S+)', line)
                 if cm: child = cm.group(1)
@@ -145,7 +145,7 @@ import agora_lib as lib
 HOME = os.environ["AGORA_HOME"]
 dirs = set()
 for f in glob.glob(f"{HOME}/wiki/entities/*.md") + glob.glob(f"{HOME}/wiki/projects/*.md"):
-    txt = open(f, encoding="utf-8").read()
+    txt = open(f, encoding="utf-8", errors="replace").read()
     for d in lib.entity_dirs(txt) + re.findall(r'^path:\s*(\S+)\s*$', txt, re.M):
         d = os.path.realpath(os.path.expanduser(d))
         if os.path.isdir(os.path.join(d, ".git")): dirs.add(d)
@@ -184,7 +184,7 @@ import agora_lib as lib
 HOME = os.environ["AGORA_HOME"]
 roots = set()
 for f in glob.glob(f"{HOME}/wiki/entities/*.md") + glob.glob(f"{HOME}/wiki/projects/*.md"):
-    txt = open(f, encoding="utf-8").read()
+    txt = open(f, encoding="utf-8", errors="replace").read()
     for d in lib.entity_dirs(txt) + re.findall(r'^path:\s*(\S+)\s*$', txt, re.M):
         roots.add(os.path.dirname(os.path.realpath(os.path.expanduser(d))))
 out = []

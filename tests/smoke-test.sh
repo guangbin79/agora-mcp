@@ -1635,6 +1635,71 @@ cat "$AGORA_HOME"/log/*/*.md | grep -E "(^|[|] )task:$F11U( |$)" | grep event:di
   && ok "F11 poll 重派透传原链 dispatcher_task" || fail "F11 重派链断裂"
 
 
+echo "===== 已知风险批次（B-M3 孤儿判据 / B-M4 重派回报 / B-M7 GC 可见性 / doctor UTF-8） ====="
+# 清场前奏：前序段落遗留活 dispatched 全部 cancelled 出集（配额/孤儿口径净场，沿 BOOT 段模式）
+for _t in $(python3 - "$AGORA_HOME" <<'PYEOF'
+import glob, re, sys
+home = sys.argv[1]; disp, terminal = {}, set()
+for f in sorted(glob.glob(f"{home}/log/*/*.md")):
+    try: lines = open(f, encoding="utf-8").read().splitlines()
+    except OSError: continue
+    for line in lines:
+        m = re.search(r"task:(gt-[0-9a-f]{4,})", line)
+        if not m: continue
+        t = m.group(1)
+        if "event:dispatched" in line: disp[t] = 1
+        elif any(f"event:{e}" in line for e in ("done", "merged", "cancelled")): terminal.add(t)
+print(" ".join(t for t in disp if t not in terminal))
+PYEOF
+); do POST tester@proj --event cancelled --task "$_t" >/dev/null 2>&1; done
+# R1 (B-M3): 孤儿判据＝最后事件==dispatched 且 run log 缺失——诊断过的任务重派后再孤儿必再报
+R1=$(MKWT2 "诊断后孤儿" r1m3)
+POST tester@proj --event dispatched --task "$R1" --target "$PROJ" --child tester --run "raw/dispatches/d-r1a.log" >/dev/null
+POLLT >/dev/null   # 第一轮：孤儿 diagnosed（既有行为）
+POST tester@proj --event diagnosed --task "$R1" --conclusion "stalled 模拟：诊断后派生仍死" >/dev/null
+POST tester@proj --event dispatched --task "$R1" --target "$PROJ" --child tester --run "raw/dispatches/d-r1b.log" >/dev/null
+POLLT >/dev/null   # B-M3：最后事件==dispatched 无 run log → 必须再报（现状累计判据红）
+[ "$(LEV "$R1" diagnosed | grep -c "孤儿")" -ge 2 ] && ok "R1 诊断后重派仍报孤儿（B-M3）" || fail "R1 累计判据致孤儿失明（B-M3）"
+# R2 (B-M4): 孤儿重派核查 dispatch 返回码——失败记 redispatched:false 不谎报，成功记 true
+R4=$(MKWT2 "重派失败" r2m4)
+POST tester@proj --event dispatched --task "$R4" --target "$PROJ" --child tester --run "raw/dispatches/d-r2.log" >/dev/null
+OUT=$(AGORA_MERGE_WAIT_MIN=9999 AGORA_ORPHAN_MIN=0 AGORA_WT_GRACE_MIN=9999 AGORA_DISPATCH_TIMEOUT=9999 AGORA_MAX_SPAWN=9 AGORA_RUNTIME=bogus-runtime-xyz \
+  bash "$AGORA_HOME/scripts/poll.sh" 2>/dev/null)
+echo "$OUT" | python3 -c 'import json,sys
+d = json.load(sys.stdin); tid = sys.argv[1]
+sys.exit(0 if any(e.get("task") == tid and e.get("redispatched") is False for e in d.get("orphan_diag", [])) else 1)' "$R4" \
+  && ok "R2 重派失败记 redispatched:false（B-M4）" || fail "R2 重派失败未回报（B-M4）"
+R5=$(MKWT2 "重派成功" r3m5)
+POST tester@proj --event dispatched --task "$R5" --target "$PROJ" --child tester --run "raw/dispatches/d-r3.log" >/dev/null
+OUT=$(AGORA_MERGE_WAIT_MIN=9999 AGORA_ORPHAN_MIN=0 AGORA_WT_GRACE_MIN=9999 AGORA_DISPATCH_TIMEOUT=9999 AGORA_MAX_SPAWN=99 AGORA_RUNTIME=echo \
+  bash "$AGORA_HOME/scripts/poll.sh" 2>/dev/null)
+echo "$OUT" | python3 -c 'import json,sys
+d = json.load(sys.stdin); tid = sys.argv[1]
+sys.exit(0 if any(e.get("task") == tid and e.get("redispatched") is True for e in d.get("orphan_diag", [])) else 1)' "$R5" \
+  && ok "R2 重派成功记 redispatched:true（B-M4）" || fail "R2 重派成功未记 true（B-M4）"
+# R3 (B-M7): GC worktree remove 失败可见＋gcst 保留（chmod 500 父目录迫删失败→复原→重试删净）
+R7=$(MKWT2 "gc删失败" r4m7); WR7=$(ls -d "$T"/proj__wt-${R7}__*)
+echo m > "$WR7/mf"; git -C "$WR7" add -A; git -C "$WR7" -c user.name=t -c user.email=t@l commit -qm r3
+POST tester@proj --event claimed --task "$R7" >/dev/null
+POST tester@proj --event done --task "$R7" --commit HEAD --evidence ok >/dev/null
+git -C "$PROJ" merge -q --ff-only "wt/$R7" 2>/dev/null
+tick "$R7"; POST tester@proj --event merged --task "$R7" --commit "$(git -C "$PROJ" rev-parse HEAD)" --branch "$(git -C "$PROJ" symbolic-ref --short HEAD)" >/dev/null
+untick "$R7"
+chmod 500 "$T"
+OUT=$(AGORA_MERGE_WAIT_MIN=9999 AGORA_ORPHAN_MIN=9999 AGORA_WT_GRACE_MIN=0 AGORA_DISPATCH_TIMEOUT=9999 AGORA_MAX_SPAWN=9 AGORA_RUNTIME=echo \
+  bash "$AGORA_HOME/scripts/poll.sh" 2>/dev/null)
+chmod 755 "$T"   # 复原（rm -rf 清场依赖）
+[ -d "$WR7" ] && ok "R3 删失败树保留" || fail "R3 删失败树被删"
+echo "$OUT" | python3 -c 'import json,sys
+d = json.load(sys.stdin); tid = sys.argv[1]
+sys.exit(0 if any(e.get("task") == tid for e in d.get("wt_remove_failed", [])) else 1)' "$R7" \
+  && ok "R3 wt_remove_failed 可见（B-M7）" || fail "R3 GC 删失败不可见（B-M7）"
+POLLT >/dev/null   # 权限复原：gcst 保留→下轮重试删净
+[ ! -d "$WR7" ] && ok "R3 gcst 保留下轮重试删净（B-M7）" || fail "R3 gcst 丢失未重试"
+# R4 (E): doctor.sh 全部 open(encoding=utf-8) 带 errors=replace（与 poll/dispatch 同口径）
+BAD_OPEN=$(grep 'encoding="utf-8"' "$PKG/scripts/doctor.sh" | grep -cv 'errors="replace"' || true)
+[ "$BAD_OPEN" -eq 0 ] && ok "R4 doctor open 全带 errors=replace（UTF-8 容错）" || fail "R4 doctor open 缺 errors=replace（$BAD_OPEN 处）"
+
 echo "===== 隐藏分片可见性——点开头项目名（生产行政 hotfix，gt-3ea2 波次根因） ====="
 PX="$T/.projx"; mkdir -p "$PX"; (cd "$PX" && git init -q . && echo x>p && git add -A && git -c user.name=t -c user.email=t@l commit -qm i)
 H1=$(TID "$(TITLE="点仓任务" VERIFY=true PROJECT_DIR="$PX" WT=1 IDEM=dot1 TC)")

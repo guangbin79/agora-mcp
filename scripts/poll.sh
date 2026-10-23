@@ -89,7 +89,7 @@ report = {"poll": "ok", "host": HOST, "stalled": [], "suspicious": [], "escalate
           "reopened": [], "spawned": [], "held": [], "stale_live": 0,
           "sessions_reaped": 0, "mails_archived": 0,
           "merge_wait_diag": [], "redispatched": [], "escalated_merge": [],
-          "orphan_diag": [], "wt_removed": [], "wt_kept_dirty": [], "wt_kept_grace": []}
+          "orphan_diag": [], "wt_removed": [], "wt_kept_dirty": [], "wt_kept_grace": [], "wt_remove_failed": []}
 
 now = time.time()
 
@@ -132,14 +132,17 @@ def scan_tasks():
                 if not e: continue
                 t = e.get("task") or ""
                 if not re.fullmatch(r"gt-[0-9a-f]+", t): continue
-                d = tasks.setdefault(t, {"dispatched": [], "has": set(), "last": None, "done_open": False, "last_actor": ""})
-                d["last"] = e["event"]
+                d = tasks.setdefault(t, {"dispatched": [], "has": set(), "last": None, "done_open": False, "last_actor": "", "_rows": []})
+                d["_rows"].append((e.get("ts", ""), e["event"]))
                 d["has"].add(e["event"])
                 d["last_actor"] = e.get("actor", "")
                 if e["event"] == "done": d["done_open"] = True          # done 未闭：merged/cancelled/reopened 才清
                 elif e["event"] in ("merged", "cancelled", "reopened"): d["done_open"] = False
                 if e["event"] == "dispatched":
                     d["dispatched"].append((e.get("actor", ""), e.get("run", ""), e.get("dispatcher_task", "")))
+    for d in tasks.values():
+        d["last"] = max(d["_rows"], key=lambda r: r[0])[1] if d["_rows"] else None  # B-M3：last 按 ts 序取——跨分片文件序≠时间序（proj.md 字典序在 watchdog.md 前）
+        del d["_rows"]
     return tasks
 
 TASKS = scan_tasks()
@@ -345,8 +348,9 @@ for t, d in TASKS.items():
 # ---------- ②d 孤儿 dispatched 档（FMEA B3：落账后 spawn 前崩溃——run log 缺失＝spawn 未执行） ----------
 orph = state.setdefault("_orphan", {})
 for t, d in TASKS.items():
-    if not d["dispatched"]: orph.pop(t, None); continue
-    if "diagnosed" in d["has"] or d["has"] & TERMINALS:
+    # B-M3：判据＝最后事件==dispatched 且 run log 缺失（累计 has 集曾令 stalled 诊断过的
+    # 任务此后真孤儿永不报）；终态或后续任何活动（progress/done 等）自然出集
+    if not d["dispatched"] or d["last"] != "dispatched":
         orph.pop(t, None); continue
     _, runf, _ = d["dispatched"][-1]
     if runf and os.path.exists(os.path.join(HOME, runf)):
@@ -367,13 +371,15 @@ for t, d in TASKS.items():
                         "--task", t,
                         "--conclusion", f"孤儿 dispatched：{t} 已落账派发但 run log 缺失（spawn 未执行，第 {n}/{REDISPATCH_MAX} 次），恢复性重派"])
     page = f"{HOME}/wiki/tasks/{t}.md"
+    redisp = False  # B-M4：核查 dispatch 返回码，失败如实回报不谎报
     if r.returncode == 0 and SPAWN and os.path.exists(page):
-        upd = re.search(r'^project_dir:\s*(\S+)', open(page, encoding="utf-8").read(), re.M)
+        upd = re.search(r'^project_dir:\s*(\S+)', open(page, encoding="utf-8", errors="replace").read(), re.M)
         if upd:
-            run("dispatch.sh", ["--actor", actor, "--project", upd.group(1), "--task", t,
-                                "--prompt", RECHECK])
-    orph[t] = {"since": now, "n": n}
-    report["orphan_diag"].append({"task": t, "n": n})
+            r2 = run("dispatch.sh", ["--actor", actor, "--project", upd.group(1), "--task", t,
+                                     "--prompt", RECHECK])
+            redisp = r2.returncode == 0
+    orph[t] = {"since": now, "n": n, "redispatched": redisp}
+    report["orphan_diag"].append({"task": t, "n": n, "redispatched": redisp})
 
 # ---------- ④c wt 树 GC（终态＋宽限＋clean→删；dirty/宽限内→报告；缺任务页树归 doctor 只报告） ----------
 gcst = state.setdefault("_wtgc", {})
@@ -396,10 +402,19 @@ for page in glob.glob(f"{HOME}/wiki/tasks/*.md"):
     if dirty:
         report["wt_kept_dirty"].append(t); continue
     main_ = lib.main_repo_of(wtd) or wtd
-    subprocess.run(["git", "-C", main_, "worktree", "remove", wtd], capture_output=True)
-    subprocess.run(["git", "-C", main_, "branch", "-q", "-D", f"wt/{t}"], capture_output=True)
+    rr = subprocess.run(["git", "-C", main_, "worktree", "remove", wtd],
+                        capture_output=True, text=True)
+    if rr.returncode != 0:
+        try: os.rmdir(wtd)   # remove 失败常剩空壳（git 已摘 worktree 元数据）；rmdir 只删空目录，不碰有数据现场
+        except OSError: pass
     if not os.path.isdir(wtd):
         gcst.pop(t, None); report["wt_removed"].append(t)
+        subprocess.run(["git", "-C", main_, "branch", "-q", "-D", f"wt/{t}"], capture_output=True)
+    else:
+        # B-M7：删失败必响（report 可见）且 gcst 保留待下轮重试；跳过 branch -D（防分支先于树删除）
+        report["wt_remove_failed"].append(
+            {"task": t, "dir": wtd,
+             "err": ((rr.stderr or rr.stdout or "unknown").strip().splitlines() or ["unknown"])[-1][:160]})
 
 # ---------- ④a sessions.map TTL 保洁（只清本机条目；他机条目由它自己机器的 poll 清） ----------
 SMAP = f"{HOME}/scripts/sessions.map"
