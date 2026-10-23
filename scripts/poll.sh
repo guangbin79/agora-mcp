@@ -132,7 +132,7 @@ def scan_tasks():
                 if not e: continue
                 t = e.get("task") or ""
                 if not re.fullmatch(r"gt-[0-9a-f]+", t): continue
-                d = tasks.setdefault(t, {"dispatched": [], "has": set(), "last": None, "done_open": False, "last_actor": "", "_rows": []})
+                d = tasks.setdefault(t, {"dispatched": [], "has": set(), "last": None, "done_open": False, "terminal": False, "last_actor": "", "_rows": []})
                 d["_rows"].append((e.get("ts", ""), e["event"]))
                 d["has"].add(e["event"])
                 d["last_actor"] = e.get("actor", "")
@@ -144,6 +144,8 @@ def scan_tasks():
         for _ts, ev in rows:  # gt-db15：done_open 同按 ts 序重放——同日多分片文件名字典序≠时间序
             if ev == "done": d["done_open"] = True          # done 未闭：merged/cancelled/reopened 才清
             elif ev in ("merged", "cancelled", "reopened"): d["done_open"] = False
+            if ev in ("merged", "cancelled"): d["terminal"] = True   # gt-99af：当前终态（供 mention 拾取核查棒）
+            elif ev == "reopened": d["terminal"] = False     # 返工/恢复重开 → 回到可拾取
         del d["_rows"]
     return tasks
 
@@ -268,6 +270,13 @@ for f in sorted(glob.glob(f"{HOME}/wiki/entities/*.md")):
         task = m.group(1) if m else None
         if not task or not re.search(rf'^- {re.escape(task)}\b', todo_txt, re.M):
             continue  # 无任务 / 已被认领 / 已终结 —— 只推进水位
+        # gt-99af 修复一：账本真值核查棒——看板是派生视图可滞后（merged 事件 derive-board 不处理），
+        # 任务当前终态（merged/cancelled 且未 reopened）则 mention 邮件不派发，防 RECHECK 派发雪球
+        d = TASKS.get(task)
+        if d and d.get("terminal"):
+            report["held"].append({"entity": name, "task": task,
+                                   "reason": "终态（merged/cancelled）不派发"})
+            continue
         # wt_host 限定（设计 §五）：跨机 wt 任务不本地拾取（他机的树本地不可用）
         tp = f"{HOME}/wiki/tasks/{task}.md"
         if os.path.exists(tp):

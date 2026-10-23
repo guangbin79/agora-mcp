@@ -1506,6 +1506,14 @@ R=$(AGORA_MERGE_WAIT_MIN=9999 AGORA_ORPHAN_MIN=9999 AGORA_WT_GRACE_MIN=9999 AGOR
   bash "$AGORA_HOME/scripts/poll.sh" 2>/dev/null)
 echo "$R" | grep -q "$HO" && echo "$R" | grep -q "wt_host" && [ -z "$(LEV "$HO" dispatched)" ] \
   && ok "⑥ wt_host 异机任务拾取跳过（held）" || fail "⑥ host 限定"
+# ⑥b 账本真值终态核查棒：任务已 merged（簿记收尾）而看板 todo 滞后残留 → mention 不派发（gt-99af 修复一；
+# derive-board 不处理 merged 事件 → todo 残留，现状拾取段只信看板会派发雪球）
+TZ=$(TID "$(TITLE="终态不派" VERIFY="true" PROJECT_DIR="$PROJ" TC)")
+tick "$TZ"; POST tester@proj --event merged --task "$TZ" --commit "$(git -C "$PROJ" rev-parse HEAD)" --branch "$(git -C "$PROJ" symbolic-ref --short HEAD)" >/dev/null; untick "$TZ"
+POST rival@proj2 --event progress --task "$TZ" --mention tester --body "终态后不应派发" >/dev/null
+RB=$(POLLT)
+[ -z "$(LEV "$TZ" dispatched)" ] && echo "$RB" | grep -q "$TZ" && echo "$RB" | grep -q "终态" \
+  && ok "⑥b 终态（merged）任务 mention 不派发（held）" || fail "⑥b 终态任务被派发（雪球）或 held 缺失（got: $(LEV "$TZ" dispatched | head -1))"
 # ⑦ stale-live 回归（既有档）
 SL=$(MKWT2 "滞留" t7l)
 POST tester@proj --event claimed --task "$SL" >/dev/null
