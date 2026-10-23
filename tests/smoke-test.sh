@@ -1422,6 +1422,17 @@ POST tester@proj --event merged --task "$PD_" --commit "$(git -C "$PROJ" rev-par
 untick "$PD_"
 POLLT >/dev/null
 [ "$(LEV "$PD_" diagnosed | grep -c "未合并")" -eq 1 ] && ok "① merged 后不再诊断" || fail "① merged 后不再诊断"
+# ①b git 层已合并短路：wt/<t> 引用存在且为 project_dir HEAD 祖先＋账本无 merged → 簿记滞后，梯子安静（gt-99af 修复二）；
+# 无引用/未并 → 照常诊断/重派不静默（由段①与 S4a-d 真未合并夹具守）
+GU=$(MKWT2 "短路u" i8a); GD=$(MKWT2 "短路d" i8b)
+AGORA_RUNTIME=echo bash "$AGORA_HOME/scripts/dispatch.sh" --actor tester@proj --project "$PROJ" --task "$GD" --dispatcher-task "$GU" >/dev/null 2>&1
+WG=$(ls -d "$T"/proj__wt-${GD}__*); echo s > "$WG/sfile"; git -C "$WG" add -A; git -C "$WG" -c user.name=t -c user.email=t@l commit -qm s
+POST tester@proj --event claimed --task "$GD" >/dev/null
+POST tester@proj --event done --task "$GD" --commit HEAD --evidence ok >/dev/null
+git -C "$PROJ" merge -q --ff-only "wt/$GD" 2>/dev/null   # 已实际并入主仓，账本不落 merged（簿记滞后形态）
+POLLT >/dev/null
+[ -z "$(LEV "$GD" diagnosed)" ] && [ -z "$(LEV "$GU" dispatched)" ] \
+  && ok "①b git 已并＋账本无 merged → 梯子安静（不诊断不重派）" || fail "①b 簿记滞后误诊/误重派（diag=$(LEV "$GD" diagnosed | head -1)）"
 # ② 重派上限：3 次后第 4 次 escalated、不再派
 QU=$(MKWT2 "上限u" t7c); QD=$(MKWT2 "上限d" t7d)
 AGORA_RUNTIME=echo bash "$AGORA_HOME/scripts/dispatch.sh" --actor tester@proj --project "$PROJ" --task "$QD" --dispatcher-task "$QU" >/dev/null 2>&1
@@ -1890,6 +1901,7 @@ print(" ".join(t for t, v in done_open.items() if v))
 PYEOF
 ); do POST tester@proj --event cancelled --task "$_t" >/dev/null 2>&1; done
 T4U=$(MKWT2 "续跑上游" t4u); T4D=$(MKWT2 "续跑下游" t4d)
+W4D=$(ls -d "$T"/proj__wt-${T4D}__*); echo t > "$W4D/tfile"; git -C "$W4D" add -A; git -C "$W4D" -c user.name=t -c user.email=t@l commit -qm t4d   # gt-99af：真未合并态（夹具此前借分支==HEAD 已并形态，会被 git 层短路吞掉）
 bash "$AGORA_HOME/scripts/post.sh" --actor tester@proj --project proj --event dispatched --task "$T4U" \
   --target "$PROJ" --child tester --run "raw/dispatches/d-t4u.log" --session ses_up1 >/dev/null
 bash "$AGORA_HOME/scripts/post.sh" --actor tester@proj --project proj --event dispatched --task "$T4D" \
@@ -1915,6 +1927,7 @@ sys.exit(0 if any(e.get("upstream")==tid and e.get("mode")=="spawned" for e in d
 [ "$(LEV "$T4U" dispatched | wc -l)" = 2 ] && ok "S4b 回落产生新 dispatched" || fail "S4b 回落无新 dispatched"
 # S4c: 上游无 session → 直接重派（既有行为）
 T4U2=$(MKWT2 "无session上游" t4c); T4D2=$(MKWT2 "无session下游" t4c2)
+W4D2=$(ls -d "$T"/proj__wt-${T4D2}__*); echo u > "$W4D2/ufile"; git -C "$W4D2" add -A; git -C "$W4D2" -c user.name=t -c user.email=t@l commit -qm t4d2   # 真未合并态（gt-99af）
 bash "$AGORA_HOME/scripts/post.sh" --actor tester@proj --project proj --event dispatched --task "$T4U2" \
   --target "$PROJ" --child tester --run "raw/dispatches/d-t4u2.log" >/dev/null
 bash "$AGORA_HOME/scripts/post.sh" --actor tester@proj --project proj --event dispatched --task "$T4D2" \
@@ -1929,6 +1942,7 @@ sys.exit(0 if any(e.get("upstream")==tid and e.get("mode")=="spawned" for e in d
   && ok "S4c 无 session 直接重派" || fail "S4c 无 session 行为回归（got: $OUT）"
 # S4d: 上游 wt_host≠本机 → 不注入（跨机判则）回落重派（独立对子——mw 状态按任务共享，勿复用 S4a/b 的）
 T4U3=$(MKWT2 "跨机上游" t4x); T4D3=$(MKWT2 "跨机下游" t4y)
+W4D3=$(ls -d "$T"/proj__wt-${T4D3}__*); echo v > "$W4D3/vfile"; git -C "$W4D3" add -A; git -C "$W4D3" -c user.name=t -c user.email=t@l commit -qm t4d3   # 真未合并态（gt-99af）
 bash "$AGORA_HOME/scripts/post.sh" --actor tester@proj --project proj --event dispatched --task "$T4U3" \
   --target "$PROJ" --child tester --run "raw/dispatches/d-t4u3.log" --session ses_up3 >/dev/null
 bash "$AGORA_HOME/scripts/post.sh" --actor tester@proj --project proj --event dispatched --task "$T4D3" \

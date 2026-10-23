@@ -88,7 +88,7 @@ def task_last_refs():
 report = {"poll": "ok", "host": HOST, "stalled": [], "suspicious": [], "escalated": [],
           "reopened": [], "spawned": [], "held": [], "stale_live": 0,
           "sessions_reaped": 0, "mails_archived": 0,
-          "merge_wait_diag": [], "redispatched": [], "escalated_merge": [],
+          "merge_wait_diag": [], "redispatched": [], "escalated_merge": [], "merge_lagged": [],
           "orphan_diag": [], "wt_removed": [], "wt_kept_dirty": [], "wt_kept_grace": [], "wt_remove_failed": []}
 
 now = time.time()
@@ -310,6 +310,21 @@ for t, d in TASKS.items():
     # done_open＝done 后无 merged/cancelled/reopened（诊断/blocked 不打断跟踪）
     if not d.get("done_open") or "merged" in d["has"]:
         mw.pop(t, None); continue
+    # gt-99af 修复二：git 层已合并短路——wt/<t> 引用（本地或 origin）存在且为 project_dir HEAD
+    # 祖先＝产出已实际并入主仓、账本 merged 落账滞后 → 不提醒不重派（mw.pop）；
+    # 无引用/不可判定不静默（防树外产出被吞，照常诊断/重派）
+    pdm = re.search(r'^project_dir:\s*(\S+)', txt, re.M)
+    if pdm and os.path.isdir(pdm.group(1)):
+        sha = ""
+        for ref in (f"refs/heads/wt/{t}", f"refs/remotes/origin/wt/{t}"):
+            rr = subprocess.run(["git", "-C", pdm.group(1), "rev-parse", "--verify", "--quiet", ref],
+                                capture_output=True, text=True)
+            if rr.returncode == 0: sha = rr.stdout.strip(); break
+        if sha and subprocess.run(["git", "-C", pdm.group(1), "merge-base", "--is-ancestor", sha, "HEAD"],
+                                  capture_output=True).returncode == 0:
+            mw.pop(t, None)
+            report["merge_lagged"].append(t)
+            continue
     e = mw.get(t)
     if not isinstance(e, dict):
         e = {"since": now, "n": 0}; mw[t] = e
