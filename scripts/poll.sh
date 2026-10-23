@@ -139,7 +139,7 @@ def scan_tasks():
                 if e["event"] == "done": d["done_open"] = True          # done 未闭：merged/cancelled/reopened 才清
                 elif e["event"] in ("merged", "cancelled", "reopened"): d["done_open"] = False
                 if e["event"] == "dispatched":
-                    d["dispatched"].append((e.get("actor", ""), e.get("run", ""), e.get("dispatcher_task", "")))
+                    d["dispatched"].append((e.get("actor", ""), e.get("run", ""), e.get("dispatcher_task", ""), e.get("session", "")))
     for d in tasks.values():
         d["last"] = max(d["_rows"], key=lambda r: r[0])[1] if d["_rows"] else None  # B-M3：last 按 ts 序取——跨分片文件序≠时间序（proj.md 字典序在 watchdog.md 前）
         del d["_rows"]
@@ -153,7 +153,7 @@ TERMINALS = {"done", "merged", "cancelled"}
 exempt = set()
 for t, d in TASKS.items():
     if d["has"] & TERMINALS or not d["dispatched"]: continue
-    for _, _, up in d["dispatched"]:
+    for _, _, up, _sess in d["dispatched"]:
         if up: exempt.add(up)
 for t in {x for x, _ in inprog}:
     p = f"{HOME}/wiki/tasks/{t}.md"
@@ -333,15 +333,32 @@ for t, d in TASKS.items():
                         f"再评审其 diff（任务页 wt_dir 的树），然后 bash {HOME}/scripts/merge.sh"
                         f" --actor {disp_actor} --task {t} 闭环；若 non-ff 先在原树 rebase 到合并目标分支"
                         f"再重走 verify。完成后继续你自己的任务。")
-                # M5：重派上游时透传其原链 dispatcher_task（上游自身 dispatched 的最新链字段），
-                # 防重派抹链致后续深度推导降级
-                upchain = (TASKS.get(up) or {}).get("dispatched") or []
-                rargs = ["--actor", disp_actor, "--project", upd.group(1), "--task", up, "--prompt", boot]
-                if upchain and upchain[-1][2]:
-                    rargs += ["--dispatcher-task", upchain[-1][2]]
-                r2 = run("dispatch.sh", rargs)
-                if r2.returncode == 0:
-                    report["redispatched"].append({"upstream": up, "downstream": t, "n": n})
+                # L2 注入式续跑（设计 §三）：上游最新 dispatched 带 session: 且 wt_host==本机 → inject 优先
+                # （sid 只在本机 opencode 服务有效——跨机判则沿用 wt_host；无 session:/失败 → 回落恢复性重派）
+                injected = False
+                api_on = (os.environ.get("AGORA_RUNTIME_API", "1") != "0"
+                          and os.environ.get("AGORA_RUNTIME", "opencode") == "opencode"
+                          and os.path.exists(f"{HOME}/scripts/runtime/opencode.sh"))
+                if api_on:
+                    upsess = ""
+                    for _row in (TASKS.get(up) or {}).get("dispatched", []):
+                        if _row[3]: upsess = _row[3]
+                    wh = re.search(r'^wt_host:\s*(\S+)', open(upage, encoding="utf-8").read(), re.M)
+                    if upsess and wh and wh.group(1) == HOST:
+                        ri = run("runtime/opencode.sh", ["inject", upsess, boot])
+                        if ri.returncode == 0:
+                            injected = True
+                            report["redispatched"].append({"upstream": up, "downstream": t, "n": n, "mode": "injected"})
+                if not injected:
+                    # M5：重派上游时透传其原链 dispatcher_task（上游自身 dispatched 的最新链字段），
+                    # 防重派抹链致后续深度推导降级
+                    upchain = (TASKS.get(up) or {}).get("dispatched") or []
+                    rargs = ["--actor", disp_actor, "--project", upd.group(1), "--task", up, "--prompt", boot]
+                    if upchain and upchain[-1][2]:
+                        rargs += ["--dispatcher-task", upchain[-1][2]]
+                    r2 = run("dispatch.sh", rargs)
+                    if r2.returncode == 0:
+                        report["redispatched"].append({"upstream": up, "downstream": t, "n": n, "mode": "spawned"})
     mw[t] = {"since": now, "n": n}
     report["merge_wait_diag"].append({"task": t, "n": n})
 
@@ -352,7 +369,7 @@ for t, d in TASKS.items():
     # 任务此后真孤儿永不报）；终态或后续任何活动（progress/done 等）自然出集
     if not d["dispatched"] or d["last"] != "dispatched":
         orph.pop(t, None); continue
-    _, runf, _ = d["dispatched"][-1]
+    _, runf, _, _ = d["dispatched"][-1]
     if runf and os.path.exists(os.path.join(HOME, runf)):
         orph.pop(t, None); continue
     e = orph.get(t)

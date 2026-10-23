@@ -16,6 +16,8 @@ mkdir -p "$AGORA_HOME"/{log,board,inbox,raw/dispatches,scripts} \
          "$AGORA_HOME"/wiki/{entities,tasks,decisions,proposals,topics}
 cp "$AGORA_PKG"/scripts/*.sh "$AGORA_HOME/scripts/"
 cp "$AGORA_PKG"/scripts/*.py "$AGORA_HOME/scripts/"   # agora_lib.py：共享解析唯一真源（随脚本自举）
+mkdir -p "$AGORA_HOME/scripts/runtime"                # L2 适配层子目录（opencode.sh；缺席容忍＝旧包兼容）
+cp "$AGORA_PKG"/scripts/runtime/*.sh "$AGORA_HOME/scripts/runtime/" 2>/dev/null || true
 [[ -f "$AGORA_PKG/docs/CONVENTIONS.md" ]] && cp -n "$AGORA_PKG/docs/CONVENTIONS.md" "$AGORA_HOME/" 2>/dev/null || true
 [[ -f "$AGORA_PKG/docs/AGENTS.md" ]] && cp -n "$AGORA_PKG/docs/AGENTS.md" "$AGORA_HOME/" 2>/dev/null || true
 

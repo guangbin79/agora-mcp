@@ -230,10 +230,11 @@ else
 fi
 
 echo "===== HTTP 只读窗口（agora-http） ====="
-HPORT=18471
-AGORA_HOME="$AGORA_HOME" AGORA_HTTP_PORT=$HPORT python3 "$PKG/server/agora_http.py" >/dev/null 2>&1 &
+# 随机端口（0→.git/httpd.json 发现）：固定端口在并发套件/残留 httpd 时 bind 撞车假红（gt-d154 merge verify 实证）
+AGORA_HOME="$AGORA_HOME" AGORA_HTTP_PORT=0 python3 "$PKG/server/agora_http.py" >/dev/null 2>&1 &
 HPID=$!
 sleep 1
+HPORT=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["port"])' "$AGORA_HOME/.git/httpd.json" 2>/dev/null)
 python3 - "$HPORT" "$PLAN" "$B" <<'PYEOF' && ok "HTTP 七端点 + Web 页" || fail "HTTP 七端点 + Web 页"
 import json, sys, urllib.request
 port, plan, taskb = sys.argv[1], sys.argv[2], sys.argv[3]
@@ -825,7 +826,7 @@ c = board(view="cancelled")
 assert ct in next(iter(c.values())), c
 p.stdin.close()
 PYEOF
-HPORT2=18472
+HPORT2=$(python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));p=s.getsockname()[1];s.close();print(p)')
 AGORA_HOME="$AGORA_HOME" AGORA_HTTP_PORT=$HPORT2 python3 "$PKG/server/agora_http.py" >/dev/null 2>&1 &
 HPID4=$!
 sleep 1
@@ -887,7 +888,7 @@ assert r["result"].get("isError") and d.get("code")=="VALIDATION_FAILED", r
 p.stdin.close()
 PYEOF
 # --- HTTP /api/inbox 拒 name=..（400） ---
-HPORT3=18473
+HPORT3=$(python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));p=s.getsockname()[1];s.close();print(p)')
 AGORA_HOME="$AGORA_HOME" AGORA_HTTP_PORT=$HPORT3 python3 "$PKG/server/agora_http.py" >/dev/null 2>&1 &
 HPID5=$!
 for i in 1 2 3 4 5 6 7 8 9 10; do bash -c "exec 3<>/dev/tcp/127.0.0.1/$HPORT3" 2>/dev/null && break; sleep 0.3; done
@@ -1657,6 +1658,7 @@ R1=$(MKWT2 "诊断后孤儿" r1m3)
 POST tester@proj --event dispatched --task "$R1" --target "$PROJ" --child tester --run "raw/dispatches/d-r1a.log" >/dev/null
 POLLT >/dev/null   # 第一轮：孤儿 diagnosed（既有行为）
 POST tester@proj --event diagnosed --task "$R1" --conclusion "stalled 模拟：诊断后派生仍死" >/dev/null
+sleep 1.1   # 撞秒防线：diagnosed 与 re-dispatched 同秒时 last 取首行（ts 秒级分辨率）会漏报第二次孤儿——夹具隔离到不同秒，断言语义不变
 POST tester@proj --event dispatched --task "$R1" --target "$PROJ" --child tester --run "raw/dispatches/d-r1b.log" >/dev/null
 POLLT >/dev/null   # B-M3：最后事件==dispatched 无 run log → 必须再报（现状累计判据红）
 [ "$(LEV "$R1" diagnosed | grep -c "孤儿")" -ge 2 ] && ok "R1 诊断后重派仍报孤儿（B-M3）" || fail "R1 累计判据致孤儿失明（B-M3）"
@@ -1716,6 +1718,243 @@ echo "$OUT" | python3 -c 'import json,sys
 d = json.load(sys.stdin); tid = sys.argv[1]
 sys.exit(1 if any(e.get("task") == tid for e in d.get("merge_wait_diag", [])) else 0)' "$H1" \
   && ok "点仓 merged 后梯子安静（poll 可见 merged）" || fail "点仓 merged 仍被诊断（poll 盲）"
+
+echo "===== L2 API 通道批（T1 适配器契约 stub 测 / T2 API 派生 / T3 ack 注入 / T4 注入式续跑 / T5 在场 API 化） ====="
+# stub：假 opencode CLI 进 PATH（只钉 L2 契约字段，形状照 v2.1.2 openapi 实证——{"data":…} 包裹/outcome/time.idle/location.directory/delivery:"queue"）
+FAKEDIR="$T/fakebin"; FAKE_HOME="$T/fakeapi"; mkdir -p "$FAKEDIR" "$FAKE_HOME"
+cat > "$FAKEDIR/opencode" <<'STUB'
+#!/usr/bin/env bash
+# 假 opencode（smoke 专用）。FAKE_HOME/ctrl: none|health_fail|create_fail|inject_fail|status_dead
+set -u
+FH="${FAKE_HOME:?FAKE_HOME required}"
+log() { printf '%s\n' "$*" >> "$FH/calls.log"; }
+case "${1:-}" in
+  --version) echo "opencode v2.1.2-fake"; exit 0 ;;
+  run) log "run"; exit 0 ;;
+  api) ;;
+  *) echo "bad subcommand" >&2; exit 2 ;;
+esac
+shift
+M=""; P=""; D=""
+while [ $# -gt 0 ]; do case "$1" in
+  -d) D="$2"; shift 2 ;;
+  *) if [ -z "$M" ]; then M="$1"; elif [ -z "$P" ]; then P="$1"; fi; shift ;;
+esac; done
+log "api $M $P"
+CTRL=$(cat "$FH/ctrl" 2>/dev/null || echo none)
+case "$P" in
+  */prompt)
+    [ "$CTRL" = inject_fail ] && exit 1
+    echo "$D" > "$FH/last_prompt.json"; log "PROMPT-OK $P"
+    echo '{"data":{"id":"msg_1"}}'; exit 0 ;;
+esac
+case "$M $P" in
+  "GET /api/info")
+    [ "$CTRL" = health_fail ] && exit 1
+    echo '{"data":{"version":"fake"}}'; exit 0 ;;
+  "POST /api/session")
+    [ "$CTRL" = create_fail ] && exit 1
+    N=$(cat "$FH/seq" 2>/dev/null || echo 0); N=$((N+1)); echo "$N" > "$FH/seq"
+    echo "$D" > "$FH/create_body.json"
+    echo "{\"data\":{\"id\":\"ses_fake$N\",\"time\":{\"created\":1},\"location\":{\"directory\":\"/x\"}}}"; exit 0 ;;
+  "GET /api/session/active")
+    echo '{"data":{"ses_act1":{"type":"running"}}}'; exit 0 ;;
+  "GET /api/session/ses_act1")
+    echo "{\"data\":{\"id\":\"ses_act1\",\"location\":{\"directory\":\"$(cat "$FH/active_dir" 2>/dev/null || echo /nonexist)\"}}}"; exit 0 ;;
+esac
+case "$P" in
+  /api/session/ses_*)
+    if [ "$CTRL" = status_dead ]; then
+      echo '{"data":{"id":"x","outcome":"failed","time":{"created":1}}}';
+    else
+      echo '{"data":{"id":"x","outcome":"succeeded","time":{"created":1,"idle":2}}}';
+    fi
+    exit 0 ;;
+esac
+echo "not found" >&2; exit 1
+STUB
+chmod +x "$FAKEDIR/opencode"
+FAKE() { PATH="$FAKEDIR:$PATH" FAKE_HOME="$FAKE_HOME" bash "$PKG/scripts/runtime/opencode.sh" "$@"; }
+fake_reset() { printf '%s\n' "${1:-none}" > "$FAKE_HOME/ctrl"; : > "$FAKE_HOME/calls.log"; }
+# S1a health 通/断
+fake_reset none
+if FAKE health >/dev/null 2>&1; then ok "S1a health 通 rc0"; else fail "S1a health 通"; fi
+fake_reset health_fail
+if FAKE health >/dev/null 2>&1; then fail "S1a health 断应 rc1"; else ok "S1a health 断 rc1"; fi
+# S1b create：出 ses_ sid＋location.directory 钉真实目录
+fake_reset none
+S1SID=$(FAKE create "$PROJ" 2>/dev/null)
+case "$S1SID" in ses_*) ok "S1b create 出 sid" ;; *) fail "S1b create 出 sid（got: $S1SID）" ;; esac
+python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); sys.exit(0 if d["location"]["directory"]==sys.argv[2] else 1)' "$FAKE_HOME/create_body.json" "$PROJ" \
+  && ok "S1b create 目录绑定" || fail "S1b create 目录绑定"
+# S1c inject：rc0＋delivery:"queue"＋文本透传；断电 rc1
+fake_reset none
+if FAKE inject ses_fake9 "hello 队列" >/dev/null 2>&1; then ok "S1c inject rc0"; else fail "S1c inject rc0"; fi
+python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); sys.exit(0 if d.get("delivery")=="queue" and d.get("text")=="hello 队列" else 1)' "$FAKE_HOME/last_prompt.json" \
+  && ok "S1c inject queue 透传" || fail "S1c inject queue 透传"
+fake_reset inject_fail
+if FAKE inject ses_fake9 x >/dev/null 2>&1; then fail "S1c inject 断电应 rc1"; else ok "S1c inject 断电 rc1"; fi
+# S1d alive：目录命中/不命中
+echo "$PROJ" > "$FAKE_HOME/active_dir"; fake_reset none
+if FAKE alive "$PROJ" >/dev/null 2>&1; then ok "S1d alive 命中 rc0"; else fail "S1d alive 命中"; fi
+echo /nonexist > "$FAKE_HOME/active_dir"
+if FAKE alive "$PROJ" >/dev/null 2>&1; then fail "S1d alive 不命中应 rc1"; else ok "S1d alive 不命中 rc1"; fi
+# S1e status：idle/dead 归一
+fake_reset none
+[ "$(FAKE status ses_x 2>/dev/null)" = "idle" ] && ok "S1e status idle" || fail "S1e status idle"
+fake_reset status_dead
+[ "$(FAKE status ses_x 2>/dev/null)" = "dead" ] && ok "S1e status dead" || fail "S1e status dead"
+
+# ---- T2: dispatch API 通道（sid 落账 / 回落零残留 / 凭据预写不变 / inject 败兜底） ----
+POSTD() { PATH="$FAKEDIR:$PATH" FAKE_HOME="$FAKE_HOME" AGORA_MAX_SPAWN=99 AGORA_RUNTIME_API=1 bash "$AGORA_HOME/scripts/dispatch.sh" --actor tester@proj --project "$PROJ" "$@"; }
+T2A=$(TID "$(TITLE="API派生" VERIFY="true" PROJECT_DIR="$PROJ" TC)")
+fake_reset none
+OUT=$(POSTD --task "$T2A")
+echo "$OUT" | grep -q '"channel":"api"' && echo "$OUT" | grep -q '"session":"ses_' \
+  && ok "S2a API 派生输出 channel+session" || fail "S2a API 派生输出（got: $OUT）"
+LEV "$T2A" dispatched | grep -q 'session:ses_' && ok "S2a sid 落账 session:ses_*" || fail "S2a sid 落账"
+T2B=$(TID "$(TITLE="API回落" VERIFY="true" PROJECT_DIR="$PROJ" TC)")
+fake_reset health_fail
+OUT=$(POSTD --task "$T2B")
+echo "$OUT" | grep -q '"channel":"api"' && fail "S2b health_fail 未回落 run" || ok "S2b health_fail 回落 run"
+[ "$(LEV "$T2B" dispatched | wc -l)" = 1 ] && ! LEV "$T2B" dispatched | grep -q 'session:' \
+  && ok "S2b 回落零残留（恰一条 dispatched 无 session:）" || fail "S2b 回落残留"
+RUN2B=$(echo "$OUT" | sed -n 's/.*"run":"\([^"]*\)".*/\1/p')
+grep -q "^EXIT:1=0" "$AGORA_HOME/$RUN2B" 2>/dev/null && ok "S2b run 通道 EXIT:1=0" || fail "S2b run EXIT 缺失"
+T2C=$(MKWT2 "API凭据" t2c); WR2C=$(ls -d "$T"/proj__wt-${T2C}__*)
+fake_reset none
+POSTD --task "$T2C" >/dev/null
+[ -f "$WR2C/.omo/agora-delegation/$T2C.md" ] && ok "S2c wt 凭据预写不变（API 通道）" || fail "S2c wt 凭据预写"
+T2D=$(TID "$(TITLE="API注入败" VERIFY="true" PROJECT_DIR="$PROJ" TC)")
+fake_reset inject_fail
+OUT=$(POSTD --task "$T2D")
+[ "$(LEV "$T2D" diagnosed | wc -l)" -ge 2 ] && ok "S2d inject 败 diagnosed 响" || fail "S2d inject 败无 diagnosed"
+LEV "$T2D" dispatched | grep -q 'session:ses_' && ok "S2d session 保留（D3 已知极限）" || fail "S2d session 丢失"
+echo "$OUT" | grep -q '"mode":"spawned"' && RUN2D=$(echo "$OUT" | sed -n 's/.*"run":"\([^"]*\)".*/\1/p') \
+  && grep -q "^EXIT:1=0" "$AGORA_HOME/$RUN2D" 2>/dev/null && ok "S2d run 兜底成功" || fail "S2d run 兜底（got: $OUT）"
+
+# ---- T3: ack→注入（session: 任务 ack 即 inject，best-effort＋sid 幂等） ----
+POSTI() { PATH="$FAKEDIR:$PATH" FAKE_HOME="$FAKE_HOME" bash "$AGORA_HOME/scripts/post.sh" --actor "$1" --project "${1#*@}" "${@:2}"; }
+T3A=$(TID "$(TITLE="ack注入" VERIFY="true" PROJECT_DIR="$PROJ" TC)")
+bash "$AGORA_HOME/scripts/post.sh" --actor tester@proj --project proj --event dispatched --task "$T3A" \
+  --target "$PROJ" --child tester --run "raw/dispatches/d-t3a.log" --session ses_t3a >/dev/null
+fake_reset none
+POSTI tester@proj --event ack --task "$T3A" --body "plan ack 放行" >/dev/null
+grep -q "PROMPT-OK" "$FAKE_HOME/calls.log" 2>/dev/null \
+  && python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); sys.exit(0 if d.get("text")=="ack 已落账，继续" and d.get("delivery")=="queue" else 1)' "$FAKE_HOME/last_prompt.json" \
+  && ok "S3a ack 触发 inject（ack 已落账，继续 / queue）" || fail "S3a ack 未触发 inject"
+# S3b: inject 失败 best-effort 不阻塞
+T3B=$(TID "$(TITLE="ack注入败" VERIFY="true" PROJECT_DIR="$PROJ" TC)")
+bash "$AGORA_HOME/scripts/post.sh" --actor tester@proj --project proj --event dispatched --task "$T3B" \
+  --target "$PROJ" --child tester --run "raw/dispatches/d-t3b.log" --session ses_t3b >/dev/null
+fake_reset inject_fail
+OUT=$(POSTI tester@proj --event ack --task "$T3B" --body "ack b")
+[ $? -eq 0 ] && echo "$OUT" | grep -q "inject_failed" && ok "S3b inject 败仅 derived 注记不阻塞" || fail "S3b inject 败阻断了 ack（got: $OUT）"
+# S3c: 同 sid 二次 ack 幂等不重注
+fake_reset none
+OUT=$(POSTI tester@proj --event ack --task "$T3A" --body "二次 ack")
+echo "$OUT" | grep -q "inject_dedup" && [ "$(grep -c "PROMPT-OK" "$FAKE_HOME/calls.log" 2>/dev/null)" = 0 ] \
+  && ok "S3c 同 sid 幂等去重（inject_dedup＋零重注）" || fail "S3c 幂等失效（got: $OUT）"
+# S3d: 开关关→零 inject
+T3D=$(TID "$(TITLE="ack注入关" VERIFY="true" PROJECT_DIR="$PROJ" TC)")
+bash "$AGORA_HOME/scripts/post.sh" --actor tester@proj --project proj --event dispatched --task "$T3D" \
+  --target "$PROJ" --child tester --run "raw/dispatches/d-t3d.log" --session ses_t3d >/dev/null
+fake_reset none
+AGORA_RUNTIME_API=0 POSTI tester@proj --event ack --task "$T3D" --body "开关关" >/dev/null
+CNT=$(grep -c "PROMPT-OK" "$FAKE_HOME/calls.log" 2>/dev/null || true); CNT=${CNT:-0}
+[ "$CNT" = 0 ] && ok "S3d 开关关零 inject" || fail "S3d 开关关仍注入（count=$CNT）"
+
+# ---- T4: poll done-unmerged 注入式续跑（session: 优先 inject，wt_host 判则，失败/缺回落重派） ----
+# 清场前奏：前序段遗留 done-open wt 任务（①段重派梯子等）在每轮 poll 永续重燃 ②c——全部 cancelled 终态出集
+for _t in $(python3 - "$AGORA_HOME" <<'PYEOF'
+import glob, re, sys
+home = sys.argv[1]; done_open = {}
+for f in sorted(glob.glob(f"{home}/log/*/*.md")):
+    try: lines = open(f, encoding="utf-8", errors="replace").read().splitlines()
+    except OSError: continue
+    for line in lines:
+        m = re.search(r"task:(gt-[0-9a-f]{4,})", line)
+        if not m: continue
+        t = m.group(1)
+        if "event:done" in line: done_open[t] = True
+        elif any(f"event:{e}" in line for e in ("merged", "cancelled", "reopened")): done_open[t] = False
+print(" ".join(t for t, v in done_open.items() if v))
+PYEOF
+); do POST tester@proj --event cancelled --task "$_t" >/dev/null 2>&1; done
+T4U=$(MKWT2 "续跑上游" t4u); T4D=$(MKWT2 "续跑下游" t4d)
+bash "$AGORA_HOME/scripts/post.sh" --actor tester@proj --project proj --event dispatched --task "$T4U" \
+  --target "$PROJ" --child tester --run "raw/dispatches/d-t4u.log" --session ses_up1 >/dev/null
+bash "$AGORA_HOME/scripts/post.sh" --actor tester@proj --project proj --event dispatched --task "$T4D" \
+  --target "$PROJ" --child tester --run "raw/dispatches/d-t4d.log" --dispatcher-task "$T4U" >/dev/null
+POST tester@proj --event done --task "$T4D" --commit HEAD --evidence ok >/dev/null
+POLL4() { PATH="$FAKEDIR:$PATH" FAKE_HOME="$FAKE_HOME" AGORA_MERGE_WAIT_MIN=0 AGORA_ORPHAN_MIN=9999 AGORA_WT_GRACE_MIN=9999 \
+  AGORA_DISPATCH_TIMEOUT=9999 AGORA_MAX_SPAWN=99 AGORA_REDISPATCH_MAX=99 AGORA_RUNTIME=opencode AGORA_RUNTIME_API=1 bash "$AGORA_HOME/scripts/poll.sh" 2>/dev/null; }
+fake_reset none
+OUT=$(POLL4)
+echo "$OUT" | python3 -c 'import json,sys
+d=json.load(sys.stdin); tid=sys.argv[1]
+sys.exit(0 if any(e.get("upstream")==tid and e.get("mode")=="injected" for e in d.get("redispatched",[])) else 1)' "$T4U" \
+  && ok "S4a 注入式续跑 mode:injected" || fail "S4a 未注入续跑（got: $OUT）"
+python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); sys.exit(0 if "恢复性重派" in d.get("text","") and d.get("delivery")=="queue" else 1)' "$FAKE_HOME/last_prompt.json" \
+  && ok "S4a 续跑 prompt 透传" || fail "S4a 续跑 prompt 缺失"
+[ "$(LEV "$T4U" dispatched | wc -l)" = 1 ] && ok "S4a 注入不产生新 dispatched" || fail "S4a 注入产生了新 dispatched"
+fake_reset inject_fail
+OUT=$(POLL4)
+echo "$OUT" | python3 -c 'import json,sys
+d=json.load(sys.stdin); tid=sys.argv[1]
+sys.exit(0 if any(e.get("upstream")==tid and e.get("mode")=="spawned" for e in d.get("redispatched",[])) else 1)' "$T4U" \
+  && ok "S4b inject 失败回落重派" || fail "S4b 失败未回落（got: $OUT）"
+[ "$(LEV "$T4U" dispatched | wc -l)" = 2 ] && ok "S4b 回落产生新 dispatched" || fail "S4b 回落无新 dispatched"
+# S4c: 上游无 session → 直接重派（既有行为）
+T4U2=$(MKWT2 "无session上游" t4c); T4D2=$(MKWT2 "无session下游" t4c2)
+bash "$AGORA_HOME/scripts/post.sh" --actor tester@proj --project proj --event dispatched --task "$T4U2" \
+  --target "$PROJ" --child tester --run "raw/dispatches/d-t4u2.log" >/dev/null
+bash "$AGORA_HOME/scripts/post.sh" --actor tester@proj --project proj --event dispatched --task "$T4D2" \
+  --target "$PROJ" --child tester --run "raw/dispatches/d-t4d2.log" --dispatcher-task "$T4U2" >/dev/null
+POST tester@proj --event done --task "$T4D2" --commit HEAD --evidence ok >/dev/null
+fake_reset none
+OUT=$(PATH="$FAKEDIR:$PATH" FAKE_HOME="$FAKE_HOME" AGORA_MERGE_WAIT_MIN=0 AGORA_ORPHAN_MIN=9999 AGORA_WT_GRACE_MIN=9999 \
+  AGORA_DISPATCH_TIMEOUT=9999 AGORA_MAX_SPAWN=99 AGORA_REDISPATCH_MAX=99 AGORA_RUNTIME=echo bash "$AGORA_HOME/scripts/poll.sh" 2>/dev/null)
+echo "$OUT" | python3 -c 'import json,sys
+d=json.load(sys.stdin); tid=sys.argv[1]
+sys.exit(0 if any(e.get("upstream")==tid and e.get("mode")=="spawned" for e in d.get("redispatched",[])) else 1)' "$T4U2" \
+  && ok "S4c 无 session 直接重派" || fail "S4c 无 session 行为回归（got: $OUT）"
+# S4d: 上游 wt_host≠本机 → 不注入（跨机判则）回落重派（独立对子——mw 状态按任务共享，勿复用 S4a/b 的）
+T4U3=$(MKWT2 "跨机上游" t4x); T4D3=$(MKWT2 "跨机下游" t4y)
+bash "$AGORA_HOME/scripts/post.sh" --actor tester@proj --project proj --event dispatched --task "$T4U3" \
+  --target "$PROJ" --child tester --run "raw/dispatches/d-t4u3.log" --session ses_up3 >/dev/null
+bash "$AGORA_HOME/scripts/post.sh" --actor tester@proj --project proj --event dispatched --task "$T4D3" \
+  --target "$PROJ" --child tester --run "raw/dispatches/d-t4d3.log" --dispatcher-task "$T4U3" >/dev/null
+POST tester@proj --event done --task "$T4D3" --commit HEAD --evidence ok >/dev/null
+sed -i "s/^wt_host: .*/wt_host: other-host/" "$AGORA_HOME/wiki/tasks/$T4U3.md"
+fake_reset none
+OUT=$(POLL4)
+echo "$OUT" | python3 -c 'import json,sys
+d=json.load(sys.stdin); tid=sys.argv[1]
+sys.exit(0 if any(e.get("upstream")==tid and e.get("mode")=="spawned" for e in d.get("redispatched",[])) else 1)' "$T4U3" \
+  && ! grep -q "session/ses_up3/prompt" "$FAKE_HOME/calls.log" 2>/dev/null \
+  && ok "S4d 跨机 wt_host 不注入回落重派" || fail "S4d 跨机判则失效（got: $OUT）"
+
+# ---- T5: 在场 API 化（alive 优先，sessions.map 降回退；wt 无条件 spawn 豁免不动） ----
+T5A=$(TID "$(TITLE="alive在场" VERIFY="true" PROJECT_DIR="$PROJ" TC)")
+echo "$PROJ" > "$FAKE_HOME/active_dir"; fake_reset none
+OUT=$(POSTD --task "$T5A")
+echo "$OUT" | grep -q '"mode":"notified"' && ok "S5a alive 命中→notified" || fail "S5a alive 未命中（got: $OUT）"
+[ -z "$(LEV "$T5A" dispatched)" ] && ok "S5a notified 零 dispatched 落账" || fail "S5a notified 却落了 dispatched"
+T5B=$(TID "$(TITLE="alive缺席" VERIFY="true" PROJECT_DIR="$PROJ" TC)")
+echo /nonexist > "$FAKE_HOME/active_dir"
+OUT=$(POSTD --task "$T5B")
+echo "$OUT" | grep -q '"mode":"spawned"' && ok "S5b alive 缺席→正常 spawn" || fail "S5b alive 缺席未 spawn（got: $OUT）"
+T5C=$(MKWT2 "wt在场" t5c); WR5C=$(ls -d "$T"/proj__wt-${T5C}__*)
+echo "$PROJ" > "$FAKE_HOME/active_dir"
+OUT=$(POSTD --task "$T5C")
+echo "$OUT" | grep -q '"mode":"spawned"' && [ -f "$WR5C/.omo/agora-delegation/$T5C.md" ] \
+  && ok "S5c wt 任务 alive 命中仍无条件 spawn" || fail "S5c wt 在场豁免失效（got: $OUT）"
+T5D=$(TID "$(TITLE="旧路在场" VERIFY="true" PROJECT_DIR="$PROJ" TC)")
+printf '%s tester ses_legacy %s\n' "$(hostname)" "$(date +%s)" >> "$AGORA_HOME/scripts/sessions.map"
+OUT=$(AGORA_MAX_SPAWN=99 AGORA_RUNTIME_API=0 AGORA_RUNTIME=opencode bash "$AGORA_HOME/scripts/dispatch.sh" --actor tester@proj --project "$PROJ" --task "$T5D")
+echo "$OUT" | grep -q '"mode":"notified"' && ok "S5d 开关关走 sessions.map 旧路" || fail "S5d 旧路失效（got: $OUT）"
+sed -i "\|$(hostname) tester ses_legacy|d" "$AGORA_HOME/scripts/sessions.map"   # 清场：勿污染后续
 
 echo
 echo "===== 结果: $PASS 通过, $FAIL 失败 ====="

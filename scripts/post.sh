@@ -13,14 +13,14 @@ export LC_ALL=C
 fail() { python3 -c 'import json,sys; print(json.dumps({"code":sys.argv[1],"message":sys.argv[2]}, ensure_ascii=False), file=sys.stderr)' "$1" "$2"; exit "${3:-2}"; }   # 值经 json.dumps 全量转义：stderr 恒为合法 JSON（含任意控制字符），无手写转义可漂移
 # ---------- 参数解析 ----------
 ACTOR=""; PROJECT=""; EVENT=""; TASK=""; COMMIT=""; EVIDENCE=""
-CONCLUSION=""; REASON=""; BODY=""; MENTION=""; IDEM=""; TARGET=""; CHILD=""; RUN=""; DTASK=""; BRANCH=""
+CONCLUSION=""; REASON=""; BODY=""; MENTION=""; IDEM=""; TARGET=""; CHILD=""; RUN=""; DTASK=""; BRANCH=""; SESSION=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --actor) ACTOR="$2";; --project) PROJECT="$2";; --event) EVENT="$2";;
     --task) TASK="$2";; --commit) COMMIT="$2";; --evidence) EVIDENCE="$2";;
     --conclusion) CONCLUSION="$2";; --reason) REASON="$2";; --body) BODY="$2";;
     --mention) MENTION="$2";; --idem) IDEM="$2";; --target) TARGET="$2";;
-    --child) CHILD="$2";; --run) RUN="$2";; --dispatcher-task) DTASK="$2";; --branch) BRANCH="$2";;
+    --child) CHILD="$2";; --run) RUN="$2";; --dispatcher-task) DTASK="$2";; --branch) BRANCH="$2";; --session) SESSION="$2";;
     *) fail VALIDATION_FAILED "unknown arg: $1";;
   esac; shift 2
 done
@@ -55,7 +55,7 @@ if [[ -n "$MENTION" ]]; then
   done
 fi
 # 字段值禁止 | 与换行（ABNF: value 不含 "|" 与 LF）——MENTION/ACTOR/PROJECT/IDEM 同环（账本行完整性；idem 换行=整行伪造原语）
-for v in "$TASK" "$COMMIT" "$EVIDENCE" "$CONCLUSION" "$REASON" "$BODY" "$TARGET" "$CHILD" "$RUN" "$DTASK" "$BRANCH" "$MENTION" "$ACTOR" "$PROJECT" "$IDEM"; do
+for v in "$TASK" "$COMMIT" "$EVIDENCE" "$CONCLUSION" "$REASON" "$BODY" "$TARGET" "$CHILD" "$RUN" "$DTASK" "$BRANCH" "$SESSION" "$MENTION" "$ACTOR" "$PROJECT" "$IDEM"; do
   [[ "$v" == *"|"* || "$v" == *$'\n'* ]] && fail VALIDATION_FAILED "field value contains | or newline"
 done
 # IDEM 亦占 \S+ 槽（idem:）：空白撕裂行解析
@@ -118,6 +118,7 @@ SW=$(echo "$SYNC_PRE" | sed -n 's/.*"warn:\([a-z_]*\)".*/\1/p')
 if [[ -z "$IDEM" ]]; then
   IDEM_INPUT="$ACTOR|$EVENT|$TASK|$COMMIT|$EVIDENCE|$CONCLUSION|$REASON|$BODY|$MENTION|$TARGET|$CHILD"
   [[ -n "$RUN" ]] && IDEM_INPUT="$IDEM_INPUT|$RUN"
+  [[ -n "$SESSION" ]] && IDEM_INPUT="$IDEM_INPUT|$SESSION"
   IDEM=$(printf '%s' "$IDEM_INPUT" | sha1sum | cut -c1-8)
 fi
 
@@ -179,6 +180,7 @@ LINE="- seq:$SEQ | ts:$TS | actor:$ACTOR | event:$EVENT | idem:$IDEM | seen:$PRO
 [[ -n "$TARGET" ]] && LINE="$LINE | target:$TARGET"
 [[ -n "$CHILD" ]] && LINE="$LINE | child:$CHILD"
 [[ -n "$RUN" ]] && LINE="$LINE | run:$RUN"
+[[ -n "$SESSION" ]] && LINE="$LINE | session:$SESSION"
 [[ -n "$DTASK" ]] && LINE="$LINE | dispatcher_task:$DTASK"
 [[ -n "$BRANCH" ]] && LINE="$LINE | branch:$BRANCH"
 [[ -n "${VERIFY_NOTE:-}" ]] && LINE="$LINE | verify_output:$VERIFY_NOTE"
@@ -219,6 +221,25 @@ git add -A >/dev/null
 git -c user.name="$ACTOR" -c user.email="$ACTOR@local" commit -qm "event:$EVENT ${TASK:-} by $ACTOR"
 bash "$AGORA_HOME/scripts/derive-board.sh" >/dev/null 2>&1 || true
 git add -A >/dev/null; git commit -qm "derive: board" >/dev/null 2>&1 || true
+
+# T3 ack→注入（L2）：任务最新 dispatched 带 session: 且 API 开 → inject「ack 已落账，继续」best-effort；
+# 失败仅 derived 注记不阻塞 ack；注入侧按 sid 幂等去重（inject-tickets，沿 merge-tickets 先例 host-local）。
+# 这是 plan-ack 死锁窗的闭合面：ack 无需子会话轮询收件箱，经注入直达活会话（delegation §七 的 L2 补偿）。
+if [[ "$EVENT" == "ack" && -n "$TASK" && "${AGORA_RUNTIME_API:-1}" != "0" && "${AGORA_RUNTIME:-opencode}" == "opencode" && -f "$AGORA_HOME/scripts/runtime/opencode.sh" ]]; then
+  INJ_SID=$(cat $(find "$AGORA_HOME/log" -mindepth 2 -name "*.md" -type f 2>/dev/null | sort) 2>/dev/null \
+    | grep -E "(^|[|] )task:$TASK( |\$)" | grep "event:dispatched" \
+    | grep -o "session:[^| ]*" | tail -1 | cut -d: -f2 || true)
+  if [[ -n "$INJ_SID" ]]; then
+    if [[ -e "$AGORA_HOME/.git/inject-tickets/$INJ_SID" ]]; then
+      DERIVED+=("inject_dedup")
+    elif timeout "${AGORA_INJECT_TIMEOUT:-15}" bash "$AGORA_HOME/scripts/runtime/opencode.sh" inject "$INJ_SID" "ack 已落账，继续" >/dev/null 2>&1; then
+      mkdir -p "$AGORA_HOME/.git/inject-tickets"; : > "$AGORA_HOME/.git/inject-tickets/$INJ_SID"
+      DERIVED+=("injected")
+    else
+      DERIVED+=("inject_failed")
+    fi
+  fi
+fi
 
 DJSON="[]"
 if [[ ${#DERIVED[@]} -gt 0 ]]; then

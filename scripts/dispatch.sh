@@ -97,6 +97,13 @@ LOG="raw/dispatches/$DID.log"
 
 PROJNAME=$(basename "$PROOT")
 
+# L2 API 通道门（设计 §三）：默认开；RUNTIME=opencode 且适配器在场且 health 通才启用（stub/替代 runtime 零扰动）
+RT="$AGORA_HOME/scripts/runtime/opencode.sh"
+API=0
+if [ "$RUNTIME" = "opencode" ] && [ "${AGORA_RUNTIME_API:-1}" != "0" ] && [ -f "$RT" ]; then
+  timeout "${AGORA_API_TIMEOUT:-15}" bash "$RT" health >/dev/null 2>&1 && API=1
+fi
+
 # 任务页 wt 感知：wt_dir 在场 → 凭据预写/树重建预检/免在场优先（设计 §四/§五/§六）
 PAGE="$AGORA_HOME/wiki/tasks/$TASK.md"
 WT_DIR=""
@@ -145,13 +152,22 @@ if [ -n "$WT_DIR" ]; then
 fi
 
 # 在场优先：目标项目已有活会话 → 只通知不派生（wt 任务豁免——在场会话无树凭据，notified 必死）
+# L2：alive API 优先（按目录比 location.directory），sessions.map 降回退（run 通道口径不变）
 # sessions.map 按机器隔离（格式：<host> <agent> <session> <ts>）——他机的活会话
 # 无法被本机通知桥触达，不算"在场"；跨机派活走 task_create + mention 异步路径
-if [ -z "$WT_DIR" ] && grep -q "^$(hostname) $CHILD " "$AGORA_HOME/scripts/sessions.map" 2>/dev/null; then
+if [ -z "$WT_DIR" ]; then
+  _PRESENT=0
+  if [ "$API" = 1 ] && timeout "${AGORA_API_TIMEOUT:-15}" bash "$RT" alive "$PDIR" >/dev/null 2>&1; then
+    _PRESENT=1
+  elif grep -q "^$(hostname) $CHILD " "$AGORA_HOME/scripts/sessions.map" 2>/dev/null; then
+    _PRESENT=1
+  fi
+  if [ "$_PRESENT" = 1 ]; then
   bash "$AGORA_HOME/scripts/post.sh" --actor "$ACTOR" --project "$PROJNAME" --event ack \
     --body "dispatch $TASK notified via bridge" --mention "$CHILD" >/dev/null
   echo "{\"dispatch_id\":\"$DID\",\"mode\":\"notified\",\"child_actor\":\"$CHILD@$PROJNAME\"}"
   exit 0
+  fi
 fi
 
 BOOT="你是广场派生的一次性工作会话。按开场仪式查收信、看看板；你的任务是 $TASK（读 wiki/tasks/$TASK.md，按 verify 要求验收）。若任务页有 wt_dir：你在该专用树内开发——新鲜树缺 node_modules/venv 等环境，先装环境再验收（项目页 setup: 已由 dispatch 预跑）。动手实施前先 agora_post(event=plan, task=$TASK) 落实施计划——dispatcher ack（mention 你）后再动工；等待超 30min 无 ack 可自行放行并在 plan 评论注明。每完成一个里程碑 agora_post(event=progress, task=$TASK) 刷新看板。你不自己合并——done 即止（树上 commit＋自验），合并由 dispatcher 走 merge.sh；需改第三仓照常 task_create＋dispatch 下钻（受深度/配额约束）；等待下级时 post progress 后退出，由 poll 恢复性重派唤醒。若你是恢复性重派：先 agora_history(task=$TASK) 自查进度、git status/log 查半成品，接着做。合并阶段 non-ff 冲突：先在原树 rebase 到合并目标分支，重走 verify 再试。完成后 agora_post(event=done) 并结束。${PROMPT:+ 补充指示：$PROMPT}"
@@ -159,8 +175,16 @@ BOOT="你是广场派生的一次性工作会话。按开场仪式查收信、�
 # 单引号脚本，bash -c 体内不出现任何外部插值
 
 # 补偿落账顺序：dispatched 先行（LEDGER_FAILED → 零 spawn，无孤儿会话；孤儿 dispatched 由 poll 档兜底）
+# L2 两段化（D1）：create 惰性（无 prompt）先行 → dispatched(session:) 落账 → inject 投 boot——
+# 保 LEDGER_FAILED→零工作不变量；create/health 失败发生在落账前 → API=0 回落 run（账本与纯 run 一致，零残留）
+SID=""
+if [ "$API" = 1 ]; then
+  SID=$(timeout 20 bash "$RT" create "$PDIR" 2>/dev/null) || SID=""
+  [ -z "$SID" ] && API=0
+fi
 PARGS=(--actor "$ACTOR" --project "$PROJNAME" --event dispatched --task "$TASK" --target "$PDIR" --child "$CHILD" --run "$LOG")
 [[ -n "$DTASK" ]] && PARGS+=(--dispatcher-task "$DTASK")
+[[ -n "$SID" ]] && PARGS+=(--session "$SID")
 POUT=$(bash "$AGORA_HOME/scripts/post.sh" "${PARGS[@]}" 2>&1) \
   || { printf '%s\n' "$POUT" >&2; fail LEDGER_FAILED "dispatched 落账失败（详情见 stderr 上一行）" 4; }
 DEDUP=$(echo "$POUT" | sed -n 's/.*"dedup":\(true\|false\).*/\1/p')
@@ -193,6 +217,52 @@ spawn_died_diag() {   # 秒死→日志尾落 diagnosed（失败必须响；重�
   bash "$AGORA_HOME/scripts/post.sh" --actor "$ACTOR" --project "$PROJNAME" --event diagnosed \
     --task "$TASK" --conclusion "$(tail -n 5 "$AGORA_HOME/$LOG" | tr '\n' ' ' | tr -d '|')" >/dev/null 2>&1 || true
 }
+api_alive_wait() {  # D7 验证窗：轮询 idle——dead=秒死；idle=过；窗口尽仍 running=过（与 run「窗口尽仍活=过」同口径）
+  local _try="$1" _w _st
+  for _w in $(seq 1 "${AGORA_VERIFY_WIN:-10}"); do
+    _st=$(timeout "${AGORA_API_TIMEOUT:-15}" bash "$RT" status "$SID" 2>/dev/null || echo dead)
+    case "$_st" in
+      idle) echo "ALIVE:$_try=idle" >> "$AGORA_HOME/$LOG"; return 0 ;;
+      dead) echo "ALIVE:$_try=dead" >> "$AGORA_HOME/$LOG"; return 1 ;;
+    esac
+    sleep 1
+  done
+  echo "ALIVE:$_try=running" >> "$AGORA_HOME/$LOG"; return 0
+}
+api_spawn_attempt() {  # D2：log/.live/凭据与 run 通道对称（poll 孤儿判据与配额计数不破）
+  local _try="$1" _rc
+  if [ -n "$WT_DIR" ]; then
+    mkdir -p "$WT_DIR/.omo/agora-delegation"
+    printf 'gt: %s\nworktree: %s\ndispatched: %s\n' "$TASK" "$(realpath "$WT_DIR")" "$(date -Is)" \
+      > "$WT_DIR/.omo/agora-delegation/$TASK.md"
+  fi
+  echo "SESSION:$_try=$SID" >> "$AGORA_HOME/$LOG"
+  touch "$AGORA_HOME/$LOG.live"
+  if ! timeout 30 bash "$RT" inject "$SID" "$BOOT" 2>>"$AGORA_HOME/$LOG"; then
+    echo "INJECT:$_try=fail" >> "$AGORA_HOME/$LOG"; rm -f "$AGORA_HOME/$LOG.live"; return 1
+  fi
+  api_alive_wait "$_try"; _rc=$?
+  rm -f "$AGORA_HOME/$LOG.live"
+  return $_rc
+}
+if [ "$API" = 1 ]; then
+  if ! api_spawn_attempt 1; then
+    spawn_died_diag
+    if ! api_spawn_attempt 2; then
+      spawn_died_diag
+      # D3：落账后 API 两连败 → run 通道兜底（dispatched 已落账不重发；session: 指向死 sid 为已知极限，diagnosed 已响）
+      if ! spawn_attempt 1; then
+        spawn_died_diag
+        if ! spawn_attempt 2; then
+          spawn_died_diag
+          fail SPAWN_DIED "子会话 API+run 四连秒死（run log: $LOG；diagnosed 已落账）" 9
+        fi
+      fi
+    fi
+  fi
+  echo "{\"dispatch_id\":\"$DID\",\"mode\":\"spawned\",\"channel\":\"api\",\"session\":\"$SID\",\"child_actor\":\"$CHILD@$PROJNAME\",\"run\":\"$LOG\",\"dedup\":${DEDUP:-false}}"
+  exit 0
+fi
 if ! spawn_attempt 1; then
   spawn_died_diag
   if ! spawn_attempt 2; then

@@ -94,7 +94,7 @@ agent（cwd = 项目目录）
 
 ## 十二个工具
 
-`agora_post`（发事件，done 由机械层真实执行 verify）· `agora_task_create`（任务页唯一创建入口，机械层分配 ID 生成 frontmatter）· `agora_history`（任务全程事件链，审计/交接）· `agora_attach`（证据文件提交进项目版本库独立 ref，账本只记 url@commit，广场零膨胀）· `agora_check_mail` · `agora_board`（含 parent 计划进度聚合；`owner` 参数按认领者过滤，`owner=me` = 服务端裁决的当前身份）· `agora_wiki_read` · `agora_wiki_write`（owner 校验）· `agora_doctor`（自检恢复）· `agora_dispatch`（**仅本机**派生会话，sessions.map 带机器名列；跨机派活 = task + mention 异步流转）· `agora_sync`（显式同步账本 pull+push；读接口已内置尽力同步）· `agora_who`（名册+项目注册表查询：有哪些实体、谁在本机、各项目是什么/默认 verify）
+`agora_post`（发事件，done 由机械层真实执行 verify）· `agora_task_create`（任务页唯一创建入口，机械层分配 ID 生成 frontmatter）· `agora_history`（任务全程事件链，审计/交接）· `agora_attach`（证据文件提交进项目版本库独立 ref，账本只记 url@commit，广场零膨胀）· `agora_check_mail` · `agora_board`（含 parent 计划进度聚合；`owner` 参数按认领者过滤，`owner=me` = 服务端裁决的当前身份）· `agora_wiki_read` · `agora_wiki_write`（owner 校验）· `agora_doctor`（自检恢复）· `agora_dispatch`（**仅本机**派生会话，sessions.map 带机器名列；跨机派活 = task + mention 异步流转；v1.33 L2 API 通道：runtime/opencode.sh 适配器默认开、失败回落 run 通道零残留，dispatched 记 `session:`，验证窗轮询 idle，ack 注入活会话）· `agora_sync`（显式同步账本 pull+push；读接口已内置尽力同步）· `agora_who`（名册+项目注册表查询：有哪些实体、谁在本机、各项目是什么/默认 verify）
 
 ## 个人任务队列（owner=me）
 
@@ -134,7 +134,8 @@ agora-mcp/
 │   ├── derive-board.sh    # 推导层：事件 → 看板（deps → ready；parent → 计划进度）
 │   ├── doctor.sh          # 自检与恢复
 │   ├── wiki-write.sh      # wiki 写入（owner 校验）
-│   ├── dispatch.sh        # 本机派生（权限/深度/配额/落账；sessions.map 机器名列）
+│   ├── dispatch.sh        # 本机派生（权限/深度/配额/落账；sessions.map 机器名列；v1.33 L2 API 通道 runtime/ 适配器＋run 回落）
+│   ├── runtime/           # v1.33 L2 服务 API 适配器（opencode.sh：health/create/inject/alive/status）
 │   ├── sync.sh            # 星型同步：写前 pull / 写后 push（仅 SSH，union 合并）
 │   ├── poll.sh            # 唤醒+看门狗+保洁：mention 拾取本机派生、stalled 诊断/升级/回池、sessions/inbox 清理（cron 调用）
 │   ├── notify-opencode.sh # 通知桥：inbox 监听 → 注入运行中的 opencode 会话（规格 §8.1，可选常驻）
