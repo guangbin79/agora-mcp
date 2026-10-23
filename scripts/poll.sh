@@ -268,14 +268,33 @@ for f in sorted(glob.glob(f"{HOME}/wiki/entities/*.md")):
     for mail in new:
         m = re.search(r'\| summary:\S+\s+(gt-[0-9a-f]+)', open(mail, encoding="utf-8").read())
         task = m.group(1) if m else None
-        if not task or not re.search(rf'^- {re.escape(task)}\b', todo_txt, re.M):
-            continue  # 无任务 / 已被认领 / 已终结 —— 只推进水位
+        if not task:
+            continue
+        d = TASKS.get(task)
+        # gt-ae6f 守卫一（gt-bb0b 14 派风暴）：done 未合并（done_open）任务不派发——
+        # 诊断/retired 回声邮件不得触发重派；held 留痕，水位照常推进
+        if d and d.get("done_open"):
+            report["held"].append({"entity": name, "task": task,
+                                   "reason": "done 未合并（done_open）不派发"})
+            continue
+        if not re.search(rf'^- {re.escape(task)}\b', todo_txt, re.M):
+            continue  # 已被认领 / 已终结 —— 只推进水位
         # gt-99af 修复一：账本真值核查棒——看板是派生视图可滞后（merged 事件 derive-board 不处理），
         # 任务当前终态（merged/cancelled 且未 reopened）则 mention 邮件不派发，防 RECHECK 派发雪球
-        d = TASKS.get(task)
         if d and d.get("terminal"):
             report["held"].append({"entity": name, "task": task,
                                    "reason": "终态（merged/cancelled）不派发"})
+            continue
+        # gt-ae6f 守卫三：尾部事件 retired（RECHECK 派发会话收工）——回声邮件不再触发新派发
+        if d and d.get("last") == "retired":
+            report["held"].append({"entity": name, "task": task,
+                                   "reason": "retired 降敏：尾部事件 retired 不重派"})
+            continue
+        # gt-ae6f 守卫二：在飞去重——已有 dispatched 且无终态（活跃口径同规格配额）不重派；
+        # 一轮多封邮件至多一派
+        if d and d["dispatched"] and not d["terminal"]:
+            report["held"].append({"entity": name, "task": task,
+                                   "reason": "在飞去重：已有活跃 dispatched 不重派"})
             continue
         # wt_host 限定（设计 §五）：跨机 wt 任务不本地拾取（他机的树本地不可用）
         tp = f"{HOME}/wiki/tasks/{task}.md"
@@ -295,6 +314,11 @@ for f in sorted(glob.glob(f"{HOME}/wiki/entities/*.md")):
             try: out = json.loads(r.stdout.strip().splitlines()[-1])
             except Exception: out = {"raw": r.stdout[-200:]}
             report["spawned"].append({"entity": name, "task": task, "prompt": RECHECK, **out})
+            # gt-ae6f 守卫二：派发即回写内存账本视图——同轮后续邮件走在飞去重，至多一派
+            dd = TASKS.setdefault(task, {"dispatched": [], "has": set(), "last": None,
+                                         "done_open": False, "terminal": False, "last_actor": ""})
+            dd["dispatched"].append((f"{name}@{os.path.basename(dirs[0])}", out.get("run", ""), "", out.get("session", "")))
+            dd["has"].add("dispatched"); dd["last"] = "dispatched"
         else:
             report["held"].append({"entity": name, "task": task,
                                    "reason": r.stderr.strip().splitlines()[-1][:120] if r.stderr else "dispatch failed"})

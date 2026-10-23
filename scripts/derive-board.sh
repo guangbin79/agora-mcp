@@ -47,7 +47,7 @@ wm, stats = {}, {"incr": 0, "full": 0}
 cache = None
 try:
     c = json.load(open(CACHE_F))
-    if c.get("v") == 2 and c.get("task_ids") == task_ids and isinstance(c.get("watermark"), dict):
+    if c.get("v") == 3 and c.get("task_ids") == task_ids and isinstance(c.get("watermark"), dict):
         cache = c
 except Exception: pass
 
@@ -75,7 +75,9 @@ def apply(shard, i, actor, event, f):
     if event == "retired":
         retired.add(actor)
         for t in tasks.values():
-            if t["owner"] == actor: t.update(state="todo", owner=None)
+            # gt-ae6f：done 只能经 reopened/merged/cancelled 离场——retired 把 done 任务
+            # 踢回 todo 曾造 gt-bb0b 拾取风暴（视图与 mention 守卫 done_open 口径对齐）
+            if t["owner"] == actor and t["state"] != "done": t.update(state="todo", owner=None)
         return
     if actor in retired: return
     tid = f.get("task")
@@ -212,7 +214,7 @@ _write_optional("cancelled", "Cancelled",
                 [tid for tid in sorted(tasks) if tasks[tid]["state"] == "cancelled"])
 
 os.makedirs(os.path.dirname(CACHE_F), exist_ok=True)
-json.dump({"v": 2, "watermark": wm, "tasks": tasks, "retired": sorted(retired),
+json.dump({"v": 3, "watermark": wm, "tasks": tasks, "retired": sorted(retired),
            "conflicts": conflicts, "last_progress": last_progress,
            "task_ids": task_ids, "stats": stats},
           open(CACHE_F, "w"))

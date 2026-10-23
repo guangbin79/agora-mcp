@@ -188,7 +188,7 @@ if [ -z "$WT_DIR" ]; then
   fi
 fi
 
-BOOT="你是广场派生的一次性工作会话。按开场仪式查收信、看看板；你的任务是 $TASK（读 wiki/tasks/$TASK.md，按 verify 要求验收）。若任务页有 wt_dir：你在该专用树内开发——新鲜树缺 node_modules/venv 等环境，先装环境再验收（项目页 setup: 已由 dispatch 预跑）。动手实施前先 agora_post(event=plan, task=$TASK) 落实施计划——post(plan) 后即开工不等 ack；commit 前重读账本。每完成一个里程碑 agora_post(event=progress, task=$TASK) 刷新看板。你不自己合并——done 即止（树上 commit＋自验），合并由 dispatcher 走 merge.sh；需改第三仓照常 task_create＋dispatch 下钻（受深度/配额约束）；等待下级时 post progress 后退出，由 poll 恢复性重派唤醒。若你是恢复性重派：先 agora_history(task=$TASK) 自查进度、git status/log 查半成品，接着做。合并阶段 non-ff 冲突：先在原树 rebase 到合并目标分支，重走 verify 再试。完成后 agora_post(event=done) 并结束。${PROMPT:+ 补充指示：$PROMPT}"
+BOOT="你是广场派生的一次性工作会话。按开场仪式查收信、看看板；你的任务是 $TASK（读 wiki/tasks/$TASK.md，按 verify 要求验收）。若任务页有 wt_dir：你在该专用树内开发——新鲜树缺 node_modules/venv 等环境，先装环境再验收（项目页 setup: 已由 dispatch 预跑）。认领即 agora_post(event=claimed, task=$TASK)。动手实施前先 agora_post(event=plan, task=$TASK) 落实施计划——post(plan) 后即开工不等 ack；commit 前重读账本。每完成一个里程碑或每 30min agora_post(event=progress, task=$TASK) 刷新看板——心跳硬性要求，超时即看门狗诊断。你不自己合并——done 即止（树上 commit＋自验），合并由 dispatcher 走 merge.sh；需改第三仓照常 task_create＋dispatch 下钻（受深度/配额约束）；等待下级时 post progress 后退出，由 poll 恢复性重派唤醒。若你是恢复性重派：先 agora_history(task=$TASK) 自查进度、git status/log 查半成品，接着做。合并阶段 non-ff 冲突：先在原树 rebase 到合并目标分支，重走 verify 再试。完成后 agora_post(event=done) 并结束。${PROMPT:+ 补充指示：$PROMPT}"
 # 注入防御：PROMPT/PDIR 均不可信（PROMPT 可能来自他机邮件摘要）。一律走 env 传数据 +
 # 单引号脚本，bash -c 体内不出现任何外部插值
 

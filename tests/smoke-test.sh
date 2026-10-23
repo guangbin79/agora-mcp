@@ -611,7 +611,7 @@ grep -q "$POLLT2" "$AGORA_HOME/board/conflicts.md" \
   && ok "双清 claim 回放兜底入 conflicts" || fail "双清 claim 回放兜底入 conflicts"
 
 echo "===== 增量推导（derive-cache） ====="
-python3 -c "import json;c=json.load(open('$AGORA_HOME/.git/derive-cache.json'));assert c['v']==2 and c['watermark']" \
+python3 -c "import json;c=json.load(open('$AGORA_HOME/.git/derive-cache.json'));assert c['v']==3 and c['watermark']" \
   && ok "增量缓存已建立" || fail "增量缓存已建立"
 S0=$(python3 -c "import json;print(json.load(open('$AGORA_HOME/.git/derive-cache.json'))['stats']['incr'])")
 bash "$AGORA_HOME/scripts/derive-board.sh"
@@ -2148,7 +2148,7 @@ echo "$OUT" | grep -q 'warnings' && fail "task_create 防呆误触发（$OUT）"
 B1=$(TID "$(TITLE="BOOT文案任务标题够长" VERIFY=true PROJECT_DIR="$PROJ" TC)")
 BOUT=$(AGORA_RUNTIME=echo AGORA_MAX_SPAWN=99 bash "$AGORA_HOME/scripts/dispatch.sh" --actor tester@proj --project "$PROJ" --task "$B1")
 RLOG="$AGORA_HOME/$(echo "$BOUT" | sed -n 's/.*"run":"\([^"]*\)".*/\1/p')"
-grep -q "post(plan) 后即开工不等 ack" "$RLOG" && grep -q "commit 前重读账本" "$RLOG" && ! grep -q "30min" "$RLOG" \
+grep -q "post(plan) 后即开工不等 ack" "$RLOG" && grep -q "commit 前重读账本" "$RLOG" && ! grep -q "等 dispatcher ack" "$RLOG" \
   && ok "BOOT 文案对齐 delegation §七（删等 ack 30min）" || fail "BOOT 文案未对齐（$RLOG, out=$BOUT）"
 # ⑧ 截断触达＋无 title 行回退（评审 ocr-8：[:60] 此前从未被超长输入触达）
 T70=$(printf '甲%.0s' $(seq 1 70))
@@ -2173,6 +2173,67 @@ grep -q 'AGORA_MAX_DEPTH:-5' "$PKG/scripts/dispatch.sh" && ! grep -q 'AGORA_MAX_
   && grep -q 'AGORA_MAX_DEPTH` (default 5)' "$PKG/README.md" \
   && ! grep -q '（默认 2）时拒绝' "$PKG/docs/Agora接口规格-v1.md" \
   && ok "MAX_DEPTH 默认5：代码＋规格＋设计＋README 同步一致" || fail "MAX_DEPTH 默认值同步不一致"
+
+echo "===== 守卫v2批（gt-ae6f）：mention 拾取环断路＋BOOT 心跳 ====="
+POLLV2() { AGORA_MERGE_WAIT_MIN=0 AGORA_ORPHAN_MIN=0 AGORA_WT_GRACE_MIN=0 AGORA_DISPATCH_TIMEOUT=0 \
+           AGORA_VERIFY_WIN=2 AGORA_MAX_SPAWN=99 AGORA_RUNTIME=true bash "$AGORA_HOME/scripts/poll.sh" 2>/dev/null; }
+# ① 拾取守卫：done_open（done 未合并）任务 mention 邮件 → 零派发＋held，水位照常推进
+G1=$(TID "$(TITLE="守卫一done未合并任务标题够长" VERIFY=true PROJECT_DIR="$PROJ" TC)")
+POST tester@proj --event claimed --task "$G1" >/dev/null
+POST tester@proj --event done --task "$G1" --commit HEAD --evidence ok >/dev/null
+POST rival@proj2 --event progress --task "$G1" --mention tester --body "done 单回声邮件" >/dev/null
+GOUT=$(POLLV2)
+echo "$GOUT" | python3 -c "
+import json,sys
+r=json.loads(sys.stdin.read())
+assert not any(s['task']=='$G1' for s in r['spawned']), r['spawned']
+h=[x for x in r['held'] if x['task']=='$G1']
+assert h and 'done' in h[0]['reason'], r['held']
+" && ok "守卫一：done_open 邮件零派发＋held" || fail "守卫一 done_open（$GOUT）"
+GOUT=$(POLLV2)
+echo "$GOUT" | python3 -c "
+import json,sys
+r=json.loads(sys.stdin.read())
+assert not any(x['task']=='$G1' for x in r['held']+r['spawned']), r
+" && ok "守卫一：水位照常推进（二轮零重现）" || fail "守卫一 水位未推进（$GOUT）"
+# ② 在飞去重：同任务一轮多封邮件至多一派＋held
+G2=$(TID "$(TITLE="守卫二在飞去重任务标题够长" VERIFY=true PROJECT_DIR="$PROJ" TC)")
+POST rival@proj2 --event progress --task "$G2" --mention tester --body "第一封" >/dev/null
+POST rival@proj2 --event progress --task "$G2" --mention tester --body "第二封" >/dev/null
+GOUT=$(POLLV2)
+echo "$GOUT" | python3 -c "
+import json,sys
+r=json.loads(sys.stdin.read())
+assert len([s for s in r['spawned'] if s['task']=='$G2'])==1, r['spawned']
+h=[x for x in r['held'] if x['task']=='$G2']
+assert h and '在飞去重' in h[0]['reason'], r['held']
+" && ok "守卫二：一轮双邮件至多一派＋held" || fail "守卫二 在飞去重（$GOUT）"
+# ④ derive-board 一致：owner retired 不把 done 任务踢回 todo（gt-bb0b 风暴根因）
+# 注：须先于③执行——retired 是 actor 终态，tester 一经 retired 其后 claimed/done 全被 derive 丢弃
+G4=$(TID "$(TITLE="守卫四done不入todo任务标题够长" VERIFY=true PROJECT_DIR="$PROJ" TC)")
+POST tester@proj --event claimed --task "$G4" >/dev/null
+POST tester@proj --event done --task "$G4" --commit HEAD --evidence ok >/dev/null
+POST tester@proj --event retired --task "$G4" --reason "收工" >/dev/null
+bash "$AGORA_HOME/scripts/derive-board.sh"
+! grep -q "^- $G4" "$AGORA_HOME/board/todo.md" \
+  && ok "守卫四：owner retired 后 done 任务不入 todo（视图与守卫一致）" || fail "守卫四 done 被 retired 踢回 todo"
+# ③ retired 降敏：RECHECK 派发会话 retired → 回声邮件下轮零新派＋held
+G3=$(TID "$(TITLE="守卫三retired降敏任务标题够长" VERIFY=true PROJECT_DIR="$PROJ" TC)")
+POST rival@proj2 --event progress --task "$G3" --mention tester --body "首派触发" >/dev/null
+POLLV2 >/dev/null
+POST tester@proj --event retired --task "$G3" --reason "RECHECK 收工：已被他人认领" --mention tester >/dev/null
+GOUT=$(POLLV2)
+echo "$GOUT" | python3 -c "
+import json,sys
+r=json.loads(sys.stdin.read())
+assert not any(s['task']=='$G3' for s in r['spawned']), r['spawned']
+h=[x for x in r['held'] if x['task']=='$G3']
+assert h and 'retired' in h[0]['reason'], r['held']
+" && ok "守卫三：RECHECK→retired→下轮零新派＋held" || fail "守卫三 retired 降敏（$GOUT）"
+# ⑤ BOOT 心跳卫生：认领即 claimed＋每里程碑或每 30min progress（gt-ef79/gt-2e1c 实证）
+grep -q "认领即 agora_post(event=claimed" "$PKG/scripts/dispatch.sh" \
+  && grep -q "每完成一个里程碑或每 30min agora_post(event=progress" "$PKG/scripts/dispatch.sh" \
+  && ok "守卫五：BOOT 文案含认领即 claimed＋每 30min progress 心跳" || fail "守卫五 BOOT 心跳文案缺失"
 
 echo
 echo "===== 多仓关联测试场（B批 gt-2153）：跨仓链/删树重建/中途 cancelled/深度边界＋teardown 竞态 ====="

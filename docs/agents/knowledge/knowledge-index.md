@@ -10,3 +10,4 @@
 - [wiki-write-replace-semantics.md](modules/wiki-write-replace-semantics.md) — wiki-write replace 只写 content 丢 frontmatter 的代际退化、周期重写方须回写头、nothing-to-commit 视为成功 (2026-10-23, gt-abcd)
 - [ledger-fixture-contract.md](modules/ledger-fixture-contract.md) — smoke 账本夹具三闸：seq 按(分片,actor)从 1 连续、dispatched 夹具收终态防占全局配额、夹具位置 vs doctor 对账窗 (2026-10-23, gt-abcd)
 - [smoke-teardown-orphan.md](modules/smoke-teardown-orphan.md) — 夹具 teardown 孤儿竞态：.live 有界轮询再 rm、探针匹配面＝实例唯一 mktemp 路径（禁全机按 task id pgrep）、竞态窗先现形再证修复 (2026-10-23, gt-2153)
+- [mention-pickup-loop-breaker.md](modules/mention-pickup-loop-breaker.md) — mention 拾取环断路契约：守卫序 done_open→todo→终态→retired→在飞去重、邮件=通知账本=真值分层、retired 回池须排除 done（gt-bb0b 风暴根因） (2026-10-23, gt-ae6f)
