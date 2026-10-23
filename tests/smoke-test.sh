@@ -2235,6 +2235,21 @@ grep -q "认领即 agora_post(event=claimed" "$PKG/scripts/dispatch.sh" \
   && grep -q "每完成一个里程碑或每 30min agora_post(event=progress" "$PKG/scripts/dispatch.sh" \
   && ok "守卫五：BOOT 文案含认领即 claimed＋每 30min progress 心跳" || fail "守卫五 BOOT 心跳文案缺失"
 
+# ⑥ reopened 返工再拾取回归（终闸 B-F1 修复）：dispatched→done→reopened 后 mention 邮件可再派——
+# 在飞去重只认尾部事件仍是裸 dispatched 的任务，返工回池不得被累计 dispatched 历史永久压制
+G6=$(TID "$(TITLE="守卫六reopened返工再拾取任务标题够长" VERIFY=true PROJECT_DIR="$PROJ" TC)")
+AGORA_RUNTIME=true AGORA_VERIFY_WIN=2 AGORA_MAX_SPAWN=99 bash "$AGORA_HOME/scripts/dispatch.sh" --actor tester@proj --project "$PROJ" --task "$G6" >/dev/null 2>&1
+POST rival@proj2 --event claimed --task "$G6" >/dev/null
+POST rival@proj2 --event done --task "$G6" --commit HEAD --evidence ok >/dev/null
+POST watchdog@hx --event reopened --task "$G6" --reason "返工重开" >/dev/null
+POST rival@proj2 --event progress --task "$G6" --mention tester --body "返工请接单" >/dev/null
+GOUT=$(POLLV2)
+echo "$GOUT" | python3 -c "
+import json,sys
+r=json.loads(sys.stdin.read())
+assert any(s['task']=='$G6' for s in r['spawned']), r['spawned']
+" && ok "守卫六：reopened 返工任务可再拾取（不被在飞去重永久压制）" || fail "守卫六 reopened 再拾取（$GOUT）"
+
 echo
 echo "===== 多仓关联测试场（B批 gt-2153）：跨仓链/删树重建/中途 cancelled/深度边界＋teardown 竞态 ====="
 # 纯 stub/fake runtime 离线跑；MAX_DEPTH 用 env 显式控制；夹具全在 mktemp $T 内，不触真实账本

@@ -290,11 +290,11 @@ for f in sorted(glob.glob(f"{HOME}/wiki/entities/*.md")):
             report["held"].append({"entity": name, "task": task,
                                    "reason": "retired 降敏：尾部事件 retired 不重派"})
             continue
-        # gt-ae6f 守卫二：在飞去重——已有 dispatched 且无终态（活跃口径同规格配额）不重派；
-        # 一轮多封邮件至多一派
-        if d and d["dispatched"] and not d["terminal"]:
+        # gt-ae6f 守卫二：在飞去重——尾部事件仍是裸 dispatched（派发后零后续事件）不重派；
+        # 一轮多封邮件至多一派。reopened/claimed 等后续事件自然出集——返工回池可再拾取
+        if d and d.get("last") == "dispatched":
             report["held"].append({"entity": name, "task": task,
-                                   "reason": "在飞去重：已有活跃 dispatched 不重派"})
+                                   "reason": "在飞去重：尾部事件 dispatched 不重派"})
             continue
         # wt_host 限定（设计 §五）：跨机 wt 任务不本地拾取（他机的树本地不可用）
         tp = f"{HOME}/wiki/tasks/{task}.md"
