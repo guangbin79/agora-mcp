@@ -6,3 +6,4 @@
 - [worktree-resolution.md](modules/worktree-resolution.md) — worktree 路径→实体解析唯一口径（resolve_entity/main_repo_of）、闭包与测试 env 两个事故教训、独立小广场测试模式、部署形态注意 (2026-10-21, gt-ac14)
 - [actor-attribution.md](modules/actor-attribution.md) — 事件落账身份归属：env 证据优先于调用方自觉/账本权威于现裁决/夹具 env 形状须逐字节对齐生产注入 (2026-10-22, gt-eefd)
 - [ledger-replay-ordering.md](modules/ledger-replay-ordering.md) — 账本扫描派生态重放次序契约：last/done_open 统一 ts 序单点重放、同源缺陷一次收全、has 守卫≠正确性证明 (2026-10-23, gt-db15)
+- [ladder-terminal-semantics.md](modules/ladder-terminal-semantics.md) — 梯子真值分层契约：看板→账本终态旗标→git 祖先短路三层判值、reopened 返工不误杀、短路 fail-open 朝警报、夹具态＝生产态 (2026-10-23, gt-99af)
