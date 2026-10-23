@@ -2314,9 +2314,10 @@ O7=$(TID "$(TITLE="teardown竞态用例任务" VERIFY=true PROJECT_DIR="$REPA" T
 OUT=$(AGORA_RUNTIME="$SSTUB" AGORA_VERIFY_WIN=1 AGORA_MAX_SPAWN=99 bash "$AGORA_HOME/scripts/dispatch.sh" --actor borch@repa --project "$REPA" --task "$O7")
 echo "$OUT" | grep -q '"mode":"spawned"' && ok "验证窗尽仍活=过：1s 窗口派发返回 spawned" || fail "竞态用例派发（$OUT）"
 O7LOG="$AGORA_HOME/$(echo "$OUT" | sed -n 's/.*"run":"\([^"]*\)".*/\1/p')"
-[ -f "$O7LOG.live" ] && pgrep -f "agora: $O7" >/dev/null \
+# 孤儿探针用本实例独有 stub 路径匹配（mktemp 唯一）——按 task id 全机 pgrep 会与并发 smoke 实例撞名假红（C册 gt-2153）
+[ -f "$O7LOG.live" ] && pgrep -f "$SSTUB" >/dev/null \
   && ok "竞态窗现形：dispatch 返回后 .live 在＋子会话进程活（旧逻辑此时 rm 即孤儿）" || fail "竞态窗未现形"
-wait_live_clear && [ ! -f "$O7LOG.live" ] && ! pgrep -f "agora: $O7" >/dev/null \
+wait_live_clear && [ ! -f "$O7LOG.live" ] && ! pgrep -f "$SSTUB" >/dev/null \
   && ok "teardown 有界轮询：.live 清空＋零孤儿进程" || fail "teardown 轮询后仍有活会话/标记"
 
 echo
