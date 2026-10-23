@@ -2236,12 +2236,14 @@ grep -q "认领即 agora_post(event=claimed" "$PKG/scripts/dispatch.sh" \
   && ok "守卫五：BOOT 文案含认领即 claimed＋每 30min progress 心跳" || fail "守卫五 BOOT 心跳文案缺失"
 
 # ⑥ reopened 返工再拾取回归（终闸 B-F1 修复）：dispatched→done→reopened 后 mention 邮件可再派——
-# 在飞去重只认尾部事件仍是裸 dispatched 的任务，返工回池不得被累计 dispatched 历史永久压制
+# 在飞去重只认「末次 reopened 后且未被终态闭合」的 dispatched，返工回池不得被 dispatched 历史永久压制。
+# 夹具序（wave-1 R2 教训同源）：reopened 须由 owner（rival@proj2）发出——done/reopened 跨分片同秒
+# 无因果序（derive 按分片文件序、scan 按 ts 平局文件序，双双会把 reopened 重放在 done 前）
 G6=$(TID "$(TITLE="守卫六reopened返工再拾取任务标题够长" VERIFY=true PROJECT_DIR="$PROJ" TC)")
 AGORA_RUNTIME=true AGORA_VERIFY_WIN=2 AGORA_MAX_SPAWN=99 bash "$AGORA_HOME/scripts/dispatch.sh" --actor tester@proj --project "$PROJ" --task "$G6" >/dev/null 2>&1
 POST rival@proj2 --event claimed --task "$G6" >/dev/null
 POST rival@proj2 --event done --task "$G6" --commit HEAD --evidence ok >/dev/null
-POST watchdog@hx --event reopened --task "$G6" --reason "返工重开" >/dev/null
+POST rival@proj2 --event reopened --task "$G6" --reason "返工重开" >/dev/null
 POST rival@proj2 --event progress --task "$G6" --mention tester --body "返工请接单" >/dev/null
 GOUT=$(POLLV2)
 echo "$GOUT" | python3 -c "
@@ -2249,6 +2251,19 @@ import json,sys
 r=json.loads(sys.stdin.read())
 assert any(s['task']=='$G6' for s in r['spawned']), r['spawned']
 " && ok "守卫六：reopened 返工任务可再拾取（不被在飞去重永久压制）" || fail "守卫六 reopened 再拾取（$GOUT）"
+# ⑦ 心跳在飞回归（第四波口径判别断言）：dispatched→progress 心跳期间回声邮件 → held 在飞去重——
+# 尾部口径（last==dispatched）对此漏放（重派在飞任务），累计口径与本口径均 held
+G7=$(TID "$(TITLE="守卫七心跳在飞去重任务标题够长" VERIFY=true PROJECT_DIR="$PROJ" TC)")
+AGORA_RUNTIME=true AGORA_VERIFY_WIN=2 AGORA_MAX_SPAWN=99 bash "$AGORA_HOME/scripts/dispatch.sh" --actor tester@proj --project "$PROJ" --task "$G7" >/dev/null 2>&1
+POST rival@proj2 --event progress --task "$G7" --mention tester --body "心跳回声" >/dev/null
+GOUT=$(POLLV2)
+echo "$GOUT" | python3 -c "
+import json,sys
+r=json.loads(sys.stdin.read())
+assert not any(s['task']=='$G7' for s in r['spawned']), r['spawned']
+h=[x for x in r['held'] if x['task']=='$G7']
+assert h and '在飞去重' in h[0]['reason'], r['held']
+" && ok "守卫七：心跳在飞（dispatched→progress）回声零派＋held" || fail "守卫七 心跳在飞（$GOUT）"
 
 echo
 echo "===== 多仓关联测试场（B批 gt-2153）：跨仓链/删树重建/中途 cancelled/深度边界＋teardown 竞态 ====="

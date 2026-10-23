@@ -122,8 +122,8 @@ def task_dispatcher(task):
     return None
 
 def scan_tasks():
-    """task -> {"dispatched":[(actor,run,dispatcher_task)...], "has":set(events), "last":event}。
-    账本推导唯一口径（重派/孤儿/GC/豁免共用）；last/done_open 按 ts 序重放（跨分片文件序≠时间序）。"""
+    """task -> {"dispatched":[(actor,run,dispatcher_task)...], "has":set(events), "last":event, "inflight":bool}。
+    账本推导唯一口径（重派/孤儿/GC/豁免共用）；last/done_open/inflight 按 ts 序重放（跨分片文件序≠时间序）。"""
     tasks = {}
     for f in sorted((glob.glob(f"{HOME}/log/*/*.md") + glob.glob(f"{HOME}/log/*/.*.md"))):
         with open(f, encoding="utf-8", errors="replace") as fh:
@@ -132,7 +132,7 @@ def scan_tasks():
                 if not e: continue
                 t = e.get("task") or ""
                 if not re.fullmatch(r"gt-[0-9a-f]+", t): continue
-                d = tasks.setdefault(t, {"dispatched": [], "has": set(), "last": None, "done_open": False, "terminal": False, "last_actor": "", "_rows": []})
+                d = tasks.setdefault(t, {"dispatched": [], "has": set(), "last": None, "done_open": False, "terminal": False, "inflight": False, "last_actor": "", "_rows": []})
                 d["_rows"].append((e.get("ts", ""), e["event"]))
                 d["has"].add(e["event"])
                 d["last_actor"] = e.get("actor", "")
@@ -146,6 +146,11 @@ def scan_tasks():
             elif ev in ("merged", "cancelled", "reopened"): d["done_open"] = False
             if ev in ("merged", "cancelled"): d["terminal"] = True   # gt-99af：当前终态（供 mention 拾取核查棒）
             elif ev == "reopened": d["terminal"] = False     # 返工/恢复重开 → 回到可拾取
+            # gt-ae6f 守卫二在飞口径：只计末次 reopened 之后（且未被终态闭合）的 dispatched——
+            # reopened 返工清空在飞（历史 dispatched 不永久压制回池任务），merged/cancelled 闭飞
+            if ev == "reopened": d["inflight"] = False
+            elif ev == "dispatched": d["inflight"] = True
+            elif ev in ("merged", "cancelled"): d["inflight"] = False
         del d["_rows"]
     return tasks
 
@@ -290,11 +295,11 @@ for f in sorted(glob.glob(f"{HOME}/wiki/entities/*.md")):
             report["held"].append({"entity": name, "task": task,
                                    "reason": "retired 降敏：尾部事件 retired 不重派"})
             continue
-        # gt-ae6f 守卫二：在飞去重——尾部事件仍是裸 dispatched（派发后零后续事件）不重派；
-        # 一轮多封邮件至多一派。reopened/claimed 等后续事件自然出集——返工回池可再拾取
-        if d and d.get("last") == "dispatched":
+        # gt-ae6f 守卫二：在飞去重——末次 reopened 后仍有活跃 dispatched（未被终态闭合）不重派；
+        # 一轮多封邮件至多一派。reopened 返工清空在飞——回池任务可再拾取，dispatched 历史不压制
+        if d and d.get("inflight"):
             report["held"].append({"entity": name, "task": task,
-                                   "reason": "在飞去重：尾部事件 dispatched 不重派"})
+                                   "reason": "在飞去重：末次 reopened 后仍有活跃 dispatched 不重派"})
             continue
         # wt_host 限定（设计 §五）：跨机 wt 任务不本地拾取（他机的树本地不可用）
         tp = f"{HOME}/wiki/tasks/{task}.md"
@@ -316,9 +321,9 @@ for f in sorted(glob.glob(f"{HOME}/wiki/entities/*.md")):
             report["spawned"].append({"entity": name, "task": task, "prompt": RECHECK, **out})
             # gt-ae6f 守卫二：派发即回写内存账本视图——同轮后续邮件走在飞去重，至多一派
             dd = TASKS.setdefault(task, {"dispatched": [], "has": set(), "last": None,
-                                         "done_open": False, "terminal": False, "last_actor": ""})
+                                         "done_open": False, "terminal": False, "inflight": False, "last_actor": ""})
             dd["dispatched"].append((f"{name}@{os.path.basename(dirs[0])}", out.get("run", ""), "", out.get("session", "")))
-            dd["has"].add("dispatched"); dd["last"] = "dispatched"
+            dd["has"].add("dispatched"); dd["last"] = "dispatched"; dd["inflight"] = True
         else:
             report["held"].append({"entity": name, "task": task,
                                    "reason": r.stderr.strip().splitlines()[-1][:120] if r.stderr else "dispatch failed"})

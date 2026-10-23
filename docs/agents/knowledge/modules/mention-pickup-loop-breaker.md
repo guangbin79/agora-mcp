@@ -3,9 +3,9 @@
 > 模块：poll.sh mention 拾取环断路契约（gt-ae6f）
 
 ## 结论（3 行）
-1. 拾取派发的守卫顺序＝done_open（一票否决）→ todo 在板 → 终态 → retired 尾事件 → 在飞去重（dispatched∩无终态）→ wt_host → can_spawn；邮件只是通知副本，**判值一律取账本真值**（TASKS=scan_tasks 重放）。
+1. 拾取派发的守卫顺序＝done_open（一票否决）→ todo 在板 → 终态 → retired 尾事件 → 在飞去重（末次 reopened 后的 dispatched∩未被终态闭合）→ wt_host → can_spawn；邮件只是通知副本，**判值一律取账本真值**（TASKS=scan_tasks 重放）。
 2. retired 事件在 derive-board 只回池「owner==actor 且 state!=done」的任务——done 只能经 reopened/merged/cancelled 离场；否则 done 任务被 RECHECK 会话的 retired 踢回 todo，回声邮件再派发＝自持环（gt-bb0b 14 派风暴根因）。
-3. 在飞「活跃」口径＝dispatched 集 ∩ 无终态事件（与规格配额同源）；派发成功须回写内存 TASKS，否则同轮多封邮件各派一次（水位挡不住同轮重放）。
+3. 在飞「活跃」口径＝**末次 reopened 之后**的 dispatched ∩ 未被 merged/cancelled 闭合（reopened 返工清空在飞——累计历史口径会把返工回池任务永久压制、尾部口径会放过带心跳的在飞，双缺陷 gt-ae6f 四波实证）；派发成功须回写内存 TASKS（含 inflight），否则同轮多封邮件各派一次（水位挡不住同轮重放）。
 
 ## 逐字证据
 - 风暴形态：log/2026-10-23/.dotfiles.md seq:146-181——17:50 起 40min 内 9+ 派 9+ 退，done（17:29）未 reopened 前提下持续误派，merged（18:21）后仍 3 派，直至 cancelled 收口。
