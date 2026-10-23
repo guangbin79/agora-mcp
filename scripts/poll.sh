@@ -40,7 +40,7 @@ bash "$AGORA_HOME/scripts/derive-board.sh" >/dev/null 2>&1 || true
 AGORA_HOME="$AGORA_HOME" PYTHONPATH="$(cd "$(dirname "$0")" && pwd)${PYTHONPATH:+:$PYTHONPATH}" python3 - <<'PYEOF'
 import os, re, glob, json, time, shutil, hashlib, subprocess, socket
 import agora_lib as lib
-from datetime import datetime
+from datetime import datetime, timedelta
 
 HOME = os.environ["AGORA_HOME"]
 WARN = int(os.environ.get("AGORA_POLL_WARN_MIN", "20"))
@@ -60,9 +60,9 @@ STATE_F = os.path.join(HOME, ".git", "poll-state.json")
 RECHECK = ("纪律：开工前先 agora_sync，再用 agora_history 复查该任务 owner——"
            "若已被他人认领，立即 agora_post(event=retired, task=本任务) 收工，一行代码都不要写。")
 
-def run(script, args):
+def run(script, args, inp=None):
     return subprocess.run(["bash", os.path.join(HOME, "scripts", script)] + args,
-                          capture_output=True, text=True,
+                          capture_output=True, text=True, input=inp,
                           env={**os.environ, "AGORA_HOME": HOME})
 
 def task_last_refs():
@@ -423,6 +423,107 @@ for t, d in TASKS.items():
             redisp = r2.returncode == 0
     orph[t] = {"since": now, "n": n, "redispatched": redisp}
     report["orphan_diag"].append({"task": t, "n": n, "redispatched": redisp})
+
+# ---------- ②e 每日督报（跨日闸门：last_supervise_date≠今日 → 重放昨日账本，整页重写 topics/supervision.md） ----------
+today_s = datetime.now().strftime("%F")
+if state.get("last_supervise_date") != today_s:
+    yday = (datetime.now() - timedelta(days=1)).strftime("%F")
+    HOME_R = os.path.realpath(HOME)
+    yev, chain_rows, merged_all, proj_of = [], {}, set(), {}
+    for lf in sorted((glob.glob(f"{HOME}/log/*/*.md") + glob.glob(f"{HOME}/log/*/.*.md"))):
+        shard = os.path.basename(lf)[:-3]
+        with open(lf, encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                e = lib.parse_event(line)
+                if not e: continue
+                t = e.get("task") or ""
+                if not re.fullmatch(r"gt-[0-9a-f]+", t): continue
+                proj_of.setdefault(t, shard)   # 项目兜底＝账本分片名；dispatched target 覆盖
+                if e["event"] == "dispatched":
+                    chain_rows.setdefault(t, []).append((e.get("ts", ""), e.get("dispatcher_task", "")))
+                    tg = (e.get("target") or "").rstrip("/")
+                    if tg: proj_of[t] = os.path.basename(tg)
+                elif e["event"] == "merged":
+                    merged_all.add(t)
+                if e.get("ts", "")[:10] == yday:
+                    yev.append((t, e))
+    chain = {t: max(rows)[1] for t, rows in chain_rows.items()}   # 同任务多派取 ts 最新（跨分片文件序≠时间序）
+
+    def depth(t):   # 迭代＋上限：账本他机可写，链长不可信（防深链递归爆栈半瘫 poll）
+        d, n = t, 0
+        while n < 100 and chain.get(d):
+            d = chain[d]; n += 1
+        return n + 1
+
+    def classify(e):   # 秒死 diagnosed 结论＝run log 尾（dispatch.sh spawn_died_diag），标记＝EXIT 行
+        if e["event"] == "escalated": return "escalated"
+        if e["event"] != "diagnosed" or not e.get("actor", "").startswith("watchdog@"): return None
+        c = e.get("conclusion", "")
+        if "孤儿" in c: return "孤儿"
+        if "done 未合并" in c: return "恢复性重派"
+        if re.search(r"EXIT:\d+=", c): return "秒死"
+        if "stalled" in c: return "心跳超时"
+        return "其他"
+    cats = {k: set() for k in ("孤儿", "秒死", "心跳超时", "恢复性重派", "escalated", "其他")}
+    done_y = set()
+    for t, e in yev:
+        c = classify(e)
+        if c: cats[c].add(t)
+        if e["event"] == "dispatched":
+            rf = e.get("run", "")
+            try: fp = os.path.realpath(os.path.join(HOME, rf)) if rf else ""
+            except ValueError: fp = ""   # run 含 NUL 等非法路径＝伪造，按孤儿处理不崩
+            if not rf or not fp.startswith(HOME_R + os.sep) or not os.path.exists(fp):
+                cats["孤儿"].add(t)   # ②d 同判据：run log 缺失（HOME 外路径＝伪造，一并计孤儿防跨机探测 oracle）
+            else:
+                try: empty = os.path.getsize(fp) == 0
+                except OSError: empty = False   # stat 竞态：文件消失按存在处理，不崩
+                if empty: cats["秒死"].add(t)   # run log 空＝spawn 即死
+        elif e["event"] == "done":
+            done_y.add(t)
+    recur = {}
+    for k in ("孤儿", "秒死", "心跳超时", "恢复性重派", "escalated"):
+        for t in cats[k]: recur.setdefault((proj_of.get(t, "?"), k), set()).add(t)
+    hot = sorted((p, k, len(ts)) for (p, k), ts in recur.items() if len(ts) >= 2)
+    sugg = [f"{p} {k} ×{n}，建议立项治理" for p, k, n in hot]
+    if cats["escalated"]: sugg.append(f"escalated ×{len(cats['escalated'])}，建议 operator 介入复盘")
+    if done_y - merged_all: sugg.append(f"{len(done_y - merged_all)} 个 done 未闭环，建议 merge.sh 清账")
+    disp_y = sorted({t for t, e in yev if e["event"] == "dispatched"})
+    dep = {}
+    for t in disp_y: dep[depth(t)] = dep.get(depth(t), 0) + 1
+    dep_s = " ".join(f"L{k}×{dep[k]}" for k in sorted(dep)) if dep else "无"
+    rate_s = (f"{len(done_y & merged_all)}/{len(done_y)}（{round(100 * len(done_y & merged_all) / len(done_y))}%，done 中 merged 占比）"
+              if done_y else "无 done")
+    cat_s = "｜".join(f"{k} {len(cats[k])}" for k in ("孤儿", "秒死", "心跳超时", "恢复性重派", "escalated", "其他"))
+    sec = (f"## {yday}\n\n"
+           f"- 异常计数：{cat_s}（按任务去重）\n"
+           f"- 终态闭环率：{rate_s}\n"
+           f"- 复发模式：{'；'.join(f'{p} {k} ×{n}' for p, k, n in hot) or '无'}\n"
+           f"- 链路深度：dispatched {len(disp_y)} 个，{dep_s}\n"
+           f"- 建议立项：{'；'.join(sugg) or '无'}")
+    page_p = f"{HOME}/wiki/topics/supervision.md"
+    front, old = "", []
+    if os.path.exists(page_p):
+        raw = open(page_p, encoding="utf-8", errors="replace").read()
+        fm = re.match(r"^---\n.*?\n---\n\n?", raw, re.S)
+        if fm:   # wiki-write replace 只写 content：frontmatter 须随内容回写，否则 owner 行丢失、次日起 OWNER_MISMATCH
+            front = fm.group(0)
+            raw = raw[fm.end():]
+        if not re.search(r"^owner:", front + raw, re.M):
+            os.remove(page_p)   # 无 owner 行的死页（不论有无 --- 头）：wiki-write 对其 replace 永远 OWNER_MISMATCH，移除走首建路径自愈
+            front, raw = "", ""
+        for m in re.finditer(r"^## (\d{4}-\d{2}-\d{2})\n(.*?)(?=^## |\Z)", raw, re.M | re.S):
+            if m.group(1) != yday: old.append((m.group(1), m.group(2).strip()))
+    old = sorted(set(old), key=lambda x: x[0], reverse=True)[:6]   # 页面只留最近 7 天：新 1 段＋旧 6 段
+    body = "\n\n".join(["# 每日督导（watchdog 经 poll.sh 跨日闸门自动生成；只留最近 7 天，新日在顶）", sec]
+                       + [f"## {d}\n\n{b}" for d, b in old]) + "\n"
+    wr = run("wiki-write.sh", ["--actor", WATCHDOG, "--path", "topics/supervision.md", "--mode", "replace"],
+             inp=front + body)
+    if wr.returncode == 0 or "nothing to commit" in (wr.stdout or ""):   # 同内容重写＝已是目标态，视为成功
+        state["last_supervise_date"] = today_s
+        report["supervised"] = yday
+    else:
+        report["supervise_failed"] = ((wr.stderr or wr.stdout or "unknown").strip().splitlines() or ["unknown"])[-1][:160]
 
 # ---------- ④c wt 树 GC（终态＋宽限＋clean→删；dirty/宽限内→报告；缺任务页树归 doctor 只报告） ----------
 gcst = state.setdefault("_wtgc", {})

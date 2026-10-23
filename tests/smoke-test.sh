@@ -447,6 +447,81 @@ assert r['mails_archived']>=1, r
 ls "$AGORA_HOME/inbox/archive/tester/" 2>/dev/null | grep -q '\.md' \
   && ok "超期邮件入 archive" || fail "超期邮件入 archive"
 
+echo "===== poll 每日督报（跨日闸门，gt-abcd） ====="
+YDAY=$(date -d yesterday +%F)
+mkdir -p "$AGORA_HOME/log/$YDAY" "$AGORA_HOME/raw/dispatches"
+printf 'started\nEXIT:1=9\n' > "$AGORA_HOME/raw/dispatches/d-ok1.log"   # 非空＝活着
+: > "$AGORA_HOME/raw/dispatches/d-empty.log"                            # 空＝秒死
+SL="$AGORA_HOME/log/$YDAY/proj.md"; : > "$SL"
+EV() { echo "- seq:$1 | ts:$2 | actor:$3 | event:$4 | idem:i$1 | seen:t@1 | task:$5 | $6" >> "$SL"; }
+W="watchdog@$(hostname)"
+EV 1 "$YDAY""T12:00:01+08:00" "$W" diagnosed gt-aaaa "conclusion:stalled: 任务 gt-aaaa 已 99min 无新事件落账（阈值 40min）"
+EV 2 "$YDAY""T12:00:02+08:00" "$W" diagnosed gt-bbbb "conclusion:stalled: 任务 gt-bbbb 已 99min 无新事件落账（阈值 40min）"
+EV 3 "$YDAY""T12:00:03+08:00" "$W" escalated gt-cccc "conclusion:stalled 升级：任务 gt-cccc 连续 3 次诊断无响应"
+EV 4 "$YDAY""T12:00:04+08:00" "$W" diagnosed gt-dddd "conclusion:done 未合并：gt-dddd 已 done 且超 15min 无 merged（第 1/3 次提醒）"
+EV 1 "$YDAY""T12:00:05+08:00" "tester@proj" done gt-dead "commit:abc1234 | evidence:ok"
+EV 2 "$YDAY""T12:00:06+08:00" "tester@proj" done gt-dddd "commit:abc1235 | evidence:ok"
+EV 1 "$YDAY""T12:00:07+08:00" "agora-mcp@proj" merged gt-dead "commit:abc1234"
+EV 2 "$YDAY""T12:00:08+08:00" "agora-mcp@proj" dispatched gt-aaaa "target:/tmp/proj | child:tester | run:raw/dispatches/d-ok1.log"
+EV 3 "$YDAY""T12:00:09+08:00" "agora-mcp@proj" dispatched gt-bbbb "target:/tmp/proj | child:tester | run:raw/dispatches/d-ok1.log | dispatcher_task:gt-aaaa"
+EV 4 "$YDAY""T12:00:10+08:00" "agora-mcp@proj" dispatched gt-eeee "target:/tmp/proj | child:tester | run:raw/dispatches/d-gone.log"
+EV 5 "$YDAY""T12:00:11+08:00" "agora-mcp@proj" dispatched gt-ffff "target:/tmp/proj | child:tester | run:raw/dispatches/d-empty.log"
+# 终态收口：不占 dispatch 配额（活跃＝dispatched∩无终态），不挂看板 in-progress
+EV 6 "$YDAY""T12:00:12+08:00" "agora-mcp@proj" cancelled gt-aaaa "reason:督报夹具收口"
+EV 7 "$YDAY""T12:00:13+08:00" "agora-mcp@proj" cancelled gt-bbbb "reason:督报夹具收口"
+EV 8 "$YDAY""T12:00:14+08:00" "agora-mcp@proj" cancelled gt-eeee "reason:督报夹具收口"
+EV 9 "$YDAY""T12:00:15+08:00" "agora-mcp@proj" cancelled gt-ffff "reason:督报夹具收口"
+GATE_RESET() { python3 - "$AGORA_HOME" <<'PYEOF'
+import json, sys
+f = sys.argv[1] + "/.git/poll-state.json"
+s = json.load(open(f)); s["last_supervise_date"] = "2000-01-01"
+json.dump(s, open(f, "w"))
+PYEOF
+}
+# 首次生成：清页＋清闸 → poll → owner=watchdog ＋ 昨日 section 全量统计
+rm -f "$AGORA_HOME/wiki/topics/supervision.md"; GATE_RESET
+SUP_OUT=$(AGORA_RUNTIME=true bash "$AGORA_HOME/scripts/poll.sh")
+SUP="$AGORA_HOME/wiki/topics/supervision.md"
+grep -q "\"supervised\": \"$YDAY\"" <<<"$SUP_OUT" && ok "督报跨日闸门首触发" || fail "督报跨日闸门首触发（$SUP_OUT）"
+grep -q "^owner: watchdog" "$SUP" && ok "督报页首建 owner=watchdog" || fail "督报页首建 owner=watchdog"
+grep -q "^## $YDAY" "$SUP" \
+  && grep -q "孤儿 1｜秒死 1｜心跳超时 2｜恢复性重派 1｜escalated 1" "$SUP" \
+  && grep -q "1/2（50%" "$SUP" \
+  && grep -q "proj 心跳超时 ×2" "$SUP" \
+  && grep -q "L1×3 L2×1" "$SUP" \
+  && ok "督报统计（分类/闭环率/复发点名/深度分布）" || fail "督报统计断言（$(head -12 "$SUP")）"
+# 同日不重复：再跑不触发、页字节不变、闸门=今日
+C1=$(md5sum "$SUP" | cut -d' ' -f1)
+SUP2=$(AGORA_RUNTIME=true bash "$AGORA_HOME/scripts/poll.sh")
+C2=$(md5sum "$SUP" | cut -d' ' -f1)
+python3 - "$AGORA_HOME" <<'PYEOF' && GATE_OK=1 || GATE_OK=0
+import json, sys, datetime
+s = json.load(open(sys.argv[1] + "/.git/poll-state.json"))
+sys.exit(0 if s.get("last_supervise_date") == datetime.date.today().isoformat() else 1)
+PYEOF
+[[ "$C1" == "$C2" ]] && ! grep -q "supervised" <<<"$SUP2" && [[ "${GATE_OK:-0}" -eq 1 ]] \
+  && ok "同日不重复触发（页字节不变＋闸门翻今日）" || fail "同日幂等（C1=$C1 C2=$C2 GATE_OK=${GATE_OK:-0}）"
+# 他人写被 owner 拒
+bash "$AGORA_HOME/scripts/wiki-write.sh" --actor rival@proj2 --path topics/supervision.md --mode replace </dev/null 2>/dev/null
+[[ $? -eq 5 ]] && ok "督报页他人写被 owner 拒(rc=5)" || fail "督报页他人写被 owner 拒"
+# 跨日翻新＋7 天有界：预置 7 个旧段 → 回拨闸门 → 触发后恰 7 段、昨日段置顶、最老出局
+OLD=""
+for i in 2 3 4 5 6 7 8; do
+  D=$(date -d "-$i day" +%F)
+  OLD="$OLD
+## $D
+
+- 旧段 D-$i 标记
+"
+done
+printf -- '---\nowner: watchdog\ncreated: %s\n---\n%s' "$(date +%F)" "$OLD" | bash "$AGORA_HOME/scripts/wiki-write.sh" --actor watchdog@$(hostname) --path topics/supervision.md --mode replace >/dev/null
+GATE_RESET
+AGORA_RUNTIME=true bash "$AGORA_HOME/scripts/poll.sh" >/dev/null
+grep -q "旧段 D-8 标记" "$SUP" && fail "7 天有界：最老段 D-8 未出局" || ok "7 天有界截断：最老段出局"
+grep -q "旧段 D-2 标记" "$SUP" && ok "跨日翻新：次新旧段保留" || fail "跨日翻新：旧段 D-2 丢失"
+[[ $(grep -c '^## ' "$SUP") -eq 7 ]] && ok "督报页恰 7 段" || fail "督报页段数 $(grep -c '^## ' "$SUP")≠7"
+[[ "$(grep -m1 '^## ' "$SUP")" == "## $YDAY" ]] && ok "跨日翻新：昨日段置顶" || fail "跨日翻新：置顶段=$(grep -m1 '^## ' "$SUP")"
+
 echo "===== 通知桥（notify-opencode.sh，规格 §8.1） ====="
 MOCK_LOG="$T/mock-http.log"; : > "$MOCK_LOG"
 python3 - "$MOCK_LOG" "$T/mock-port" >/dev/null 2>&1 <<'PYEOF' &
