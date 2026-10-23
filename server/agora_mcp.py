@@ -141,7 +141,8 @@ TOOLS = [
  {"name": "agora_dispatch", "description": "跨仓委托的标准路径：派生一次性工作会话——仅本机：只拉起本机 sessions.map 登记的 session，跨机派活请改用 agora_task_create + mention（异步）。需名册 can_spawn 权限；有深度/配额保险丝；目标有活会话时降级为通知。project 可为 git worktree 路径——机械层归一到主 repo 匹配名册实体，dispatched 的 project 字段取主 repo 名；worktree 生命周期（建/清/合并）归调用者。",
   "inputSchema": {**T, "properties": {
     "project": {"type": "string", "description": "目标项目目录"},
-    "task": {"type": "string"}, "prompt": {"type": "string"}},
+    "task": {"type": "string"}, "prompt": {"type": "string"},
+    "dispatcher_task": {"type": "string", "description": "可选 gt-xxxx：派发时会话正在做的任务（链深度登记面；缺省时机械层按 actor 最近 claimed 无终态任务推导）"}},
    "required": ["project","task"]}},
  {"name": "agora_task_create", "description": "结构化创建任务页（自动分配 gt-xxxx，frontmatter 由机械层生成，禁止手写任务页）。verify 与 project_dir 必须同时提供；deps/parent 引用必须已存在。",
   "inputSchema": {**T, "properties": {
@@ -269,6 +270,7 @@ def call(name, a):
         if not ACTOR: return None, need_actor()
         args = ["--actor", ACTOR, "--project", a["project"], "--task", a["task"]]
         if a.get("prompt"): args += ["--prompt", a["prompt"]]
+        if a.get("dispatcher_task"): args += ["--dispatcher-task", a["dispatcher_task"]]
         return run_script("dispatch.sh", args)
     if name == "agora_task_create":
         if not ACTOR: return None, need_actor()

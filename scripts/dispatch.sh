@@ -27,13 +27,14 @@ grep -qE '^can_spawn:[[:space:]]*true' "$ENTITY" || fail SPAWN_FORBIDDEN "$NAME 
 # 保险丝 2/3：深度与配额——env 与账本推导取更大值（v1.32 账本化：L2/API 模式无 env 通道时账本为唯一来源）
 # 账本口径：深度=dispatched 事件 dispatcher_task 链逐跳计数（任务最新 dispatched 为准，环检测兜底）；
 #          配额活跃=dispatched 集 ∩ 无终态事件（done/merged/cancelled 任一即出集）
-LEDGER_NEXT=1; LEDGER_ACTIVE=0
-if read -r LN LA <<<"$(python3 - "$AGORA_HOME" "${DTASK:-}" <<'PYEOF'
+LEDGER_NEXT=1; LEDGER_ACTIVE=0; LDT=""
+if read -r LN LA LDT <<<"$(python3 - "$AGORA_HOME" "${DTASK:-}" "$ACTOR" <<'PYEOF'
 import glob, re, sys
 home = sys.argv[1]; dtask = sys.argv[2] if len(sys.argv) > 2 and sys.argv[2] else ""
-disp, terminal = {}, set()
+actor = sys.argv[3] if len(sys.argv) > 3 else ""
+disp, terminal, last_alive, claimed = {}, set(), {}, {}
 for f in sorted(glob.glob(f"{home}/log/*/*.md")):
-    try: lines = open(f, encoding="utf-8").read().splitlines()
+    try: lines = open(f, encoding="utf-8", errors="replace").read().splitlines()
     except OSError: continue
     for line in lines:
         if "event:" not in line: continue
@@ -43,16 +44,33 @@ for f in sorted(glob.glob(f"{home}/log/*/*.md")):
         if "event:dispatched" in line:
             d = re.search(r"dispatcher_task:(gt-[0-9a-f]{4,})", line)
             disp[t] = d.group(1) if d else ""   # 文件序+行序扫描，后见覆盖=最新派发
+            last_alive[t] = True
+        elif "event:claimed" in line:
+            am = re.search(r'\| actor:(\S+)', line)
+            claimed[t] = am.group(1) if am else ""
+            last_alive[t] = True
         elif any(f"event:{e}" in line for e in ("done", "merged", "cancelled")):
-            terminal.add(t)
+            terminal.add(t); claimed.pop(t, None)
+        elif "event:diagnosed" in line:
+            last_alive[t] = False   # 子会话已死（秒死/stale）——配额出集，占位释放
+        elif "event:progress" in line or "event:plan" in line:
+            last_alive[t] = True
 def depth(t, seen):
     if t not in disp or t in seen: return 0
     d = disp[t]
     return 1 if not d else 1 + depth(d, seen | {t})
+# dispatcher_task 机械推导（终审 A-W1）：未显式传入时取本 actor 最近 claimed 且无终态的任务
+if not dtask and actor:
+    cands = [t for t, a in claimed.items() if a == actor]
+    if cands: dtask = cands[-1]
 nxt = depth(dtask, frozenset()) + 1 if dtask in disp else 1
-print(nxt, sum(1 for t in disp if t not in terminal))
+# 配额活跃＝dispatched ∩ 无终态 ∩ 非僵尸（last_alive=False＝已死出集；真活由 .live 计数兜底取 max）
+active = sum(1 for t in disp if t not in terminal and last_alive.get(t, True))
+print(nxt, active, dtask)
 PYEOF
 )"; then [ -n "$LN" ] && LEDGER_NEXT=$LN; [ -n "$LA" ] && LEDGER_ACTIVE=$LA; fi
+# 推导回填（A-W1）：显式传入优先，机械推导兜底——两者都进 dispatched 落账
+[ -z "$DTASK" ] && [ -n "${LDT:-}" ] && [ "$LDT" != "None" ] && DTASK="$LDT"
 DEPTH="${AGORA_DEPTH:-0}"; NEXT=$((DEPTH+1))
 (( NEXT < LEDGER_NEXT )) && NEXT=$LEDGER_NEXT
 [[ $NEXT -ge $MAX_DEPTH ]] && fail DEPTH_EXCEEDED "depth $NEXT >= max $MAX_DEPTH" 7
@@ -95,15 +113,21 @@ fi
 if [ -n "$WT_DIR" ]; then
   [ -e "$WT_MAIN/.git" ] || fail SPAWN_PRECHECK "wt 主仓不可用: $WT_MAIN" 9
   if [ ! -d "$WT_DIR" ]; then
-    # 锚点重建（FMEA D2）：分支在→直挂既有分支；分支已删→默认分支 HEAD 重建分支。
+    # 锚点重建（FMEA D2）：分支在→直挂既有分支；分支已删→默认分支重建分支
+    # （S1：基点=init.defaultBranch/main/master 序探，不用主仓当前 HEAD——主仓停他支时防漂移）。
     # prune 先行：目录被 rm 后 .git/worktrees 注册残留会让 add 拒绝同路径重建
     git -C "$WT_MAIN" worktree prune
     if git -C "$WT_MAIN" show-ref --verify --quiet "refs/heads/wt/$TASK"; then
       git -C "$WT_MAIN" worktree add -q "$WT_DIR" "wt/$TASK" \
         || fail SPAWN_PRECHECK "树重建失败（挂既有分支）: $WT_DIR" 9
     else
-      git -C "$WT_MAIN" worktree add -q -b "wt/$TASK" "$WT_DIR" \
-        || fail SPAWN_PRECHECK "树重建失败（重建分支）: $WT_DIR" 9
+      DEFBR=""
+      for _c in "$(git -C "$WT_MAIN" config --get init.defaultBranch 2>/dev/null)" main master; do
+        [ -n "$_c" ] && git -C "$WT_MAIN" show-ref --verify --quiet "refs/heads/$_c" && { DEFBR="$_c"; break; }
+      done
+      [ -n "$DEFBR" ] || fail SPAWN_PRECHECK "默认分支不可解析（init.defaultBranch/main/master 均缺）" 9
+      git -C "$WT_MAIN" worktree add -q -b "wt/$TASK" "$WT_DIR" "$DEFBR" \
+        || fail SPAWN_PRECHECK "树重建失败（默认分支基点 $DEFBR）: $WT_DIR" 9
     fi
   fi
   # setup 钩子（设计 §五环境完备）：项目页 setup: 命令在树内先跑（装环境；预检段执行＝失败零落账）

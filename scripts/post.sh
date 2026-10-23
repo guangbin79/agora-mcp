@@ -87,11 +87,15 @@ if [[ "$EVENT" == done ]]; then
   fi
 fi
 
-# ---------- merged 机械校验（v1.32：顺序契约——post.sh 不跑 verify，只验 commit==目标分支 HEAD 防绕过） ----------
+# ---------- merged 机械校验（v1.32：顺序契约——post.sh 不跑 verify，只验 commit==目标分支 HEAD 防绕过；
+# C-W2 机械票：merged 仅可经 merge.sh 落账——$AGORA_HOME/.git/merge-tickets/<task> 由 merge.sh 出票） ----------
 if [[ "$EVENT" == "merged" ]]; then
+  [[ -e "$AGORA_HOME/.git/merge-tickets/$TASK" ]] \
+    || fail MERGE_TICKET_REQUIRED "merged 仅可经 merge.sh 落账（机械票缺失；直接 post 会被拒）" 4
   MPAGE="$AGORA_HOME/wiki/tasks/$TASK.md"
   [[ -f "$MPAGE" ]] || fail VALIDATION_FAILED "task page missing: $TASK"
   MPDIR=$(grep -m1 '^project_dir:' "$MPAGE" | sed 's/^project_dir:[[:space:]]*//; s/^"\(.*\)"$/\1/' || true)
+  [[ -z "$MPDIR" ]] && fail VALIDATION_FAILED "merged 需要任务页 project_dir（无 project 上下文不可验分支）"
   MBR="$BRANCH"
   if [ -z "$MBR" ]; then
     MBR=$(git -C "$MPDIR" symbolic-ref -q --short HEAD 2>/dev/null || echo HEAD)
@@ -176,6 +180,7 @@ LINE="- seq:$SEQ | ts:$TS | actor:$ACTOR | event:$EVENT | idem:$IDEM | seen:$PRO
 [[ -n "$CHILD" ]] && LINE="$LINE | child:$CHILD"
 [[ -n "$RUN" ]] && LINE="$LINE | run:$RUN"
 [[ -n "$DTASK" ]] && LINE="$LINE | dispatcher_task:$DTASK"
+[[ -n "$BRANCH" ]] && LINE="$LINE | branch:$BRANCH"
 [[ -n "${VERIFY_NOTE:-}" ]] && LINE="$LINE | verify_output:$VERIFY_NOTE"
 [[ -n "$BODY" ]] && LINE="$LINE | body:$BODY"
 [[ -n "$MENTION" ]] && LINE="$LINE | mention:$MENTION"

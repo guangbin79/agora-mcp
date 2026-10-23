@@ -27,6 +27,9 @@ WTD="$(FM wt_dir)"; PD="$(FM project_dir)"; VF="$(FM verify)"
 [ -n "$WTD" ] || fail VALIDATION_FAILED "task $TASK 无 wt_dir（非 wt 任务不走 merge.sh）"
 [ -n "$VF" ]  || fail VALIDATION_FAILED "task $TASK has no verify"
 [ -d "$PD" ]  || fail VALIDATION_FAILED "project_dir 不存在: $PD"
+# wt_host 守卫（S3）：跨机 wt 任务不在本机合并（wt_dir 锚点会在本机重建树＝错误现场）
+WHOST="$(FM wt_host)"
+[ -z "$WHOST" ] || [ "$WHOST" = "$(hostname)" ] || fail WT_HOST_MISMATCH "wt_host=$WHOST ≠ 本机 $(hostname)——跨机 wt 任务不本机合并" 9
 
 MAIN=$(PYTHONPATH="$AGORA_HOME/scripts" python3 -c 'import sys, agora_lib
 p = sys.argv[1]; m = agora_lib.main_repo_of(p); print(m or p)' "$(realpath "$PD")")
@@ -59,13 +62,18 @@ p = sys.argv[1]; m = agora_lib.main_repo_of(p); print(m or p)' "$(realpath "$UPP
 fi
 [ -n "$TARGET_BRANCH" ] || TARGET_BRANCH=$(git -C "$MAIN" symbolic-ref -q --short HEAD 2>/dev/null || echo HEAD)
 
-# ---- 本任务树缺失→锚点重建（FMEA D2） ----
+# ---- 本任务树缺失→锚点重建（FMEA D2；S1 基点=默认分支序探） ----
 if [ ! -d "$WTD" ]; then
   git -C "$MAIN" worktree prune
   if git -C "$MAIN" show-ref --verify --quiet "refs/heads/wt/$TASK"; then
     git -C "$MAIN" worktree add -q "$WTD" "wt/$TASK" || fail WORKTREE_REBUILD_FAILED "树重建失败（挂既有分支）: $WTD"
   else
-    git -C "$MAIN" worktree add -q -b "wt/$TASK" "$WTD" || fail WORKTREE_REBUILD_FAILED "树重建失败（重建分支）: $WTD"
+    DEFBR=""
+    for _c in "$(git -C "$MAIN" config --get init.defaultBranch 2>/dev/null)" main master; do
+      [ -n "$_c" ] && git -C "$MAIN" show-ref --verify --quiet "refs/heads/$_c" && { DEFBR="$_c"; break; }
+    done
+    [ -n "$DEFBR" ] || fail WORKTREE_REBUILD_FAILED "默认分支不可解析（重建基点缺失）"
+    git -C "$MAIN" worktree add -q -b "wt/$TASK" "$WTD" "$DEFBR" || fail WORKTREE_REBUILD_FAILED "树重建失败（默认分支基点 $DEFBR）: $WTD"
   fi
 fi
 
@@ -80,16 +88,23 @@ TARG=$(git -C "$TARGET_DIR" rev-parse "$TARGET_BRANCH")
 
 # ---- 幂等：目标已含本任务提交 → 只补 merged（不重合并不重验）＋清树 ----
 if [ "$WTC" = "$TARG" ] || git -C "$TARGET_DIR" merge-base --is-ancestor "$WTC" "$TARG" 2>/dev/null; then
+  mkdir -p "$AGORA_HOME/.git/merge-tickets"
+  : > "$AGORA_HOME/.git/merge-tickets/$TASK"
   bash "$AGORA_HOME/scripts/post.sh" --actor "$ACTOR" --project "$PNAME" --event merged \
     --task "$TASK" --commit "$TARG" --branch "$TARGET_BRANCH" >/dev/null \
-    || fail LEDGER_FAILED "merged 补账失败（post.sh 详见 stderr）" 4
+    || { rm -f "$AGORA_HOME/.git/merge-tickets/$TASK"; fail LEDGER_FAILED "merged 补账失败（post.sh 详见 stderr）" 4; }
+  rm -f "$AGORA_HOME/.git/merge-tickets/$TASK"
   git -C "$MAIN" worktree remove "$WTD" 2>/dev/null || true
   git -C "$MAIN" branch -q -D "wt/$TASK" 2>/dev/null || true
   printf '{"result":"merged","task":"%s","branch":"%s","commit":"%s","idempotent":true}\n' "$TASK" "$TARGET_BRANCH" "$TARG"
   exit 0
 fi
 
-# ---- ff-only 合并 ----
+# ---- ff-only 合并（B-W2 守卫：目标目录当前检出分支必须==TARGET_BRANCH，防并发漂移错并） ----
+CURBR=$(git -C "$TARGET_DIR" symbolic-ref -q --short HEAD 2>/dev/null || echo "(detached)")
+if [ "$CURBR" != "$TARGET_BRANCH" ]; then
+  fail TARGET_DETACHED "目标目录当前检出 $CURBR ≠ $TARGET_BRANCH（并发漂移/脱出目标分支），拒绝合并" 4
+fi
 PRE=$(git -C "$TARGET_DIR" rev-parse "$TARGET_BRANCH")
 if ! MERR=$(git -C "$TARGET_DIR" merge --ff-only "wt/$TASK" 2>&1); then
   bash "$AGORA_HOME/scripts/post.sh" --actor "$ACTOR" --project "$PNAME" --event blocked \
@@ -100,7 +115,15 @@ if ! MERR=$(git -C "$TARGET_DIR" merge --ff-only "wt/$TASK" 2>&1); then
 fi
 
 # ---- 集成 verify 在目标目录真跑；FAIL → 原子回滚＋blocked→reopened ----
+# B-W3 并发守卫：verify 窗口内目标分支被推进（≠NEWH）时 reset 会吞掉并发工作——跳过回滚保现场
+NEWH_PREV=$(git -C "$TARGET_DIR" rev-parse "$TARGET_BRANCH")
 if ! VOUT=$(cd "$TARGET_DIR" && timeout "${AGORA_VERIFY_TIMEOUT:-300}" bash -c "$VF" 2>&1 | tail -c 2048); then
+  CURH2=$(git -C "$TARGET_DIR" rev-parse "$TARGET_BRANCH")
+  if [ "$CURH2" != "$NEWH_PREV" ]; then
+    bash "$AGORA_HOME/scripts/post.sh" --actor "$ACTOR" --project "$PNAME" --event blocked \
+      --task "$TASK" --reason "集成 verify 失败且窗口内目标被并发推进（$NEWH_PREV→$CURH2），已跳过回滚保现场，人工核查" >/dev/null 2>&1 || true
+    fail VERIFY_FAILED "集成 verify 失败＋目标并发推进——未回滚（现场保留），人工核查 $TARGET_BRANCH" 4
+  fi
   git -C "$TARGET_DIR" reset -q --hard "$PRE"
   bash "$AGORA_HOME/scripts/post.sh" --actor "$ACTOR" --project "$PNAME" --event blocked \
     --task "$TASK" --reason "集成 verify FAIL: $(echo "$VOUT" | tail -5 | tr '\n' ' ' | tr -d '|')" >/dev/null 2>&1 || true
@@ -109,11 +132,14 @@ if ! VOUT=$(cd "$TARGET_DIR" && timeout "${AGORA_VERIFY_TIMEOUT:-300}" bash -c "
   fail VERIFY_FAILED "集成 verify 失败，$TARGET_BRANCH 已回滚至 $PRE（blocked→reopened 已落账）" 4
 fi
 
-# ---- merged 落账＋清树 ----
+# ---- merged 落账（C-W2 机械票：出票→post（验票）→销票）＋清树 ----
 NEWH=$(git -C "$TARGET_DIR" rev-parse "$TARGET_BRANCH")
+mkdir -p "$AGORA_HOME/.git/merge-tickets"
+: > "$AGORA_HOME/.git/merge-tickets/$TASK"
 bash "$AGORA_HOME/scripts/post.sh" --actor "$ACTOR" --project "$PNAME" --event merged \
   --task "$TASK" --commit "$NEWH" --branch "$TARGET_BRANCH" >/dev/null \
-  || fail LEDGER_FAILED "merged 落账失败（post.sh 详见 stderr）" 4
+  || { rm -f "$AGORA_HOME/.git/merge-tickets/$TASK"; fail LEDGER_FAILED "merged 落账失败（post.sh 详见 stderr）" 4; }
+rm -f "$AGORA_HOME/.git/merge-tickets/$TASK"
 git -C "$MAIN" worktree remove "$WTD" 2>/dev/null || true
 git -C "$MAIN" branch -q -D "wt/$TASK" 2>/dev/null || true
 

@@ -99,7 +99,8 @@ if [ -n "${DEPS:-}" ]; then
 fi
 
 # 同锁写入 + commit（与 post.sh 串行化；有远端时锁内先 pull 后 push）
-# 子 shell 输出被捕获：短路路径输出既有任务 JSON（exit 0 只退出子 shell），外层见非空即透传终止
+# 子 shell 输出被捕获：短路路径输出既有任务 JSON（exit 0 只退出子 shell），外层见非空即透传终止；
+# B-W1：子 shell 非零退出（锁超时/锁内失败）必须向上传播——绝不打印假成功 JSON
 SHORTOUT=$( (
   flock -w "${AGORA_LOCK_WAIT:-5}" 9 || { echo '{"error":"LOCK_TIMEOUT"}' >&2; exit 3; }
   # idem 权威复检（锁内）：快路径后、建树后到此的并发窗口兜底——他方同 key 已落页则
@@ -132,7 +133,13 @@ SHORTOUT=$( (
   git add "wiki/tasks/$TASK_ID.md" board/
   git commit -q -m "task: create $TASK_ID $TITLE"
   bash "$AGORA_HOME/scripts/sync.sh" post >/dev/null 2>&1 || true
-) 9>"$AGORA_HOME/.git/post.lock" )
+) 9>"$AGORA_HOME/.git/post.lock" ); SRC=$?
+if [ "$SRC" -ne 0 ]; then
+  # 锁超时（exit 3）或锁内失败：错误细节已在 stderr；此处显式失败，杜绝假成功
+  [ -n "$SHORTOUT" ] && printf '%s\n' "$SHORTOUT"
+  echo '{"error":"TASK_CREATE_FAILED","hint":"锁超时或锁内写入失败（详见 stderr）；可安全重试（idem 幂等）"}' >&2
+  exit 3
+fi
 if [ -n "$SHORTOUT" ]; then printf '%s\n' "$SHORTOUT"; exit 0; fi
 
 printf '{"task":"%s","path":"wiki/tasks/%s.md"}\n' "$TASK_ID" "$TASK_ID"

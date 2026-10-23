@@ -72,7 +72,7 @@ def task_last_refs():
     refs = {}
     for f in sorted(glob.glob(f"{HOME}/log/*/*.md")):
         rel = os.path.relpath(f, HOME)
-        with open(f, encoding="utf-8") as fh:
+        with open(f, encoding="utf-8", errors="replace") as fh:
             for i, line in enumerate(fh, 1):
                 e = lib.parse_event(line)
                 if not e: continue
@@ -126,15 +126,16 @@ def scan_tasks():
     账本推导唯一口径（重派/孤儿/GC/豁免共用）；文件序+行序=时间序近似。"""
     tasks = {}
     for f in sorted(glob.glob(f"{HOME}/log/*/*.md")):
-        with open(f, encoding="utf-8") as fh:
+        with open(f, encoding="utf-8", errors="replace") as fh:
             for line in fh:
                 e = lib.parse_event(line)
                 if not e: continue
                 t = e.get("task") or ""
                 if not re.fullmatch(r"gt-[0-9a-f]+", t): continue
-                d = tasks.setdefault(t, {"dispatched": [], "has": set(), "last": None, "done_open": False})
+                d = tasks.setdefault(t, {"dispatched": [], "has": set(), "last": None, "done_open": False, "last_actor": ""})
                 d["last"] = e["event"]
                 d["has"].add(e["event"])
+                d["last_actor"] = e.get("actor", "")
                 if e["event"] == "done": d["done_open"] = True          # done 未闭：merged/cancelled/reopened 才清
                 elif e["event"] in ("merged", "cancelled", "reopened"): d["done_open"] = False
                 if e["event"] == "dispatched":
@@ -243,7 +244,7 @@ for d in list(live_notified):
 
 # ---------- ③ mention 拾取（目录存在性 = 机器归属；水位 = 邮件文件名，定宽时间戳字典序可比） ----------
 def local_dirs(f):
-    txt = open(f, encoding="utf-8").read()
+    txt = open(f, encoding="utf-8", errors="replace").read()
     return [d for d in (os.path.realpath(os.path.expanduser(x)) for x in lib.entity_dirs(txt))
             if os.path.isdir(d)]
 
@@ -252,7 +253,7 @@ for f in sorted(glob.glob(f"{HOME}/wiki/entities/*.md")):
     if not lib.valid_entity_name(name): continue   # 畸形实体名不参与 mention 拾取
     dirs = local_dirs(f)
     if not dirs: continue  # 不是本机实体
-    can_spawn = bool(re.search(r'^can_spawn:\s*true', open(f, encoding="utf-8").read(), re.M))
+    can_spawn = bool(re.search(r'^can_spawn:\s*true', open(f, encoding="utf-8", errors="replace").read(), re.M))
     mails = sorted(glob.glob(f"{HOME}/inbox/{name}/*.md"))
     wm = state.get(name, "")
     if not isinstance(wm, str): wm = ""
@@ -304,7 +305,8 @@ for t, d in TASKS.items():
     if not d2 or not d2.get("done_open") or "merged" in d2["has"]:
         mw.pop(t, None); continue
     ups = [x[2] for x in d["dispatched"] if x[2]]
-    disp_actor = d["dispatched"][-1][0] if d["dispatched"] else "watchdog"
+    # 通知目标：派单方优先；未派发过（直建任务）→ 任务最后 actor（通常 claimer）——失败必响到人
+    disp_actor = d["dispatched"][-1][0] if d["dispatched"] else (d.get("last_actor") or "watchdog")
     n = int(e.get("n", 0)) + 1
     if n > REDISPATCH_MAX:
         r = run("post.sh", ["--actor", WATCHDOG, "--project", "watchdog", "--event", "escalated",
@@ -316,7 +318,8 @@ for t, d in TASKS.items():
         continue
     r = run("post.sh", ["--actor", WATCHDOG, "--project", "watchdog", "--event", "diagnosed",
                         "--task", t,
-                        "--conclusion", f"done 未合并：{t} 已 done 且超 {MERGE_WAIT}min 无 merged（第 {n}/{REDISPATCH_MAX} 次提醒），dispatcher 请评审 diff 后 merge.sh 闭环"])
+                        "--conclusion", f"done 未合并：{t} 已 done 且超 {MERGE_WAIT}min 无 merged（第 {n}/{REDISPATCH_MAX} 次提醒），dispatcher 请评审 diff 后 merge.sh 闭环",
+                        "--mention", disp_actor.split("@")[0]])   # A-W2：失败必响——派单方 inbox 必达
     if ups and r.returncode == 0 and SPAWN:
         up = ups[-1]
         upage = f"{HOME}/wiki/tasks/{up}.md"
@@ -327,8 +330,13 @@ for t, d in TASKS.items():
                         f"再评审其 diff（任务页 wt_dir 的树），然后 bash {HOME}/scripts/merge.sh"
                         f" --actor {disp_actor} --task {t} 闭环；若 non-ff 先在原树 rebase 到合并目标分支"
                         f"再重走 verify。完成后继续你自己的任务。")
-                r2 = run("dispatch.sh", ["--actor", disp_actor, "--project", upd.group(1),
-                                         "--task", up, "--prompt", boot])
+                # M5：重派上游时透传其原链 dispatcher_task（上游自身 dispatched 的最新链字段），
+                # 防重派抹链致后续深度推导降级
+                upchain = (TASKS.get(up) or {}).get("dispatched") or []
+                rargs = ["--actor", disp_actor, "--project", upd.group(1), "--task", up, "--prompt", boot]
+                if upchain and upchain[-1][2]:
+                    rargs += ["--dispatcher-task", upchain[-1][2]]
+                r2 = run("dispatch.sh", rargs)
                 if r2.returncode == 0:
                     report["redispatched"].append({"upstream": up, "downstream": t, "n": n})
     mw[t] = {"since": now, "n": n}
@@ -375,7 +383,9 @@ for page in glob.glob(f"{HOME}/wiki/tasks/*.md"):
     wm = re.search(r'^wt_dir:\s*(\S+)', txt, re.M)
     if not wm or not os.path.isdir(wm.group(1)): continue
     d = TASKS.get(t)
-    if not d or not (d["has"] & TERMINALS): continue   # 未终态不 GC
+    # B-C1（终审）：GC 判据＝merged 或 cancelled——done 单独不足（done≠merged 是 L1 核心语义，
+    # 未合并的 done 任务树/分支是唯一工作现场，删之即数据丢失）
+    if not d or not (d["has"] & {"merged", "cancelled"}): continue
     e = gcst.get(t)
     if not isinstance(e, dict): e = {"since": now}; gcst[t] = e
     if (now - float(e.get("since", now))) / 60 < WT_GRACE_MIN:

@@ -1295,6 +1295,8 @@ DSPRAW --task "$G3" 2>/dev/null | grep -q '"mode":"spawned"' && ok "树误删自
 [ -d "$WTD3" ] && ok "重建树目录存在" || fail "重建树目录存在"
 
 echo "===== verify 两段制＋merged 事件（全量委托 L1 Task5） ====="
+tick()   { mkdir -p "$AGORA_HOME/.git/merge-tickets"; : > "$AGORA_HOME/.git/merge-tickets/$1"; }
+untick() { rm -f "$AGORA_HOME/.git/merge-tickets/$1"; }
 V1=$(TID "$(TITLE="树上验收" VERIFY="test -f ok-marker" PROJECT_DIR="$PROJ" WT=1 IDEM=t5a TC)")
 WTV1=$(ls -d "$T"/proj__wt-${V1}__* | head -1)
 touch "$WTV1/ok-marker"   # 只在树内——主仓没有
@@ -1304,14 +1306,18 @@ POST tester@proj --event done --task "$V1" --commit HEAD --evidence "树上过�
 V2=$(TID "$(TITLE="merged载体" VERIFY="true" PROJECT_DIR="$PROJ" TC)")
 POST tester@proj --event claimed --task "$V2" >/dev/null
 BR=$(git -C "$PROJ" symbolic-ref --short HEAD); H=$(git -C "$PROJ" rev-parse HEAD)
+tick "$V2"
 POST tester@proj --event merged --task "$V2" --commit "$H" --branch "$BR" >/dev/null \
   && ok "merged 落账（commit==branch HEAD）" || fail "merged 落账"
+untick "$V2"
 POST tester@proj --event merged --task "$V2" --commit "0000000000000000000000000000000000000000" --branch "$BR" >/dev/null 2>&1 \
   && fail "merged commit≠HEAD 被拒" || ok "merged commit≠HEAD 被拒"
 POST tester@proj --event merged --task "$V2" >/dev/null 2>&1 \
   && fail "merged 缺 commit 被拒" || ok "merged 缺 commit 被拒"
+tick "$V1"
 POST tester@proj --event merged --task "$V1" --commit "$H" >/dev/null \
   && ok "merged 缺省 branch=project_dir 当前分支" || fail "merged 缺省 branch"
+untick "$V1"
 
 echo "===== merge.sh 合并闭环（全量委托 L1 Task6） ====="
 rm -f "$AGORA_HOME/scripts/sessions.map"
@@ -1410,7 +1416,9 @@ POLLT >/dev/null
 LEV "$PD_" diagnosed | grep -q "未合并" && ok "① done-unmerged→diagnosed" || fail "① done-unmerged→diagnosed"
 [ "$(LEV "$PU" dispatched | grep -c event:dispatched)" -ge 1 ] && ok "① 上游被恢复性重派" || fail "① 上游被恢复性重派"
 git -C "$PROJ" merge -q --ff-only "wt/$PD_" 2>/dev/null
+tick "$PD_"
 POST tester@proj --event merged --task "$PD_" --commit "$(git -C "$PROJ" rev-parse HEAD)" --branch "$(git -C "$PROJ" symbolic-ref --short HEAD)" >/dev/null
+untick "$PD_"
 POLLT >/dev/null
 [ "$(LEV "$PD_" diagnosed | grep -c "未合并")" -eq 1 ] && ok "① merged 后不再诊断" || fail "① merged 后不再诊断"
 # ② 重派上限：3 次后第 4 次 escalated、不再派
@@ -1437,20 +1445,23 @@ echo g > "$WG/gfile"; git -C "$WG" add -A; git -C "$WG" -c user.name=t -c user.e
 POST tester@proj --event claimed --task "$GT" >/dev/null
 POST tester@proj --event done --task "$GT" --commit HEAD --evidence ok >/dev/null
 git -C "$PROJ" merge -q --ff-only "wt/$GT" 2>/dev/null
-POST tester@proj --event merged --task "$GT" --commit "$(git -C "$PROJ" rev-parse HEAD)" --branch "$(git -C "$PROJ" symbolic-ref --short HEAD)" >/dev/null
+tick "$GT"; POST tester@proj --event merged --task "$GT" --commit "$(git -C "$PROJ" rev-parse HEAD)" --branch "$(git -C "$PROJ" symbolic-ref --short HEAD)" >/dev/null
+untick "$GT"
 DT=$(MKWT2 "gc脏树" t7h); WD=$(ls -d "$T"/proj__wt-${DT}__*)
 echo d > "$WD/dfile"; git -C "$WD" add -A; git -C "$WD" -c user.name=t -c user.email=t@l commit -qm d
 POST tester@proj --event claimed --task "$DT" >/dev/null
 POST tester@proj --event done --task "$DT" --commit HEAD --evidence ok >/dev/null
 git -C "$PROJ" merge -q --ff-only "wt/$DT" 2>/dev/null
-POST tester@proj --event merged --task "$DT" --commit "$(git -C "$PROJ" rev-parse HEAD)" --branch "$(git -C "$PROJ" symbolic-ref --short HEAD)" >/dev/null
+tick "$DT"; POST tester@proj --event merged --task "$DT" --commit "$(git -C "$PROJ" rev-parse HEAD)" --branch "$(git -C "$PROJ" symbolic-ref --short HEAD)" >/dev/null
+untick "$DT"
 echo uncommitted > "$WD/dirty-file"
 GR=$(MKWT2 "gc宽限" t7i); WR=$(ls -d "$T"/proj__wt-${GR}__*)
 echo r > "$WR/rfile"; git -C "$WR" add -A; git -C "$WR" -c user.name=t -c user.email=t@l commit -qm r
 POST tester@proj --event claimed --task "$GR" >/dev/null
 POST tester@proj --event done --task "$GR" --commit HEAD --evidence ok >/dev/null
 git -C "$PROJ" merge -q --ff-only "wt/$GR" 2>/dev/null
-POST tester@proj --event merged --task "$GR" --commit "$(git -C "$PROJ" rev-parse HEAD)" --branch "$(git -C "$PROJ" symbolic-ref --short HEAD)" >/dev/null
+tick "$GR"; POST tester@proj --event merged --task "$GR" --commit "$(git -C "$PROJ" rev-parse HEAD)" --branch "$(git -C "$PROJ" symbolic-ref --short HEAD)" >/dev/null
+untick "$GR"
 AGORA_MERGE_WAIT_MIN=0 AGORA_ORPHAN_MIN=0 AGORA_WT_GRACE_MIN=9999 AGORA_DISPATCH_TIMEOUT=0 AGORA_MAX_SPAWN=9 AGORA_RUNTIME=echo \
   bash "$AGORA_HOME/scripts/poll.sh" >/dev/null 2>&1   # 宽限大：全留
 [ -d "$WR" ] && ok "④ 宽限内不删" || fail "④ 宽限内不删"
@@ -1537,6 +1548,91 @@ sed -i 's|^setup: .*|setup: true|' "$AGORA_HOME/wiki/projects/proj.md"
 for kw in "装环境" "不自己合并" "恢复性重派" "rebase"; do
   grep -q "$kw" "$AGORA_HOME/scripts/dispatch.sh" && ok "BOOT 含「$kw」" || fail "BOOT 含「$kw」"
 done
+
+echo "===== 终审修复批（三分册 B-C1/W1-5 + A-W1/W2 + C-W1/W2 + S1/S3/M2/M5） ====="
+# F1 (B-C1): GC 判据＝merged/cancelled，done 单独不足——done 未合并的净树不删
+F1=$(TID "$(TITLE="gc-done未删" VERIFY="true" PROJECT_DIR="$PROJ" WT=1 IDEM=f1 TC)")
+WF1=$(ls -d "$T"/proj__wt-${F1}__*)
+echo f > "$WF1/ff"; git -C "$WF1" add -A; git -C "$WF1" -c user.name=t -c user.email=t@l commit -qm f1
+POST tester@proj --event claimed --task "$F1" >/dev/null
+POST tester@proj --event done --task "$F1" --commit HEAD --evidence ok >/dev/null
+AGORA_MERGE_WAIT_MIN=9999 AGORA_ORPHAN_MIN=9999 AGORA_WT_GRACE_MIN=0 AGORA_DISPATCH_TIMEOUT=9999 AGORA_MAX_SPAWN=9 AGORA_RUNTIME=echo \
+  bash "$AGORA_HOME/scripts/poll.sh" >/dev/null 2>&1
+[ -d "$WF1" ] && ok "F1 done(未 merged)净树 GC 不删" || fail "F1 done 未合并树被删（数据丢失）"
+# F2 (B-W1): task-create 锁超时不得假成功
+( exec 9>"$AGORA_HOME/.git/post.lock"; flock -n 9 && sleep 6 ) &
+OUT=$(AGORA_LOCK_WAIT=1 TITLE="锁超时" VERIFY=true PROJECT_DIR="$PROJ" TC 2>&1); RC=$?
+sleep 6
+[[ $RC -ne 0 ]] && ! echo "$OUT" | grep -q '"task"' && ok "F2 锁超时非零退出无假成功 JSON" || fail "F2 锁超时假成功（rc=$RC）"
+# F3 (B-W2): merge 目标分支漂移守卫（上游树检出非目标分支→拒）
+F3U=$(TID "$(TITLE="漂移u" VERIFY=true PROJECT_DIR="$PROJ" WT=1 IDEM=f3u TC)"); W3U=$(ls -d "$T"/proj__wt-${F3U}__*)
+F3D=$(TID "$(TITLE="漂移d" VERIFY=true PROJECT_DIR="$PROJ" WT=1 IDEM=f3d TC)"); W3D=$(ls -d "$T"/proj__wt-${F3D}__*)
+AGORA_RUNTIME=echo AGORA_MAX_SPAWN=9 bash "$AGORA_HOME/scripts/dispatch.sh" --actor tester@proj --project "$PROJ" --task "$F3D" --dispatcher-task "$F3U" >/dev/null 2>&1
+echo x > "$W3D/xf"; git -C "$W3D" add -A; git -C "$W3D" -c user.name=t -c user.email=t@l commit -qm x
+git -C "$W3D" rebase -q "wt/$F3U" 2>/dev/null; DC3=$(git -C "$W3D" rev-parse HEAD)
+git -C "$W3U" checkout -qb side-branch 2>/dev/null   # 上游树检出他支
+OUT=$(bash "$AGORA_HOME/scripts/merge.sh" --actor tester@proj --task "$F3D" 2>&1)
+echo "$OUT" | grep -q TARGET_DETACHED && ok "F3 目标分支漂移被拒" || fail "F3 漂移未拒（$OUT）"
+git -C "$W3U" checkout -q "wt/$F3U" 2>/dev/null; git -C "$W3U" branch -qD side-branch 2>/dev/null
+# F4 (B-W5): 配额僵尸出集——last=diagnosed 的 dispatched 不占额
+Z1=$(TID "$(TITLE="僵1" VERIFY=true PROJECT_DIR="$PROJ" TC)"); Z2=$(TID "$(TITLE="僵2" VERIFY=true PROJECT_DIR="$PROJ" TC)")
+Z3=$(TID "$(TITLE="僵3" VERIFY=true PROJECT_DIR="$PROJ" TC)"); Z4=$(TID "$(TITLE="僵4" VERIFY=true PROJECT_DIR="$PROJ" TC)")
+for z in Z1 Z2 Z3; do
+  POST tester@proj --event dispatched --task "${!z}" --target "$PROJ" --child tester --run "raw/dispatches/d-z$z.log" >/dev/null
+  POST tester@proj --event diagnosed --task "${!z}" --conclusion "秒死占位测试" >/dev/null
+done
+AGORA_RUNTIME=echo AGORA_MAX_SPAWN=3 bash "$AGORA_HOME/scripts/dispatch.sh" --actor tester@proj --project "$PROJ" --task "$Z4" 2>/dev/null | grep -q '"mode":"spawned"' \
+  && ok "F4 last=diagnosed 出集（3 僵尸后第 4 派放行）" || fail "F4 配额僵尸 wedge"
+# F5 (A-W1): dispatcher_task 机械推导（未传时取 actor 最近 claimed 无终态任务）
+C5=$(TID "$(TITLE="推导源" VERIFY=true PROJECT_DIR="$PROJ" TC)")
+POST tester@proj --event claimed --task "$C5" >/dev/null
+D5=$(TID "$(TITLE="推导目标" VERIFY=true PROJECT_DIR="$PROJ" TC)")
+AGORA_RUNTIME=echo AGORA_MAX_SPAWN=9 bash "$AGORA_HOME/scripts/dispatch.sh" --actor tester@proj --project "$PROJ" --task "$D5" >/dev/null 2>&1
+cat "$AGORA_HOME"/log/*/*.md | grep -E "(^|[|] )task:$D5( |$)" | grep event:dispatched | grep -q "dispatcher_task:$C5" \
+  && ok "F5 dispatcher_task 机械推导落账" || fail "F5 推导缺失"
+# F6 (A-W2): done-unmerged diagnosed 必 mention 派单方（跑一轮 MERGE_WAIT=0 产生诊断）
+AGORA_MERGE_WAIT_MIN=0 AGORA_ORPHAN_MIN=9999 AGORA_WT_GRACE_MIN=9999 AGORA_DISPATCH_TIMEOUT=9999 AGORA_MAX_SPAWN=9 AGORA_RUNTIME=echo \
+  bash "$AGORA_HOME/scripts/poll.sh" >/dev/null 2>&1
+LEV "$F1" diagnosed | grep "未合并" | tail -1 | grep -q "mention:tester" \
+  && ok "F6 done-unmerged diagnosed 带派单方 mention" || fail "F6 diagnosed 无 mention"
+# F7 (C-W2): merged 机械票——非 merge.sh 直 post 拒
+P7=$(TID "$(TITLE="票" VERIFY=true PROJECT_DIR="$PROJ" TC)")
+POST tester@proj --event merged --task "$P7" --commit "$(git -C "$PROJ" rev-parse HEAD)" --branch "$(git -C "$PROJ" symbolic-ref --short HEAD)" >/dev/null 2>&1 \
+  && fail "F7 无票直 post merged 被拒" || ok "F7 无票直 post merged 被拒"
+# F8 (B-M2): merged 落账含 branch 字段（走 merge.sh 正常路径自建现场）
+F8T=$(TID "$(TITLE="branch落账" VERIFY=true PROJECT_DIR="$PROJ" WT=1 IDEM=f8 TC)")
+W8=$(ls -d "$T"/proj__wt-${F8T}__*)
+echo b > "$W8/bf"; git -C "$W8" add -A; git -C "$W8" -c user.name=t -c user.email=t@l commit -qm b
+bash "$AGORA_HOME/scripts/merge.sh" --actor tester@proj --task "$F8T" >/dev/null 2>&1
+cat "$AGORA_HOME"/log/*/*.md | grep -E "(^|[|] )task:$F8T( |$)" | grep event:merged | grep -q "branch:" \
+  && ok "F8 merged 落账含 branch" || fail "F8 merged 无 branch 字段"
+# F9 (S3): merge.sh wt_host 异机守卫
+F9T=$(TID "$(TITLE="异机合并" VERIFY=true PROJECT_DIR="$PROJ" WT=1 IDEM=f9 TC)"); W9=$(ls -d "$T"/proj__wt-${F9T}__*)
+echo y > "$W9/yf"; git -C "$W9" add -A; git -C "$W9" -c user.name=t -c user.email=t@l commit -qm y
+sed -i "s/^wt_host: .*/wt_host: other-99/" "$AGORA_HOME/wiki/tasks/$F9T.md"
+bash "$AGORA_HOME/scripts/merge.sh" --actor tester@proj --task "$F9T" 2>&1 | grep -q WT_HOST_MISMATCH && ok "F9 wt_host 异机合并被拒" || fail "F9 异机合并未拒"
+# F10 (B-W3): reset 并发守卫——verify 期间目标推进则不回滚
+F10=$(TID "$(TITLE="并发守卫" VERIFY='git commit --allow-empty -qm adv; false' PROJECT_DIR="$PROJ" WT=1 IDEM=f10 TC)")
+WA=$(ls -d "$T"/proj__wt-${F10}__*)
+echo c > "$WA/cf"; git -C "$WA" add -A; git -C "$WA" -c user.name=t -c user.email=t@l commit -qm c
+PRE10=$(git -C "$PROJ" rev-parse HEAD)
+OUT=$(bash "$AGORA_HOME/scripts/merge.sh" --actor tester@proj --task "$F10" 2>&1)
+[ "$(git -C "$PROJ" rev-parse HEAD)" != "$PRE10" ] && ok "F10 verify 窗口并发推进不被 reset 吞" || fail "F10 并发提交被 reset 吞"
+git -C "$PROJ" reset -q --hard "$PRE10"   # 测试现场复位
+# F11 (M5): poll 重派上游时透传其原链 dispatcher_task
+F11U=$(TID "$(TITLE="透传u" VERIFY=true PROJECT_DIR="$PROJ" WT=1 IDEM=f11u TC)")
+F11P=$(TID "$(TITLE="透传p" VERIFY=true PROJECT_DIR="$PROJ" TC)")   # u 的上游（pp）
+AGORA_RUNTIME=echo AGORA_MAX_SPAWN=9 bash "$AGORA_HOME/scripts/dispatch.sh" --actor tester@proj --project "$PROJ" --task "$F11U" --dispatcher-task "$F11P" >/dev/null 2>&1
+POST tester@proj --event claimed --task "$F11U" >/dev/null
+F11D=$(TID "$(TITLE="透传d" VERIFY=true PROJECT_DIR="$PROJ" WT=1 IDEM=f11d TC)")
+AGORA_RUNTIME=echo AGORA_MAX_SPAWN=9 bash "$AGORA_HOME/scripts/dispatch.sh" --actor tester@proj --project "$PROJ" --task "$F11D" --dispatcher-task "$F11U" >/dev/null 2>&1
+WD11=$(ls -d "$T"/proj__wt-${F11D}__*); echo t > "$WD11/tf"; git -C "$WD11" add -A; git -C "$WD11" -c user.name=t -c user.email=t@l commit -qm t
+POST tester@proj --event claimed --task "$F11D" >/dev/null
+POST tester@proj --event done --task "$F11D" --commit HEAD --evidence ok >/dev/null
+AGORA_MERGE_WAIT_MIN=0 AGORA_ORPHAN_MIN=9999 AGORA_WT_GRACE_MIN=9999 AGORA_DISPATCH_TIMEOUT=9999 AGORA_MAX_SPAWN=9 AGORA_RUNTIME=echo \
+  bash "$AGORA_HOME/scripts/poll.sh" >/dev/null 2>&1
+cat "$AGORA_HOME"/log/*/*.md | grep -E "(^|[|] )task:$F11U( |$)" | grep event:dispatched | tail -1 | grep -q "dispatcher_task:$F11P" \
+  && ok "F11 poll 重派透传原链 dispatcher_task" || fail "F11 重派链断裂"
 
 echo
 echo "===== 结果: $PASS 通过, $FAIL 失败 ====="

@@ -416,6 +416,12 @@ cron/systemd 定时调用的单次执行脚本（非守护进程），补全"事
 - **唤醒**：sync → 本机实体（名册 dirs 在本机存在，目录即归属）收件箱新邮件 → 任务仍待认领（在 board/todo.md）→ 本机 dispatch 拉起。`can_spawn=false` 或 `AGORA_POLL_SPAWN=0` 只报告（held）。邮件水位存 `.git/poll-state.json`（本机文件，不进同步）。
 - **看门狗**（CONVENTIONS §4）：in-progress 任务 20min（`AGORA_POLL_WARN_MIN`）无新事件 → 可疑报告；40min（`AGORA_POLL_CRIT_MIN`）→ 派生 `diagnosed` 事件并 mention 认领者（actor=`watchdog@<主机名>`）。**活性以本机观察为准**（v1.15）：poll-state.json 的 `_activity` 表记"本机首次观察到该任务当前最后事件的时刻"，事件指纹变化即归零——不解析事件 `ts`，对跨机时钟漂移免疫。
 - **升级阶梯**（v1.17）：阶梯计数 `wn` = 该任务**尾部连续看门狗诊断条数**，从账本推导（任何真实活动即归零），跨机一致、无状态。`wn` 达 `AGORA_WATCHDOG_ESCALATE_AFTER`（默认 3）→ 改发 `escalated` 并 mention 认领者 + dispatcher；再之后若 `AGORA_WATCHDOG_AUTO_REOPEN=1`（默认关）→ `reopened` 回池（宣言 §5.3 的 watchdog 特许），否则保持安静不刷屏。**跨机撞窗守卫**：发诊断/升级前先 `sync pre` 再见一次账本，任务有新事件（他机看门狗或认领者已处理）则采信复位，不重复落账。`.live` 滞留超 `AGORA_DISPATCH_TIMEOUT`（30min）：回溯 `dispatched` 事件找到派单方与任务，任务仍在进行则 `diagnosed` 并 mention 派单方（每个 dispatch 只提醒一次，记录于 poll-state.json `_live_notified`）。
+- **v1.32 新档（全量委托 L1）**：
+  - **done-unmerged 恢复性重派档**：wt 任务 done（状态机 `done_open`：done 置位，merged/cancelled/reopened 清位——diagnosed/blocked 不打断跟踪）且超 `AGORA_MERGE_WAIT_MIN`（默认 15min）无 merged → `diagnosed`（mention 派单方，未派发过则任务最后 actor）＋**恢复性重派上游 dispatcher**（dispatched 的 `dispatcher_task` 指向的任务，续跑 BOOT：history 自查→评审 diff→merge.sh；透传上游原链 `dispatcher_task`）；无上游则仅诊断通知。累计 `AGORA_REDISPATCH_MAX`（默认 3）次后第 4 次 `escalated` mention 派单方＋conclusion @operator——有界自动恢复终点交人。
+  - **孤儿 dispatched 档**（FMEA B3）：dispatched 落账但 run log 缺失（spawn 未执行）且无 diagnosed、超 `AGORA_ORPHAN_MIN`（默认 10min）→ `diagnosed` → 重派（同上限）。
+  - **watchdog ×4 豁免**：任务被「活 dispatched 的 `dispatcher_task`」指向，或为 in-progress 任务的 parent/deps 上级 → CRIT 阈值 ×4（链上等待不算 stalled）。
+  - **wt 树 GC**：任务页有 wt_dir 且目录在——`merged`/`cancelled` 终态（**done 单独不足**：未合并的树是唯一工作现场）＋超 `AGORA_WT_GRACE_MIN`（默认 60min）宽限＋树 clean → `worktree remove`＋分支删；dirty 或宽限内只报告。任务页缺失的树 doctor 报告不删（B4）。
+  - **wt_host 拾取限定**：mention 拾取遇任务页 `wt_host` ≠ 本机 → 跳过并报告（跨机 wt 任务不本地拾取）。
 - **本地保洁**（v1.15）：`sessions.map` 本机条目超 `AGORA_SESSION_TTL_H`（默认 24h，0=关闭）剔除（他机条目由它自己的 poll 清，本机不越权）；inbox 超 `AGORA_INBOX_ARCHIVE_DAYS`（默认 90 天，0=关闭）的邮件移入 `inbox/archive/<实体>/`。保洁变更 best-effort 提交并推送，失败不阻塞下轮。
 - **复查惯例**：poll 拉起的会话 prompt 内置"开工前 agora_sync + 复查 owner，已被认领即 retired 收工"——跨机 claim 撞车的退避点从"下一次碰巧读"提前到"第一行代码之前"。
 - 防重叠：`.git/poll.lock` 非阻塞 flock，上一轮未结束本轮安静退出。
