@@ -34,7 +34,8 @@ grep -qE '^can_spawn:[[:space:]]*true' "$ENTITY" || fail SPAWN_FORBIDDEN "$NAME 
 # 账本口径：深度=dispatched 事件 dispatcher_task 链逐跳计数（任务最新 dispatched 为准，环检测兜底）；
 #          配额活跃=dispatched 集 ∩ 无终态事件（done/merged/cancelled 任一即出集）
 LEDGER_NEXT=1; LEDGER_ME=0; LEDGER_TOT=0; LDT=""
-if read -r LN LME LTOT LDT <<<"$(python3 - "$AGORA_HOME" "${DTASK:-}" "$ACTOR" <<'PYEOF'
+ledger_scan() {
+python3 - "$AGORA_HOME" "${DTASK:-}" "$ACTOR" <<'PYEOF'
 import glob, os, re, sys
 home = sys.argv[1]; dtask = sys.argv[2] if len(sys.argv) > 2 and sys.argv[2] else ""
 actor = sys.argv[3] if len(sys.argv) > 3 else ""
@@ -64,10 +65,11 @@ for f in sorted((glob.glob(f"{home}/log/*/*.md") + glob.glob(f"{home}/log/*/.*.m
             last_alive[t] = False   # 子会话已死（秒死/stale）——配额出集，占位释放
         elif "event:progress" in line or "event:plan" in line:
             last_alive[t] = True
-def depth(t, seen):
+def depth(t, seen, budget=100):   # 链长上限 100：账本他机可写不可信，超预算返回超深值按 DEPTH_EXCEEDED 拒（同 poll.sh 防递归爆栈）
+    if budget <= 0: return 100
     if t not in disp or t in seen: return 0
     d = disp[t]
-    return 1 if not d else 1 + depth(d, seen | {t})
+    return 1 if not d else 1 + depth(d, seen | {t}, budget - 1)
 # dispatcher_task 机械推导（终审 A-W1）：未显式传入时取本 actor 最近 claimed 且无终态的任务
 if not dtask and actor:
     cands = [t for t, a in claimed.items() if a == actor]
@@ -90,7 +92,8 @@ me = max(by_actor.get(actor, 0), live_by.get(actor, 0))
 total = max(live_tot, sum(by_actor.values()))
 print(nxt, me, total, dtask)
 PYEOF
-)"; then [ -n "$LN" ] && LEDGER_NEXT=$LN; LEDGER_ME=${LME:-0}; LEDGER_TOT=${LTOT:-0}
+}
+if read -r LN LME LTOT LDT <<<"$(ledger_scan)"; then [ -n "$LN" ] && LEDGER_NEXT=$LN; LEDGER_ME=${LME:-0}; LEDGER_TOT=${LTOT:-0}
 else LEDGER_TOT=$(find "$AGORA_HOME/raw/dispatches" -name '*.live' 2>/dev/null | wc -l); fi   # 扫描失败退化：.live 总数兜底总量闸（分域漏检可容忍，总量不失守）
 # 推导回填（A-W1）：显式传入优先，机械推导兜底——两者都进 dispatched 落账
 [ -z "$DTASK" ] && [ -n "${LDT:-}" ] && [ "$LDT" != "None" ] && DTASK="$LDT"
@@ -226,10 +229,19 @@ fi
 [ -z "$SID" ] && SID="ses_$(head -c64 /dev/urandom | base64 | tr -dc 'a-zA-Z0-9' | head -c26)"
 PARGS=(--actor "$ACTOR" --project "$PROJNAME" --event dispatched --task "$TASK" --target "$PDIR" --child "$CHILD" --run "$LOG" --session "$SID")
 [[ -n "$DTASK" ]] && PARGS+=(--dispatcher-task "$DTASK")
+# 落账前保险丝复核（gt-2e4f TOCTOU 收口）：dispatch.lock 内重扫账本——检查与落账原子化，
+# 并发风暴下先到者占额、后到者 QUOTA 前置拒绝零残留；即落即放，不覆盖 spawn 验证窗
+exec 8>"$AGORA_HOME/.git/dispatch.lock"
+flock -w "${AGORA_LOCK_WAIT:-5}" 8 || fail QUOTA_LOCK "dispatch 锁超时（${AGORA_LOCK_WAIT:-5}s）；可安全重试" 3
+_LS2=$(ledger_scan || true)
+[ -n "$_LS2" ] || fail QUOTA_SCAN "锁内账本扫描失败（fail-closed，配额闸拒绝降级）；可安全重试" 3   # ocr-R0/A-F3：空输出若放行＝.live 恒 0 退化→TOCTOU 复辟；|| true 使崩溃场景也达 QUOTA_SCAN（set -e 否则先杀）
+read -r _LN2 _ME2 _TOT2 _LDT2 <<<"$_LS2"
+quota_check "${_ME2:-0}" "${_TOT2:-0}"   # 分域＋总量双闸复核（gt-8c5b 口径；.live 归属已并入扫描）
 POUT=$(bash "$AGORA_HOME/scripts/post.sh" "${PARGS[@]}" 2>&1) \
   || { printf '%s\n' "$POUT" >&2; fail LEDGER_FAILED "dispatched 落账失败（详情见 stderr 上一行）" 4; }
 DEDUP=$(echo "$POUT" | sed -n 's/.*"dedup":\(true\|false\).*/\1/p')
 case "$DEDUP" in true|false) ;; *) fail LEDGER_FAILED "post.sh 输出异常（无 dedup 键）: $POUT" 4;; esac
+exec 8>&-
 
 # 凭据预写（幂等重写）＋ spawn ＋ 验证窗 ＋ 有界重试（一次）
 # --auto：无人值守权限放行（未显式 deny 即放行）；子会话 cwd 由 cd 提供（--dir 随 opencode 2.0.32 移除，2026-10-20 实证 exit 1）；AGORA_RUNTIME 覆写为非 opencode 时旗标兼容性自担

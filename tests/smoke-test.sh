@@ -2620,6 +2620,165 @@ find "$AGORA_HOME/raw/dispatches" -name '*.live' | grep -q . \
   && fail "K5 API 返回后 live 残留" || ok "K5 API 返回后 .live 零残留"
 
 echo
+echo "===== 并发九派风暴测试场（B批 gt-2e4f）：9 路并发 dispatch——账本写完整性＋配额保险丝 TOCTOU ====="
+# 独立夹具 AGORA_HOME×2（mktemp 隔离，不触主测试账本）；AGORA_RUNTIME=true stub 秒退零会话
+# 修复前实证（最小复现）：配额检查在锁外 → MAX_SPAWN=3 下 9/9 全放行（TOCTOU）；修复=落账前 dispatch.lock 锁内复核
+SREPO="$T/storm-repo"; mkdir -p "$SREPO"
+(cd "$SREPO" && git init -q . && echo FIXED > app.txt && git add -A && git -c user.name=t -c user.email=t@local commit -qm init)
+storm_fixture() {  # storm_fixture <home>：init＋entity＋9 任务页（verify=true），任务 id 逐行写 <home>.tasks
+  local _h="$1"
+  AGORA_HOME="$_h" bash "$PKG/scripts/init.sh" >/dev/null 2>&1
+  mkdir -p "$_h/wiki/entities"
+  printf -- '---\nname: storm\ndirs:\n  - %s\ncan_spawn: true\n---\n' "$SREPO" > "$_h/wiki/entities/storm.md"
+  (cd "$_h" && git add -A && AGORA_MECHANICAL=1 git commit -qm "entities 并发九派" >/dev/null)
+  : > "$_h.tasks"
+  local _i
+  for _i in 1 2 3 4 5 6 7 8 9; do
+    local _out _tid
+    _out=$(AGORA_HOME="$_h" TITLE="并发九派夹具任务$_i 号" VERIFY=true PROJECT_DIR="$SREPO" bash "$_h/scripts/task-create.sh" 2>&1)
+    _tid=$(echo "$_out" | sed -n 's/.*"task":"\(gt-[0-9a-f]*\)".*/\1/p')
+    [ -n "$_tid" ] || { fail "并发九派夹具任务页 $_i（$_out）"; return 1; }
+    echo "$_tid" >> "$_h.tasks"
+  done
+}
+STORM_PIDS=()
+SDSP() {  # SDSP <home> <max_spawn> <task> <out 前缀>：后台发射一路 dispatch，stdout/stderr/rc 分文件收
+  local _h="$1" _m="$2" _t="$3" _o="$4"
+  (
+    export AGORA_HOME="$_h" AGORA_RUNTIME=true AGORA_MAX_SPAWN="$_m"
+    bash "$_h/scripts/dispatch.sh" --actor storm@stormrepo --project "$SREPO" --task "$_t" \
+      > "$_o.out" 2> "$_o.err"
+    echo $? > "$_o.rc"
+  ) &
+  STORM_PIDS+=($!)
+}
+STORM_WAIT() { wait "${STORM_PIDS[@]}"; STORM_PIDS=(); }
+
+# 场景 A（配额内）：MAX_SPAWN=9，9 路零错峰并发——全放行、账本完整、run log 就位 .live 自清
+SHOME_A="$T/storm-a/agora"; mkdir -p "$SHOME_A"
+storm_fixture "$SHOME_A"
+_i=0
+while read -r _t; do _i=$((_i+1)); SDSP "$SHOME_A" 9 "$_t" "$T/storm-a/a$_i"; done < "$SHOME_A.tasks"
+STORM_WAIT
+N=$(grep -l '"mode":"spawned"' "$T/storm-a"/a*.out 2>/dev/null | wc -l)
+[ "$N" -eq 9 ] && ok "并发九派A：9/9 spawned（配额内零错峰全放行）" || fail "并发九派A spawned=$N want 9"
+N=$(grep -h 'event:dispatched' "$SHOME_A"/log/*/*.md 2>/dev/null | wc -l)
+[ "$N" -eq 9 ] && ok "并发九派A：9 条 dispatched 全落账（零丢行）" || fail "并发九派A dispatched=$N want 9"
+N=$(grep -h 'event:dispatched' "$SHOME_A"/log/*/*.md | sed -n 's/.*run:raw\/dispatches\/\(d-[0-9a-f]*\)\.log.*/\1/p' | sort -u | wc -l)
+[ "$N" -eq 9 ] && ok "并发九派A：dispatch_id（run path）互异" || fail "并发九派A dispatch_id 去重=$N want 9"
+python3 - "$SHOME_A" <<'PYEOF' && ok "并发九派A：账本分片全量可解析（iter_events 无残缺、seq 连续、idem 无重）" || fail "并发九派A 账本完整性"
+import sys, glob
+sys.path.insert(0, sys.argv[1] + "/scripts")
+import agora_lib
+home = sys.argv[1]
+raw = 0
+for pat in ("/log/*/*.md", "/log/*/.*.md"):
+    for f in glob.glob(home + pat):
+        with open(f, encoding="utf-8", errors="replace") as fh:
+            raw += sum(1 for line in fh if line.startswith("- seq:"))
+evs = list(agora_lib.iter_events(home))
+assert raw == len(evs), f"parse 残缺: raw={raw} parsed={len(evs)}"
+seqs = [e[2]["seq"] for e in evs]
+assert seqs == list(range(1, len(seqs) + 1)), f"seq 不连续: {seqs}"
+idems = [e[2]["idem"] for e in evs]
+assert len(set(idems)) == len(idems), "idem 重复"
+assert sum(1 for e in evs if e[2]["event"] == "dispatched") == 9
+PYEOF
+N=$(ls "$SHOME_A"/raw/dispatches/*.log 2>/dev/null | wc -l)
+[ "$N" -eq 9 ] && ok "并发九派A：9 个 run log 就位" || fail "并发九派A run log=$N want 9"
+_LIVEA=$(find "$SHOME_A/raw/dispatches" -name '*.live' 2>/dev/null | wc -l)
+_BADLOG=0
+for _f in "$SHOME_A"/raw/dispatches/*.log; do grep -q '^EXIT:1=0$' "$_f" || _BADLOG=$((_BADLOG+1)); done
+[ "$_LIVEA" -eq 0 ] && [ "$_BADLOG" -eq 0 ] \
+  && ok "并发九派A：stub 秒退 EXIT:1=0×9，.live 自清归零" || fail "并发九派A .live=$_LIVEA 坏log=$_BADLOG"
+
+# 场景 B（配额满，保险丝）：MAX_SPAWN=3 同构 9 路并发——恰 3 spawned、6 QUOTA_EXCEEDED 零残留
+SHOME_B="$T/storm-b/agora"; mkdir -p "$SHOME_B"
+storm_fixture "$SHOME_B"
+_i=0
+while read -r _t; do _i=$((_i+1)); SDSP "$SHOME_B" 3 "$_t" "$T/storm-b/b$_i"; done < "$SHOME_B.tasks"
+STORM_WAIT
+N=$(grep -l '"mode":"spawned"' "$T/storm-b"/b*.out 2>/dev/null | wc -l)
+[ "$N" -eq 3 ] && ok "并发九派B：恰 3 spawned（锁内复核先到者占额）" || fail "并发九派B spawned=$N want 3"
+N=$(grep -l QUOTA_EXCEEDED "$T/storm-b"/b*.err 2>/dev/null | wc -l)
+[ "$N" -eq 6 ] && ok "并发九派B：6 个 QUOTA_EXCEEDED（保险丝触发）" || fail "并发九派B QUOTA=$N want 6"
+python3 - "$T/storm-b" <<'PYEOF' && ok "并发九派B：被拒 stderr 恒合法 JSON 且 code=QUOTA_EXCEEDED、rc=8；放行 rc=0" || fail "并发九派B JSON/rc 契约"
+import glob, json, sys
+d = sys.argv[1]
+quota = 0; okrc = 0
+for f in sorted(glob.glob(d + "/*.err")):
+    with open(f, encoding="utf-8") as fh:
+        lines = [l.strip() for l in fh if l.strip()]
+    if not lines: continue
+    payload = json.loads(lines[-1])          # fail() 错误通道恒 JSON
+    assert payload["code"] == "QUOTA_EXCEEDED", payload
+    quota += 1
+for f in sorted(glob.glob(d + "/*.rc")):
+    rc = open(f).read().strip()
+    if rc == "8": okrc += 1
+assert quota == 6, f"QUOTA JSON={quota}"
+assert okrc == 6, f"rc8={okrc}"
+assert sorted(open(f).read().strip() for f in glob.glob(d + "/*.rc")) == ["0"]*3 + ["8"]*6
+PYEOF
+_BADRJ=0
+_i=0
+while read -r _t; do
+  _i=$((_i+1))
+  if ! grep -q '"mode":"spawned"' "$T/storm-b/b$_i.out" 2>/dev/null; then
+    grep -h "task:$_t" "$SHOME_B"/log/*/*.md 2>/dev/null | grep -q 'event:dispatched' && _BADRJ=$((_BADRJ+1))
+  fi
+done < "$SHOME_B.tasks"
+[ "$_BADRJ" -eq 0 ] && ok "并发九派B：被拒 6 任务零 dispatched 落账（QUOTA 前置拒绝零残留）" || fail "并发九派B 被拒落账=$_BADRJ"
+N=$(ls "$SHOME_B"/raw/dispatches/*.log 2>/dev/null | wc -l)
+_LIVEB=$(find "$SHOME_B/raw/dispatches" -name '*.live' 2>/dev/null | wc -l)
+[ "$N" -eq 3 ] && [ "$_LIVEB" -eq 0 ] \
+  && ok "并发九派B：仅 3 个 run log、.live 归零（被拒者零 log 零 live）" || fail "并发九派B log=$N live=$_LIVEB"
+# 槽位释放语义：锁内 3 额全占（stub 秒退但账本口径仍在飞）→ 重派第 7 个拒；其一 done 出集后同任务放行
+_REJ=""; _i=0
+while read -r _t; do
+  _i=$((_i+1))
+  if [ -z "$_REJ" ] && ! grep -q '"mode":"spawned"' "$T/storm-b/b$_i.out" 2>/dev/null; then _REJ="$_t"; fi
+done < "$SHOME_B.tasks"
+_SPA=""; _i=0
+while read -r _t; do
+  _i=$((_i+1))
+  if [ -z "$_SPA" ] && grep -q '"mode":"spawned"' "$T/storm-b/b$_i.out" 2>/dev/null; then _SPA="$_t"; fi
+done < "$SHOME_B.tasks"
+SPOST() { AGORA_HOME="$SHOME_B" bash "$SHOME_B/scripts/post.sh" --actor storm@stormrepo --project "$(basename "$SREPO")" "$@"; }
+OUT=$(AGORA_HOME="$SHOME_B" AGORA_RUNTIME=true AGORA_MAX_SPAWN=3 \
+  bash "$SHOME_B/scripts/dispatch.sh" --actor storm@stormrepo --project "$SREPO" --task "$_REJ" 2>&1)
+echo "$OUT" | grep -q QUOTA_EXCEEDED \
+  && ok "并发九派B：槽位未释放时重派第 7 个拒（账本口径占额，零 .live 也计数）" || fail "并发九派B 重派第7未拒（$OUT）"
+SPOST --event claimed --task "$_SPA" >/dev/null
+SPOST --event done --task "$_SPA" --commit HEAD --evidence "并发九派槽位释放" >/dev/null \
+  || fail "并发九派B 夹具 done 失败"
+OUT=$(AGORA_HOME="$SHOME_B" AGORA_RUNTIME=true AGORA_MAX_SPAWN=3 \
+  bash "$SHOME_B/scripts/dispatch.sh" --actor storm@stormrepo --project "$SREPO" --task "$_REJ" 2>&1)
+echo "$OUT" | grep -q '"mode":"spawned"' \
+  && ok "并发九派B：done 出集后重派第 7 个成功（槽位释放语义）" || fail "并发九派B 重派第7未放行（$OUT）"
+# 锁超时契约（ocr-R0）：外部占住 dispatch.lock → AGORA_LOCK_WAIT=1 快速失败 rc3＋JSON QUOTA_LOCK＋零落账零 spawn
+_TL=$(AGORA_HOME="$SHOME_B" TITLE="并发九派锁超时夹具任务" VERIFY=true PROJECT_DIR="$SREPO" bash "$SHOME_B/scripts/task-create.sh" \
+  | sed -n 's/.*"task":"\(gt-[0-9a-f]*\)".*/\1/p')
+(
+  flock -w 30 7 && sleep 5      # 模拟在飞 dispatch 持有 dispatch.lock
+) 7>"$SHOME_B/.git/dispatch.lock" &
+_LOCKPID=$!
+sleep 0.5                        # 保证持锁方先赢
+OUT=$(AGORA_HOME="$SHOME_B" AGORA_RUNTIME=true AGORA_MAX_SPAWN=99 AGORA_LOCK_WAIT=1 \
+  bash "$SHOME_B/scripts/dispatch.sh" --actor storm@stormrepo --project "$SREPO" --task "$_TL" 2>&1); _RC=$?
+wait "$_LOCKPID"
+echo "$OUT" | grep -q QUOTA_LOCK && [ "$_RC" -eq 3 ] \
+  && [ -z "$(grep -h "task:$_TL" "$SHOME_B"/log/*/*.md 2>/dev/null)" ] \
+  && [ "$(ls "$SHOME_B"/raw/dispatches/*.log 2>/dev/null | wc -l)" -eq 4 ] \
+  && ok "并发九派B：锁超时 fail-fast（rc3＋QUOTA_LOCK＋零落账零 spawn）" || fail "并发九派B 锁超时（rc=$_RC out=$OUT）"
+
+# 风暴后账本健康：两夹具 AGORA_HOME 各跑 doctor——seq 连续、idem 无重复、flock 正常（ALL GREEN 即内检全过）
+OUT=$(AGORA_HOME="$SHOME_A" bash "$SHOME_A/scripts/doctor.sh" 2>&1)
+echo "$OUT" | grep -q "ALL GREEN" && ok "并发九派doctor：场景A 夹具 ALL GREEN" || { fail "并发九派doctor A"; echo "$OUT"; }
+OUT=$(AGORA_HOME="$SHOME_B" bash "$SHOME_B/scripts/doctor.sh" 2>&1)
+echo "$OUT" | grep -q "ALL GREEN" && ok "并发九派doctor：场景B 夹具（含 done 终态）ALL GREEN" || { fail "并发九派doctor B"; echo "$OUT"; }
+
+echo
 echo "===== 结果: $PASS 通过, $FAIL 失败 ====="
 
 wait_live_clear || true   # gt-2153：rm 夹具前等派发子会话退场（清空或超时再删）
