@@ -107,15 +107,17 @@ KINFO=""
 if [[ "$KILL" == 1 ]]; then
   KRUN=$(python3 -c 'import json,sys; print(json.load(sys.stdin).get("run",""))' <<<"$EVAL")
   KSID=$(python3 -c 'import json,sys; print(json.load(sys.stdin).get("session",""))' <<<"$EVAL")
-  if [[ -n "$KSID" && "$RUNTIME" == opencode && -f "$AGORA_HOME/scripts/runtime/opencode.sh" ]]; then
+  if [[ -n "$KSID" && "$KSID" =~ ^[-A-Za-z0-9_]+$ && "$RUNTIME" == opencode && -f "$AGORA_HOME/scripts/runtime/opencode.sh" ]]; then
     timeout 5 bash "$AGORA_HOME/scripts/runtime/opencode.sh" abort "$KSID" >/dev/null 2>&1 || true
   fi
   LIVEF=""
   [[ -n "$KRUN" ]] && LIVEF="$AGORA_HOME/$KRUN.live"
-  if [[ -z "$LIVEF" || ! -f "$LIVEF" ]]; then
+  if [[ ! "$KRUN" =~ ^raw/dispatches/d-[0-9a-f]+\.log$ ]]; then   # 账本 run: 字段形状闸（防路径穿越 rm，终闸 C1）
+    KINFO="kill:no-live"
+  elif [[ -z "$LIVEF" || ! -f "$LIVEF" ]]; then
     KINFO="kill:no-live"
   else
-    PGID=$(head -1 "$LIVEF" 2>/dev/null | tr -d "[:space:]")
+    PGID=$(head -1 "$LIVEF" 2>/dev/null | tr -d "[:space:]" || true)   # || true：-f 与 head 之间 .live 被子进程删的竞态（终闸 B1），空值落 bad-pgid
     if [[ ! "$PGID" =~ ^[0-9]+$ ]]; then KINFO="kill:bad-pgid"
     elif [[ ! -d "/proc/$PGID" ]]; then KINFO="kill:dead-pgid"
     elif ! tr '\0' ' ' <"/proc/$PGID/cmdline" 2>/dev/null | grep -q "$TASK"; then
