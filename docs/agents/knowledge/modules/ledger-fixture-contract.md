@@ -5,7 +5,7 @@
 ## 契约
 1. **seq 按 (分片, actor) 从 1 连续**——doctor seq 对账判据 `sorted(seq)==range(1,N+1)`，手工夹具行全局编号（9001+）必红。既有词边界夹具 seq:901 之绿是位置侥幸（落在 doctor 段之后），不是规则例外。
 0a. **夹具 task id 必须 hex**——账本消费方一律有 `gt-[0-9a-f]+` 任务门（poll 扫描/统计/深度链），非 hex id（如 gt-nul1）被静默过滤，靶点断言假绿、靶点缺陷漏验（gt-abcd 轮 3 实证：NUL run 崩溃修复首测假绿）。
-2. **dispatched 夹具必须收终态**——spawn 配额是账本全局口径：`活跃＝dispatched∩无终态∩非僵尸 ≤ MAX_SPAWN(3)`。夹具留 N 个无终态 dispatched＝占满后续全部 spawn 断言（一次连锁 19 败，全看似与夹具无关）。补 `cancelled`（非 done，防污染 done/merged 统计）。
+2. **dispatched 夹具必须收终态**——spawn 配额是分域双闸口径（gt-8c5b）：本 actor 活跃（dispatched∩无终态∩非僵尸 按 actor 归组，与该 actor `.live` 计数取大）≤ `AGORA_MAX_SPAWN`(默认 30)，且全机所有 actor 活跃总和 ≤ `AGORA_MAX_SPAWN_GLOBAL`(默认 60)。夹具留 N 个无终态 dispatched＝占满本域后续全部 spawn 断言（一次连锁 19 败，全看似与夹具无关）。补 `cancelled`（非 done，防污染 done/merged 统计）。
 3. **夹具落位先于 doctor 段即入对账窗**——seq/idem/board 对账在 doctor.sh 扫全部 log 分片；新增夹具批要么满足判据，要么放在最后一个 doctor 断言之后。
 
 ## 排障

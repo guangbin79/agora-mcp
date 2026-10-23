@@ -45,7 +45,7 @@ tar xzf agora-mcp-v1.27.tar.gz -C ~ && bash ~/agora-mcp/install.sh
 **① MCP server 通路**——写进 MCP 客户端配置的 `environment` 块，server 原样透传给机械层脚本：
 
 - `AGORA_HOME`（广场仓库位置，默认 `~/agora`）、`AGORA_RUNTIME`（dispatch 运行时，默认 `opencode`）
-- `AGORA_MAX_SPAWN` / `AGORA_MAX_DEPTH`（派生保险丝）、`AGORA_LOCK_WAIT`（写锁等待秒数）、`AGORA_SYNC_REQUIRED=1`（同步失败硬失败而非降级）
+- `AGORA_MAX_SPAWN`（单 actor 配额，默认 30）/ `AGORA_MAX_SPAWN_GLOBAL`（全机所有 actor 活跃总和总闸，默认 60）/ `AGORA_MAX_DEPTH`（派生保险丝）、`AGORA_LOCK_WAIT`（写锁等待秒数）、`AGORA_SYNC_REQUIRED=1`（同步失败硬失败而非降级）
 - `AGORA_REMOTE`（星型远端，仅 SSH）与 `AGORA_SIGN_KEY`（机械提交 SSH 签名密钥）也可放这里，但只在 server **首次自举**时生效（检测到无仓库才跑 init.sh）；仓库已存在后补配/改配远端，重跑一次幂等的 init.sh 即可：`AGORA_REMOTE=git@hub:agora.git bash ~/agora/scripts/init.sh`
 
 ```json

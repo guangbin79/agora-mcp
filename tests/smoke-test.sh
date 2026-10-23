@@ -1376,6 +1376,14 @@ DSPB --task "$QB1" 2>/dev/null | grep -q '"mode":"spawned"' && ok "分域：A �
 AGORA_MAX_SPAWN_GLOBAL=6 DSPB --task "$QB2" 2>&1 | grep -q "总量满" && ok "总量闸：A5+B1=6 各域未超总和超，拒（总量措辞）" || fail "总量闸：总和超应拒（总量措辞）"
 for _t in "$Q1" "$Q2" "$Q3" "$Q4" "$Q5"; do POST tester@proj --event cancelled --task "$_t" >/dev/null 2>&1; done
 POST tester2@proj --event cancelled --task "$QB1" >/dev/null 2>&1
+# .live→actor 归属回归（评审 O2）：账本侧出集（diagnosed）、仅留名下 .live，域闸仍触发——覆盖 runs/live_by/relpath 归属路径
+LV="raw/dispatches/d-11fea001.log"
+POST tester@proj --event dispatched --task "$Q6" --target "$PROJ" --child tester --run "$LV" >/dev/null 2>&1
+POST tester@proj --event diagnosed --task "$Q6" --conclusion stub >/dev/null 2>&1   # 出账本活跃集，仅余 .live
+touch "$AGORA_HOME/$LV.live"
+AGORA_RUNTIME=echo AGORA_MAX_SPAWN=1 bash "$AGORA_HOME/scripts/dispatch.sh" --actor tester@proj --project "$PROJ" --task "$Q6" 2>&1 | grep -q "分域满" \
+  && ok ".live 分域归属：仅名下 .live 也计域值" || fail ".live 分域归属未计入域值"
+rm -f "$AGORA_HOME/$LV.live"
 
 echo "===== dispatch 发射加固＋凭据预写＋wt 免在场优先（全量委托 L1 Task4） ====="
 rm -f "$AGORA_HOME/scripts/sessions.map"

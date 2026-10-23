@@ -52,7 +52,7 @@ for f in sorted((glob.glob(f"{home}/log/*/*.md") + glob.glob(f"{home}/log/*/.*.m
             d = re.search(r"dispatcher_task:(gt-[0-9a-f]{4,})", line)
             disp[t] = d.group(1) if d else ""   # 文件序+行序扫描，后见覆盖=最新派发
             am = re.search(r"\| actor:(\S+)", line); dact[t] = am.group(1) if am else ""
-            rm_ = re.search(r"[ |]run:(\S+)", line)
+            rm_ = re.search(r"\| run:(\S+)", line)
             if rm_: runs[rm_.group(1)] = dact[t]   # .live→actor 归属（分域 .live 计数用）
             last_alive[t] = True
         elif "event:claimed" in line:
@@ -93,8 +93,9 @@ total = max(live_tot, sum(by_actor.values()))
 print(nxt, me, total, dtask)
 PYEOF
 }
-if read -r LN LME LTOT LDT <<<"$(ledger_scan)"; then [ -n "$LN" ] && LEDGER_NEXT=$LN; LEDGER_ME=${LME:-0}; LEDGER_TOT=${LTOT:-0}
-else LEDGER_TOT=$(find "$AGORA_HOME/raw/dispatches" -name '*.live' 2>/dev/null | wc -l); fi   # 扫描失败退化：.live 总数兜底总量闸（分域漏检可容忍，总量不失守）
+SCAN_OUT="$(ledger_scan)" || SCAN_OUT=""   # 扫描崩溃不致命：空输出落退化分支（评审 B1：here-string 空 stdout read 仍 rc=0，必须显式判空）
+if [ -n "$SCAN_OUT" ] && read -r LN LME LTOT LDT <<<"$SCAN_OUT"; then [ -n "$LN" ] && LEDGER_NEXT=$LN; LEDGER_ME=${LME:-0}; LEDGER_TOT=${LTOT:-0}
+else LEDGER_TOT=$(find "$AGORA_HOME/raw/dispatches" -name '*.live' 2>/dev/null | wc -l) || LEDGER_TOT=0; fi   # 扫描失败/空输出退化：.live 总数兜底总量闸（分域漏检可容忍，总量不失守；|| 防 find 失败×pipefail 杀死 set -e）
 # 推导回填（A-W1）：显式传入优先，机械推导兜底——两者都进 dispatched 落账
 [ -z "$DTASK" ] && [ -n "${LDT:-}" ] && [ "$LDT" != "None" ] && DTASK="$LDT"
 DEPTH="${AGORA_DEPTH:-0}"; NEXT=$((DEPTH+1))
