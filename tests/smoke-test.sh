@@ -2452,6 +2452,12 @@ echo "$OUT" | grep -q "\"task\":\"$CA3\"" && echo "$OUT" | grep -qF "$CA2" \
 # ③ 已终态再取消拒
 CANCEL --actor borch@repa --task "$CA3" 2>/dev/null
 [[ $? -eq 4 ]] && ok "③ 已终态再取消拒（rc=4）" || fail "③ 终态拒"
+# ③b 行尾 task（bare cancelled 无 reason）也入终态重放——正则行尾锚回归（终闸 B 册）
+CB=$(TID "$(TITLE="cancel行尾终态够长" VERIFY=true PROJECT_DIR="$REPA" TC)")
+BDSP --actor borch@repa --project "$REPA" --task "$CB" >/dev/null 2>&1
+bash "$AGORA_HOME/scripts/post.sh" --actor borch@repa --project repa --event cancelled --task "$CB" >/dev/null
+CANCEL --actor borch@repa --task "$CB" 2>/dev/null
+[[ $? -eq 4 ]] && ok "③b 行尾 task 终态守卫（bare cancelled 拒双取消）" || fail "③b 行尾锚"
 # ④ MCP 双形态：agora_cancel 工具调用自动推导落账（十四工具注册断言在 heredoc 内）
 CA4=$(TID "$(TITLE="cancel MCP双形态用例" VERIFY=true PROJECT_DIR="$REPA" TC)")
 BDSP --actor borch@repa --project "$REPA" --task "$CA4" >/dev/null 2>&1
@@ -2469,6 +2475,10 @@ r = rpc("tools/call", {"name":"agora_cancel","arguments":{}}, 3)
 out = json.loads(r["result"]["content"][0]["text"])
 assert out.get("cancelled") and out.get("candidates"), out
 open(sys.argv[2], "w").write(out["task"])
+r = rpc("tools/call", {"name":"agora_cancel","arguments":{"task":123}}, 4)
+assert r["result"].get("isError"), r   # 非字符串参数→工具错误回包，不杀 server（终闸 B 册）
+r2 = rpc("tools/call", {"name":"agora_who","arguments":{}}, 5)
+assert "roster" in json.loads(r2["result"]["content"][0]["text"]), r2   # server 仍活
 p.stdin.close()
 PYEOF
 MCT=$(cat "$T/mcp_cancel_task" 2>/dev/null)
@@ -2500,6 +2510,24 @@ OUT=$(RDISP --actor bmid@repb)
 echo "$OUT" | grep -q '"mode":"spawned"' && echo "$OUT" | grep -qF "\"task\":\"$TC\"" \
   && [ -n "$(LEV "$TC" reopened)" ] \
   && ok "⑦b redispatch 省略 task 自动取最近 done-unmerged 回池" || fail "⑦b（$OUT）"
+# ⑦c 最近序 move-to-tail：重派后任务回推导尾部（dict 插入序＝最近派发序，终闸 B 册）
+CX1=$(TID "$(TITLE="cancel最近序移动一够长" VERIFY=true PROJECT_DIR="$REPA" TC)")
+BDSP --actor borch@repa --project "$REPA" --task "$CX1" >/dev/null 2>&1
+CX2=$(TID "$(TITLE="cancel最近序移动二够长" VERIFY=true PROJECT_DIR="$REPA" TC)")
+BDSP --actor borch@repa --project "$REPA" --task "$CX2" >/dev/null 2>&1
+sleep 1   # escalated 落 hx 分片，与 repa 分片 dispatched 错秒防跨分片同秒违序（G6 先例）
+POST watchdog@hx --event escalated --task "$CX1" --conclusion "recency 演练" >/dev/null
+ROUT=$(RDISP --actor borch@repa --task "$CX1" 2>&1)   # CX1 重派 → 应回到候选尾
+OUT=$(CANCEL --actor borch@repa)
+POS=$(python3 - "$OUT" "$CX1" "$CX2" <<'PYEOF'
+import json, sys
+d = json.loads(sys.argv[1]); c = d.get("candidates", [])
+print((c.index(sys.argv[2]) if sys.argv[2] in c else -1), (c.index(sys.argv[3]) if sys.argv[3] in c else -1))
+PYEOF
+)
+set -- $POS
+[[ "$1" -ge 0 && "$2" -ge 0 && "$1" -gt "$2" ]] \
+  && ok "⑦c 重派任务移动到最近（CX1 序位压 CX2，move-to-tail）" || fail "⑦c 最近序（pos=$POS CX1=$CX1 CX2=$CX2 rd=$ROUT out=$OUT）"
 # ⑧ GC 窄域：cancelled＋仅 .omo/agora-delegation/ 凭据 dirty → 自动清树＋删分支
 HG=$(MKWT2 "窄域gc命中用例" c1); WHG=$(ls -d "$T"/proj__wt-${HG}__*)
 BDSP --actor tester@proj --project "$PROJ" --task "$HG" >/dev/null 2>&1   # 凭据预写 .omo/agora-delegation/

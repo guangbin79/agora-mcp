@@ -32,7 +32,8 @@ for f in sorted((glob.glob(f"{home}/log/*/*.md") + glob.glob(f"{home}/log/*/.*.m
         t = m.group(1)
         if "event:dispatched" in line:
             am = re.search(r"\| actor:(\S+)", line)
-            if am and am.group(1) == actor: disp[t] = True   # 只认本 actor 派的
+            if am and am.group(1) == actor:
+                disp.pop(t, None); disp[t] = True   # move-to-tail：插入序＝最近派发序（重派刷新位次，终闸 B 册）
             last_alive[t] = True
         elif "event:claimed" in line:
             last_alive[t] = True
@@ -62,7 +63,7 @@ for f in sorted((glob.glob(f"{home}/log/*/*.md") + glob.glob(f"{home}/log/*/.*.m
     try: fh = open(f, encoding="utf-8", errors="replace")
     except OSError: continue
     for line in fh:
-        m = re.search(rf"task:({t0})( |\$)", line)
+        m = re.search(rf"task:({t0})( |$)", line)
         if not m: continue
         em = re.search(r"event:([a-z_]+)", line)
         ts = re.search(r"ts:(\S+)", line)

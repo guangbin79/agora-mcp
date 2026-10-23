@@ -16,10 +16,16 @@ esac; shift 2; done
 [[ -z "$TASK" || "$TASK" =~ ^gt-[0-9a-f]{4,}$ ]] || fail VALIDATION_FAILED "bad task id: $TASK" 2
 PROJECT="${ACTOR##*@}"
 
+# 工具互撞保险丝（终闸 B 册 TOCTOU）：重放→reopened→dispatch 全程串行；同任务并发重派时
+# 后到者在前者 dispatched 落账后重放，INFLIGHT 拒。post.lock 异名无死锁；tool-vs-poll ②d 残窗属
+# dispatch.sh 每任务保险丝职责（本单禁触），已知限制上报。
+exec 8>"$AGORA_HOME/.git/redispatch.lock"
+flock -w "${AGORA_LOCK_WAIT:-60}" 8 || fail LOCK_TIMEOUT "redispatch 串行锁超时（${AGORA_LOCK_WAIT:-60}s；他实例重派进行中）" 3
+
 EVAL=$(python3 - "$AGORA_HOME" "$ACTOR" "$TASK" <<'PYEOF'
 import glob, re, sys, json
 home, actor, task = sys.argv[1], sys.argv[2], (sys.argv[3] if len(sys.argv) > 3 else "")
-rows_by, mine = {}, set()
+rows_by, mine = {}, {}   # mine 用 dict 保插入序＝派发序（set 迭代序随哈希随机，「最近」失义——终闸 A/B 册）
 for f in sorted((glob.glob(f"{home}/log/*/*.md") + glob.glob(f"{home}/log/*/.*.md"))):
     try: lines = open(f, encoding="utf-8", errors="replace").read().splitlines()
     except OSError: continue
@@ -33,7 +39,8 @@ for f in sorted((glob.glob(f"{home}/log/*/*.md") + glob.glob(f"{home}/log/*/.*.m
         rows_by.setdefault(t, []).append((ts.group(1), em.group(1)))
         if em.group(1) == "dispatched":
             am = re.search(r"\| actor:(\S+)", line)
-            if am and am.group(1) == actor: mine.add(t)
+            if am and am.group(1) == actor:
+                mine.pop(t, None); mine[t] = True   # move-to-tail：插入序＝最近派发序（重派刷新位次）
 states = {}
 for t, rows in rows_by.items():
     rows.sort(key=lambda r: r[0])   # ts 序稳定排序（平局保文件序＝因果序，poll.sh scan_tasks 同款；元组全排会被 ev 字典序重排）

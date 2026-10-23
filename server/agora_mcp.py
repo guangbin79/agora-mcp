@@ -371,7 +371,10 @@ for line in sys.stdin:
         reply(mid, {"tools": TOOLS})
     elif method == "tools/call":
         p = req.get("params", {})
-        res, err = call(p.get("name"), p.get("arguments", {}) or {})
+        try:
+            res, err = call(p.get("name"), p.get("arguments", {}) or {})
+        except Exception as e:   # 单请求异常不杀共享 stdio server（终闸 B 册：非字符串参数 TypeError 曾致全会话掉线）
+            res, err = None, {"code": "INTERNAL", "message": f"{type(e).__name__}: {e}"}
         if err:
             reply(mid, {"isError": True, "content": [{"type": "text",
                         "text": json.dumps(err, ensure_ascii=False)}]})
