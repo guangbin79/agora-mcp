@@ -80,6 +80,40 @@ if [[ "$EVENT" == done ]]; then
   PROJDIR=$(grep -m1 '^project_dir:' "$TASK_PAGE" | sed 's/^project_dir:[[:space:]]*//; s/^"\(.*\)"$/\1/' || true)
   WTDIR=$(grep -m1 '^wt_dir:' "$TASK_PAGE" | sed 's/^wt_dir:[[:space:]]*//; s/^"\(.*\)"$/\1/' || true)
   [[ -z "$VERIFY" ]] && fail VALIDATION_FAILED "task $TASK has no verify: command"
+  # verify 锚点重建（gt-2845①）：wt_dir 缺失→按 wt/<task> 分支原地重建（复用 dispatch/merge 既有锚点逻辑）；
+  # 分支亦缺失→VERIFY_FAILED 明确报错（禁回退 project_dir——gt-ac14 假绿教训）。
+  # 重建段与 dispatch.sh 预检重建同锁互斥（评审 B-1/ocr-6：prune/add 毫秒级并发窗收敛）
+  if [[ -n "$WTDIR" && ! -d "$WTDIR" ]]; then
+    RB_IN=$(realpath "${PROJDIR:-$WTDIR}" 2>/dev/null) || RB_IN="${PROJDIR:-$WTDIR}"   # 父链删净时保底裸路径（评审 R2-F1：stderr JSON 契约＋cwd 污染）
+    WT_MAIN=$(PYTHONPATH="$AGORA_HOME/scripts" python3 -c 'import sys, agora_lib
+p = sys.argv[1]; m = agora_lib.main_repo_of(p); print(m or p)' "$RB_IN")
+    [[ -e "$WT_MAIN/.git" ]] || fail VERIFY_FAILED "verify 锚点重建失败：主仓不可用: $WT_MAIN" 4
+    RB_RC=0
+    (
+      flock -w "$LOCK_WAIT" 9 || exit 3
+      git -C "$WT_MAIN" worktree prune
+      git -C "$WT_MAIN" show-ref --verify --quiet "refs/heads/wt/$TASK" || exit 5
+      git -C "$WT_MAIN" worktree add -q "$WTDIR" "wt/$TASK" || exit 9
+    ) 9>"$AGORA_HOME/.git/post.lock" || RB_RC=$?
+    case "$RB_RC" in
+      0) DERIVED+=("wt_rebuilt:$TASK") ;;
+      3) fail VERIFY_FAILED "verify 锚点重建锁超时（${LOCK_WAIT}s）" 4 ;;
+      5) fail VERIFY_FAILED "wt_dir 与 wt/$TASK 分支双缺失（禁回退 project_dir）: $WTDIR" 4 ;;
+      *) fail VERIFY_FAILED "verify 锚点重建失败（挂 wt/$TASK 分支）: $WTDIR" 4 ;;
+    esac
+    # setup 钩子（对齐 dispatch.sh：重建树缺 node_modules/venv，env 依赖的 verify 否则假失败——评审 ocr-5）
+    SETUPCMD=""
+    for pf in "$AGORA_HOME"/wiki/projects/*.md; do
+      [[ -f "$pf" ]] || continue
+      _pp=$(sed -n 's/^path:[[:space:]]*//p' "$pf" | head -1)
+      [[ -z "$_pp" ]] && continue
+      [[ "$(realpath "$_pp" 2>/dev/null)" = "$WT_MAIN" ]] && { SETUPCMD=$(sed -n 's/^setup:[[:space:]]*//p' "$pf" | head -1); break; }
+    done
+    if [[ -n "$SETUPCMD" ]]; then
+      (cd "$WTDIR" && timeout "${AGORA_SETUP_TIMEOUT:-600}" bash -c "$SETUPCMD") >/dev/null 2>&1 \
+        || fail VERIFY_FAILED "重建树 setup: 失败（cmd: $SETUPCMD；env 不全不假验收）" 4
+    fi
+  fi
   VERIFY_OUT=$(cd "${WTDIR:-${PROJDIR:-$AGORA_HOME}}" && timeout "${AGORA_VERIFY_TIMEOUT:-300}" bash -c "$VERIFY" 2>&1 | tail -c 2048) && RC=0 || RC=$?
   if [[ $RC -ne 0 ]]; then
     EVENT="verify_failed"; DERIVED+=("verify_failed")

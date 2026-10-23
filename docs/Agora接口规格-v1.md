@@ -82,7 +82,7 @@ cwd 未命中名册时：
 
 | 参数 | 类型 | 必填 | 说明 |
 |---|---|---|---|
-| `event` | enum | ✅ | `claimed/done/blocked/diagnosed/escalated/retired/proposal/ack/dispatched/progress/cancelled/reopened/attached/plan/merged`（v1.30 +plan：实施计划落账，派生会话动手前先 post，dispatcher ack 或 30min 超时自放行——软门，靠引导模板与账本可见性，机械层不强拦；v1.32 +merged：done 之后的集成闭环事件，`commit` 必填且机械校验 == `branch` 指定分支当前 HEAD（缺省 branch=project_dir 当前分支），集成 verify 由 merge.sh 顺序契约前置，post.sh 不跑 verify；`verify_failed` 为既有机械派生事件，口径确认） |
+| `event` | enum | ✅ | `claimed/done/blocked/diagnosed/escalated/retired/proposal/ack/dispatched/progress/cancelled/reopened/attached/plan/merged`（v1.30 +plan：实施计划落账，派生会话动手前先 post——v1.34 起 post(plan) 后即开工不等 ack，commit 前重读账本（对齐 delegation §七 gt-aad1 修订，删「dispatcher ack 或 30min 超时自放行」软门）；机械层不强拦；v1.32 +merged：done 之后的集成闭环事件，`commit` 必填且机械校验 == `branch` 指定分支当前 HEAD（缺省 branch=project_dir 当前分支），集成 verify 由 merge.sh 顺序契约前置，post.sh 不跑 verify；`verify_failed` 为既有机械派生事件，口径确认） |
 | `task` | string | 条件 | 任务类事件必填；MUST 是已存在的任务 ID（hash 格式 `gt-xxxx`），否则 `UNKNOWN_TASK` |
 | `commit` | string | done 必填 | 代码提交的短 hash |
 | `evidence` | string | done 必填 | 验证输出摘要或文件路径 |
@@ -95,7 +95,7 @@ cwd 未命中名册时：
 行为：
 - `event=claimed` 且任务已有 owner → 事件**仍然落账**（账本是事实记录），正常返回成功，但 `derived` MUST 标注 `claim_conflict:<先到者>`；先到先得由推导层裁决，post.sh 不拒绝事实（v1.6 起不再使用 CLAIM_CONFLICT 错误码——落账成功即成功，冲突是推导信息而非失败）；
 - `event=done` → post.sh 执行任务页 `verify:` 命令，通过才以 done 落账，否则以 `verify_failed` 落账并返回 `VERIFY_FAILED`；
-- **ack→注入（v1.33 L2）**：`event=ack` 且任务最新 `dispatched` 带 `session:` 且 API 通道可用 → post.sh 对该 sid `inject`「ack 已落账，继续」（`delivery:"queue"`，`AGORA_INJECT_TIMEOUT` 默认 15s 包裹）——plan-ack 死锁窗的闭合面：ack 无需子会话轮询收件箱，经注入直达活会话。best-effort：失败仅 `derived` 注记 `inject_failed` 不阻塞 ack；注入侧按 sid 幂等去重（`$AGORA_HOME/.git/inject-tickets/<sid>` 凭据，host-local；重复 ack → `inject_dedup`）；无 `session:`（run 通道）或开关关 → 行为与 v1.32 一致；
+- **ack→注入（v1.33 L2）**：`event=ack` 且任务最新 `dispatched` 带 `session:` 且 API 通道可用 → post.sh 对该 sid `inject`「ack 已落账，继续」（`delivery:"queue"`，`AGORA_INJECT_TIMEOUT` 默认 15s 包裹）——plan-ack 死锁窗的闭合面：ack 无需子会话轮询收件箱，经注入直达活会话。best-effort：失败仅 `derived` 注记 `inject_failed` 不阻塞 ack；注入侧按 sid 幂等去重（`$AGORA_HOME/.git/inject-tickets/<sid>` 凭据，host-local；重复 ack → `inject_dedup`）；无 `session:`（run 通道）或开关关 → 行为与 v1.32 一致（v1.34 修订：run 通道亦预生成外部 sid——`run --session` 服务端接受外部 id（2026-10-23 spike 实证），两通道 `dispatched` 均带 `session:`，ack/续跑注入对 run 通道子会话同样可达；仅开关关回落 v1.32 行为）；
 - 落账与看板重推导 MUST 在同一把 flock 内完成（调用返回时 board 已新鲜）。
 
 返回：`{ seq, shard, ts, derived[] }`。
@@ -166,12 +166,12 @@ cwd 未命中名册时：
 
 0. **本机作用域（v1.9 收窄）**：dispatch 只在本机拉起进程，目标项目 MUST 在本机有目录；`sessions.map` 按机器名隔离（`<host> <agent> <session> <ts>`），他机的活会话不算"在场"（本机通知桥触达不到）。跨机派活 MUST 走异步路径：`agora_task_create` + `mention`，由对方机器会话的开场仪式领取；
 1. **权限**：调用者身份页 MUST 含 `can_spawn: true`，否则 `SPAWN_FORBIDDEN`；
-2. **深度保险丝**：子会话进程环境注入 `AGORA_DEPTH=<调用者深度+1>`（交互会话深度为 0）；深度 ≥ `AGORA_MAX_DEPTH`（默认 2）时拒绝，`DEPTH_EXCEEDED`；
+2. **深度保险丝**：子会话进程环境注入 `AGORA_DEPTH=<调用者深度+1>`（交互会话深度为 0）；深度 ≥ `AGORA_MAX_DEPTH`（默认 5）时拒绝，`DEPTH_EXCEEDED`；
 3. **配额保险丝**：活跃派生进程数 ≥ `AGORA_MAX_SPAWN`（默认 3）时拒绝，`QUOTA_EXCEEDED`；
 4. **在场优先**：若 `scripts/sessions.map` 显示目标项目已有活会话，MUST NOT 新起进程——改为经 §8.1 通知桥注入提醒，返回 `mode: "notified"`；
-5. **拉起**（v1.32 全量委托 L1 补偿顺序）：预检（runtime `--version`、project_dir 存在、wt 任务树缺失按 `wt_dir` 锚点同分支重建、项目页 `setup:` 命令树内预跑——失败 `SPAWN_PRECHECK`/`SETUP_FAILED` **零落账**）→ `dispatched` 落账先行（含 run log 占位＋可选 `dispatcher_task:` 字段；`LEDGER_FAILED` 时零 spawn）→ 以 `setsid` 脱离调用方会话执行 `$AGORA_RUNTIME run --auto "<引导模板>"`（`--auto`：无人值守会话权限正解，放行未显式 deny 项；`AGORA_RUNTIME` 默认 `opencode`，走正常 CLI 路径——MCP 工具因此正常挂载）→ 验证窗（`AGORA_VERIFY_WIN` 默认 10s，判据＝run log 的 `EXIT:<try>=<rc>` 行：非零退出=秒死）→ 秒死落 `diagnosed`（日志尾）＋有界重试 1 次；wt 任务凭据预写 `<wt_dir>/.omo/agora-delegation/gt-xxxx.md`（幂等重写）并**免在场优先**（无条件 spawn——在场会话无树凭据）。深度保险丝默认 `AGORA_MAX_DEPTH=3` 且 env 与账本推导（dispatched 的 `dispatcher_task` 链计数）**取更大值**；配额账本化（活跃＝dispatched 集 ∩ 无终态事件）与 `.live` 计数取更大值（v1.32 起 §4.7 残留的「HTTP API 建会话 MUST NOT」删除——v1.23 已删契约此处漏改）；stdout/stderr 追加重定向到 `raw/dispatches/<dispatch_id>.log`；
+5. **拉起**（v1.32 全量委托 L1 补偿顺序）：预检（runtime `--version`、project_dir 存在、wt 任务树缺失按 `wt_dir` 锚点同分支重建、项目页 `setup:` 命令树内预跑——失败 `SPAWN_PRECHECK`/`SETUP_FAILED` **零落账**）→ `dispatched` 落账先行（含 run log 占位＋可选 `dispatcher_task:` 字段；`LEDGER_FAILED` 时零 spawn）→ 以 `setsid` 脱离调用方会话执行 `$AGORA_RUNTIME run --auto --session <预生成 sid> --title "agora: <task-id> <任务title截60字>" "<引导模板>"`（`--auto`：无人值守会话权限正解，放行未显式 deny 项；sid 预生成外部 id——服务端接受 `run --session` 外部 id（2026-10-23 spike 实证），`dispatched` 的 `session:` 两通道统一承载子 sid；`--title` 与 API 通道 create 同名；`AGORA_RUNTIME` 默认 `opencode`，走正常 CLI 路径——MCP 工具因此正常挂载）→ 验证窗（`AGORA_VERIFY_WIN` 默认 10s，判据＝run log 的 `EXIT:<try>=<rc>` 行：非零退出=秒死）→ 秒死落 `diagnosed`（日志尾）＋有界重试 1 次；wt 任务凭据预写 `<wt_dir>/.omo/agora-delegation/gt-xxxx.md`（幂等重写）并**免在场优先**（无条件 spawn——在场会话无树凭据）。深度保险丝默认 `AGORA_MAX_DEPTH=5` 且 env 与账本推导（dispatched 的 `dispatcher_task` 链计数）**取更大值**；配额账本化（活跃＝dispatched 集 ∩ 无终态事件）与 `.live` 计数取更大值（v1.32 起 §4.7 残留的「HTTP API 建会话 MUST NOT」删除——v1.23 已删契约此处漏改）；stdout/stderr 追加重定向到 `raw/dispatches/<dispatch_id>.log`；
    - **服务 API 通道双轨（v1.33 L2，`scripts/runtime/opencode.sh` 单适配器）**：总开关 `AGORA_RUNTIME_API`（默认开）且 `AGORA_RUNTIME=opencode` 且适配器在场且 health（GET /api/info）通 → API 通道生效，否则整体旁路走 run 通道（stub/替代 runtime 零扰动）。两段化保账本先行不变量：`create`（POST /api/session 惰性建会话，无 prompt）→ `dispatched` 落账带 `session:<sid>` 字段 → `inject`（POST prompt `delivery:"queue"` 即投即跑）投引导模板 → 验证窗改轮询 `GET /api/session/<sid>`（`outcome`/`time.idle`：dead=秒死、idle=过、窗口尽仍 running=过——与 run 同口径）。回落矩阵：health/create 失败发生在落账前 → run 全路径**零落账残留**；落账后 inject/status 失败 → `diagnosed`＋重试 1 次 → 仍败 run `spawn_attempt` 兜底（dispatched 不重发；`session:` 指向死 sid 为已知极限）。API 模式对称维护 run log（`SESSION:`/`ALIVE:` 生命周期行）与 `.live` 标记——poll 孤儿判据（run log 缺失）与配额计数不破。在场检测 alive API 优先（GET /api/session/active 逐 sid 比 `location.directory`），sessions.map 降回退；wt 无条件 spawn 豁免不变。
-6. **落账**：派生本身发 `event:dispatched`（条件字段 `task`、`target=<project>`、`child=<子会话将注册的名>`、`run=<日志路径>`、`dispatcher_task=<上游链任务>`、`session=<API 通道 sid，v1.33>`）；
+6. **落账**：派生本身发 `event:dispatched`（条件字段 `task`、`target=<project>`、`child=<子会话将注册的名>`、`run=<日志路径>`、`dispatcher_task=<上游链任务>`、`session=<子会话 sid，两通道统一承载：v1.33 API create 返回；v1.34 run 通道预生成外部 id>`）；
 7. **回报**：子会话是标准广场公民，走正常协议（开场仪式 → claim → done）；任务页由机械层标注 `dispatcher:<调用者>`，子会话 `done` 时 post.sh 自动 @提及 dispatcher——**回报不需要子会话记得做人情，由机制保证**；
 8. **看门狗**：派生进程存活但超过 `AGORA_DISPATCH_TIMEOUT`（默认 30 分钟）无任何事件落账 → doctor 标记 `stalled` 并给出 kill/重派建议。
 

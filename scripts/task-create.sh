@@ -52,6 +52,22 @@ fi
 [ -n "${PROJECT_DIR:-}" ] && [ ! -d "$PROJECT_DIR" ] && {
   echo "{\"error\":\"PROJECT_DIR_NOT_FOUND\",\"hint\":\"目录不存在: $PROJECT_DIR\"}" >&2; exit 2; }
 
+# 防呆告警（gt-2845④，不阻断）：worktree 形态 project_dir 未带 wt／标题 <8 字 → stdout JSON warnings 键
+# idem 命中路径不带 warnings（评审 ocr-7：idem key 不含 TITLE/PROJECT_DIR，重试换输入的告警与返回任务无关）
+WARNINGS=()
+if [ -n "${PROJECT_DIR:-}" ] && [ "${WT:-0}" != "1" ]; then
+  case "$PROJECT_DIR" in
+    *__wt-*) WARNINGS+=("project_dir 疑似 worktree（路径含 __wt-）但未带 wt:true");;
+  esac
+  [ -f "$PROJECT_DIR/.git" ] && WARNINGS+=("project_dir .git 为文件（worktree 形态）但未带 wt:true")
+fi
+[ "$(python3 -c 'import sys;print(len(sys.argv[1]))' "$TITLE")" -lt 8 ] \
+  && WARNINGS+=("title 少于 8 字，建议描述性标题")
+WARN_EXT=""
+if [ ${#WARNINGS[@]} -gt 0 ]; then
+  WARN_EXT=",\"warnings\":$(printf '%s\n' "${WARNINGS[@]}" | python3 -c 'import json,sys;print(json.dumps([l.strip() for l in sys.stdin if l.strip()],ensure_ascii=False))')"
+fi
+
 # 引用存在性校验
 for ref in $(echo "${DEPS:-}" | tr ',' ' ') ${PARENT:-}; do
   [ -z "$ref" ] && continue
@@ -142,4 +158,4 @@ if [ "$SRC" -ne 0 ]; then
 fi
 if [ -n "$SHORTOUT" ]; then printf '%s\n' "$SHORTOUT"; exit 0; fi
 
-printf '{"task":"%s","path":"wiki/tasks/%s.md"}\n' "$TASK_ID" "$TASK_ID"
+printf '{"task":"%s","path":"wiki/tasks/%s.md"%s}\n' "$TASK_ID" "$TASK_ID" "$WARN_EXT"
