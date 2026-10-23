@@ -33,7 +33,7 @@ import glob, re, sys
 home = sys.argv[1]; dtask = sys.argv[2] if len(sys.argv) > 2 and sys.argv[2] else ""
 actor = sys.argv[3] if len(sys.argv) > 3 else ""
 disp, terminal, last_alive, claimed = {}, set(), {}, {}
-for f in sorted(glob.glob(f"{home}/log/*/*.md")):
+for f in sorted((glob.glob(f"{home}/log/*/*.md") + glob.glob(f"{home}/log/*/.*.md"))):
     try: lines = open(f, encoding="utf-8", errors="replace").read().splitlines()
     except OSError: continue
     for line in lines:

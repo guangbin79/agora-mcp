@@ -36,7 +36,7 @@ p = sys.argv[1]; m = agora_lib.main_repo_of(p); print(m or p)' "$(realpath "$PD"
 
 # ---- 合并目标二分：任务链 dispatcher_task → 上游任务页 ----
 # 字段边界匹配 (^|[|] )task:<id>( |$)：防 dispatcher_task: 字段子串误中（gt-ab12 前缀撞 gt-ab1234 同防）
-UP=$( { cat "$AGORA_HOME"/log/*/*.md 2>/dev/null || true; } | grep -E "(^|[|] )task:$TASK( |$)" | grep "event:dispatched" \
+UP=$( { cat $(find "$AGORA_HOME/log" -mindepth 2 -name "*.md" -type f 2>/dev/null | sort) 2>/dev/null || true; } | grep -E "(^|[|] )task:$TASK( |$)" | grep "event:dispatched" \
      | sed -n 's/.*dispatcher_task:\(gt-[0-9a-f]\{4,\}\).*/\1/p' | tail -1 || true)
 TARGET_DIR="$MAIN"; TARGET_BRANCH=""
 if [ -n "${UP:-}" ]; then

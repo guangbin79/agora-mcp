@@ -51,7 +51,7 @@ try:
         cache = c
 except Exception: pass
 
-shards = sorted(os.path.relpath(f, HOME) for f in glob.glob(f"{HOME}/log/*/*.md"))
+shards = sorted(os.path.relpath(f, HOME) for f in (glob.glob(f"{HOME}/log/*/*.md") + glob.glob(f"{HOME}/log/*/.*.md")))
 need_full = cache is None
 
 if cache:

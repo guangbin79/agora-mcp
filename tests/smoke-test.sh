@@ -1634,7 +1634,26 @@ AGORA_MERGE_WAIT_MIN=0 AGORA_ORPHAN_MIN=9999 AGORA_WT_GRACE_MIN=9999 AGORA_DISPA
 cat "$AGORA_HOME"/log/*/*.md | grep -E "(^|[|] )task:$F11U( |$)" | grep event:dispatched | tail -1 | grep -q "dispatcher_task:$F11P" \
   && ok "F11 poll 重派透传原链 dispatcher_task" || fail "F11 重派链断裂"
 
+
+echo "===== 隐藏分片可见性——点开头项目名（生产行政 hotfix，gt-3ea2 波次根因） ====="
+PX="$T/.projx"; mkdir -p "$PX"; (cd "$PX" && git init -q . && echo x>p && git add -A && git -c user.name=t -c user.email=t@l commit -qm i)
+H1=$(TID "$(TITLE="点仓任务" VERIFY=true PROJECT_DIR="$PX" WT=1 IDEM=dot1 TC)")
+bash "$AGORA_HOME/scripts/post.sh" --actor tester@projx --project .projx --event claimed --task "$H1" >/dev/null
+grep -q "^- $H1" "$AGORA_HOME/board/in-progress.md" 2>/dev/null && ok "点仓 claimed 上板（derive 可见）" || fail "点仓 claimed 上板（derive 盲）"
+bash "$AGORA_HOME/scripts/post.sh" --actor tester@projx --project .projx --event done --task "$H1" --commit HEAD --evidence ok >/dev/null
+grep -q "^- $H1" "$AGORA_HOME/board/in-progress.md" 2>/dev/null && fail "点仓 done 后离板" || ok "点仓 done 后离板"
+git -C "$PX" merge -q --ff-only "wt/$H1" 2>/dev/null
+tick "$H1"
+bash "$AGORA_HOME/scripts/post.sh" --actor tester@projx --project .projx --event merged --task "$H1" --commit "$(git -C "$PX" rev-parse HEAD)" --branch "$(git -C "$PX" symbolic-ref --short HEAD)" >/dev/null
+untick "$H1"
+OUT=$(AGORA_MERGE_WAIT_MIN=0 AGORA_ORPHAN_MIN=9999 AGORA_WT_GRACE_MIN=9999 AGORA_DISPATCH_TIMEOUT=9999 bash "$AGORA_HOME/scripts/poll.sh" 2>/dev/null)
+echo "$OUT" | python3 -c 'import json,sys
+d = json.load(sys.stdin); tid = sys.argv[1]
+sys.exit(1 if any(e.get("task") == tid for e in d.get("merge_wait_diag", [])) else 0)' "$H1" \
+  && ok "点仓 merged 后梯子安静（poll 可见 merged）" || fail "点仓 merged 仍被诊断（poll 盲）"
+
 echo
 echo "===== 结果: $PASS 通过, $FAIL 失败 ====="
+
 rm -rf "$T"
 [ "$FAIL" -eq 0 ]

@@ -16,7 +16,7 @@ import glob, os, collections
 import agora_lib as lib
 HOME = os.environ["AGORA_HOME"]
 bad = []
-for f in glob.glob(f"{HOME}/log/*/*.md"):
+for f in (glob.glob(f"{HOME}/log/*/*.md") + glob.glob(f"{HOME}/log/*/.*.md")):
     seqs = collections.defaultdict(list)
     with open(f, encoding="utf-8") as fh:
         for line in fh:
@@ -36,7 +36,7 @@ import os, glob
 import agora_lib as lib
 HOME = os.environ["AGORA_HOME"]
 bad = []
-for f in sorted(glob.glob(f"{HOME}/log/*/*.md")):
+for f in sorted((glob.glob(f"{HOME}/log/*/*.md") + glob.glob(f"{HOME}/log/*/.*.md"))):
     last = {}  # (actor, task) -> 上一条 idem
     with open(f, encoding="utf-8") as fh:
         for i, line in enumerate(fh, 1):
@@ -83,7 +83,7 @@ import agora_lib as lib
 HOME = os.environ["AGORA_HOME"]
 timeout = int(os.environ.get("AGORA_DISPATCH_TIMEOUT", "30"))
 last = {}
-for f in glob.glob(f"{HOME}/log/*/*.md"):
+for f in (glob.glob(f"{HOME}/log/*/*.md") + glob.glob(f"{HOME}/log/*/.*.md")):
     with open(f, encoding="utf-8") as fh:
         for line in fh:
             e = lib.parse_event(line)
@@ -93,7 +93,7 @@ out = []
 for live in glob.glob(f"{HOME}/raw/dispatches/*.live"):
     did = os.path.basename(live)[:-5]
     child = None
-    for f in glob.glob(f"{HOME}/log/*/*.md"):
+    for f in (glob.glob(f"{HOME}/log/*/*.md") + glob.glob(f"{HOME}/log/*/.*.md")):
         for line in open(f, encoding="utf-8"):
             if did in line and "event:dispatched" in line:
                 cm = re.search(r'child:(\S+)', line)

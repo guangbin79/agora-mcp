@@ -70,7 +70,7 @@ def task_last_refs():
     （账本推导的升级阶梯计数，跨机一致，任何真实活动即归零）。
     事件解析走 agora_lib（行格式唯一真源）；畸形行跳过。"""
     refs = {}
-    for f in sorted(glob.glob(f"{HOME}/log/*/*.md")):
+    for f in sorted((glob.glob(f"{HOME}/log/*/*.md") + glob.glob(f"{HOME}/log/*/.*.md"))):
         rel = os.path.relpath(f, HOME)
         with open(f, encoding="utf-8", errors="replace") as fh:
             for i, line in enumerate(fh, 1):
@@ -125,7 +125,7 @@ def scan_tasks():
     """task -> {"dispatched":[(actor,run,dispatcher_task)...], "has":set(events), "last":event}。
     账本推导唯一口径（重派/孤儿/GC/豁免共用）；文件序+行序=时间序近似。"""
     tasks = {}
-    for f in sorted(glob.glob(f"{HOME}/log/*/*.md")):
+    for f in sorted((glob.glob(f"{HOME}/log/*/*.md") + glob.glob(f"{HOME}/log/*/.*.md"))):
         with open(f, encoding="utf-8", errors="replace") as fh:
             for line in fh:
                 e = lib.parse_event(line)
@@ -223,7 +223,7 @@ for f in glob.glob(f"{HOME}/raw/dispatches/*.live"):
     did = os.path.basename(f)[:-5]
     if did in live_notified: continue
     disp, dtask = None, None
-    for lf in sorted(glob.glob(f"{HOME}/log/*/*.md")):
+    for lf in sorted((glob.glob(f"{HOME}/log/*/*.md") + glob.glob(f"{HOME}/log/*/.*.md"))):
         for line in open(lf, encoding="utf-8"):
             if did in line and "| event:dispatched" in line:
                 am = re.search(r'\| actor:(\S+)', line)

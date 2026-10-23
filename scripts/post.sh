@@ -190,7 +190,7 @@ REF="log/$DATE/$PROJECT.md:$(grep -c '^- seq:' "$SHARD")"
 # claim 冲突检测（账本是事实：仍落账，只标注 derived）
 # 跨分片检索：任务可能被其他项目的 actor 认领，只看本分片会漏报（§3.4 副作用可见性）
 if [[ "$EVENT" == claimed ]]; then
-  FIRST=$(cat "$AGORA_HOME"/log/*/*.md 2>/dev/null | grep -E 'task:'"$TASK"'( \||$)' | grep 'event:claimed' | head -1 | sed -n 's/.*actor:\([^ |]*\).*/\1/p' || true)
+  FIRST=$(cat $(find "$AGORA_HOME/log" -mindepth 2 -name "*.md" -type f 2>/dev/null | sort) 2>/dev/null | grep -E 'task:'"$TASK"'( \||$)' | grep 'event:claimed' | head -1 | sed -n 's/.*actor:\([^ |]*\).*/\1/p' || true)
   if [[ -n "$FIRST" && "$FIRST" != "$ACTOR" ]]; then DERIVED+=("claim_conflict:$FIRST"); fi
 fi
 
