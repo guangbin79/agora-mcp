@@ -523,50 +523,69 @@ grep -q "旧段 D-2 标记" "$SUP" && ok "跨日翻新：次新旧段保留" || 
 [[ $(grep -c '^## ' "$SUP") -eq 7 ]] && ok "督报页恰 7 段" || fail "督报页段数 $(grep -c '^## ' "$SUP")≠7"
 [[ "$(grep -m1 '^## ' "$SUP")" == "## $YDAY" ]] && ok "跨日翻新：昨日段置顶" || fail "跨日翻新：置顶段=$(grep -m1 '^## ' "$SUP")"
 
-echo "===== 通知桥（notify-opencode.sh，规格 §8.1） ====="
-MOCK_LOG="$T/mock-http.log"; : > "$MOCK_LOG"
-python3 - "$MOCK_LOG" "$T/mock-port" >/dev/null 2>&1 <<'PYEOF' &
-import sys, http.server
-logf, portf = sys.argv[1], sys.argv[2]
-class H(http.server.BaseHTTPRequestHandler):
-    def do_POST(self):
-        n = int(self.headers.get("Content-Length") or 0); body = self.rfile.read(n).decode()
-        auth = self.headers.get("Authorization") or "-"
-        open(logf, "a").write(self.path + " | auth=" + auth + " | " + body + "\n")
-        self.send_response(200); self.end_headers(); self.wfile.write(b"{}")
-    def log_message(self, *a): pass
-srv = http.server.HTTPServer(("127.0.0.1", 0), H)
-open(portf, "w").write(str(srv.server_address[1]))
-srv.serve_forever()
-PYEOF
-MOCK_PID=$!
-for i in $(seq 1 20); do [[ -s "$T/mock-port" ]] && break; sleep 0.2; done
-MOCK_PORT=$(cat "$T/mock-port")
+echo "===== 通知桥（notify-opencode.sh，规格 §8.1；传输=runtime CLI，无 HTTP 依赖） ====="
+# 假 opencode CLI（本段专用）：只钉 prompt 端点。NB_HOME/ctrl: none|inject_fail
+NBDIR="$T/nb-fakebin"; NB_HOME="$T/nb-fake"; mkdir -p "$NBDIR" "$NB_HOME"
+cat > "$NBDIR/opencode" <<'NBSTUB'
+#!/usr/bin/env bash
+set -u
+FH="${NB_HOME:?NB_HOME required}"
+case "${1:-}" in
+  api) ;;
+  *) echo "bad subcommand" >&2; exit 2 ;;
+esac
+shift
+M=""; P=""; D=""
+while [ $# -gt 0 ]; do case "$1" in
+  -d) D="$2"; shift 2 ;;
+  *) if [ -z "$M" ]; then M="$1"; elif [ -z "$P" ]; then P="$1"; fi; shift ;;
+esac; done
+log() { printf '%s\n' "$*" >> "$FH/calls.log"; }
+log "api $M $P"
+case "$P" in
+  */prompt)
+    [ "$(cat "$FH/ctrl" 2>/dev/null || echo none)" = inject_fail ] && exit 1
+    echo "$D" > "$FH/last_prompt.json"; log "PROMPT-OK $P"; exit 0 ;;
+esac
+echo "not found" >&2; exit 1
+NBSTUB
+chmod +x "$NBDIR/opencode"
+nb_reset() { printf '%s\n' "${1:-none}" > "$NB_HOME/ctrl"; : > "$NB_HOME/calls.log"; }
+nb_calls() { grep -c "PROMPT-OK" "$NB_HOME/calls.log" 2>/dev/null; }
+NB() { PATH="$NBDIR:$PATH" NB_HOME="$NB_HOME" bash "$AGORA_HOME/scripts/notify-opencode.sh" --once; }
 printf '%s tester ses-test %s\n' "$(hostname)" "$(date -Iseconds)" >> "$AGORA_HOME/scripts/sessions.map"
-NB() { AGORA_OPENCODE_URL="http://127.0.0.1:$1" AGORA_OPENCODE_PASSWORD=testpw bash "$AGORA_HOME/scripts/notify-opencode.sh" --once; }
+nb_reset none
 echo "- from:x | ts:y | ref:log/z.md:1 | summary:ack gt-0000" > "$AGORA_HOME/inbox/tester/$(date +%s%N).md"
-NB "$MOCK_PORT"
-grep -q "/api/session/ses-test/prompt" "$MOCK_LOG" \
-  && ok "通知桥注入运行中会话（v2 /api prompt 端点）" || fail "通知桥注入运行中会话"
-grep -q '"delivery": "queue"' "$MOCK_LOG" && grep -q "auth=Basic" "$MOCK_LOG" \
-  && ok "通知桥 queue 投递 + Basic 认证" || fail "通知桥 queue 投递 + Basic 认证"
+NB
+grep -q "PROMPT-OK /api/session/ses-test/prompt" "$NB_HOME/calls.log" \
+  && ok "通知桥注入运行中会话（runtime CLI inject）" || fail "通知桥注入运行中会话"
+grep -q '"delivery": "queue"' "$NB_HOME/last_prompt.json" && grep -q "agora_check_mail" "$NB_HOME/last_prompt.json" \
+  && ok "通知桥 queue 投递 + 只递提醒" || fail "通知桥 queue 投递 + 只递提醒"
 echo "- from:x | ts:y | ref:log/z.md:2 | summary:ack gt-0000" > "$AGORA_HOME/inbox/tester/$(date +%s%N)n2.md"
-NB "$MOCK_PORT"
-[[ $(grep -c "/session/" "$MOCK_LOG") == 1 ]] && ok "通知桥 60s 去抖" || fail "通知桥 60s 去抖"
-# TUI server 不可达：静默跳过，不报错不退出非零
+NB
+[[ $(nb_calls) == 1 ]] && ok "通知桥 60s 去抖" || fail "通知桥 60s 去抖"
+# 新增：显式指死端口 HTTP（模拟无 4096 服务），桥仍照常注入＝不再依赖 HTTP 传输
+printf '%s tester2 ses-t2 %s\n' "$(hostname)" "$(date -Iseconds)" >> "$AGORA_HOME/scripts/sessions.map"
+mkdir -p "$AGORA_HOME/inbox/tester2"
+echo "- from:x | ts:y | ref:r2 | summary:ack gt-0000" > "$AGORA_HOME/inbox/tester2/$(date +%s%N).md"
+AGORA_OPENCODE_URL="http://127.0.0.1:1" NB
+grep -q "PROMPT-OK /api/session/ses-t2/prompt" "$NB_HOME/calls.log" \
+  && ok "无 HTTP 服务时桥仍可注入（传输=opencode api CLI）" || fail "无 HTTP 服务时桥仍可注入"
+# runtime 注入失败：静默跳过，不报错不退出非零
 printf '%s loner ses-x %s\n' "$(hostname)" "$(date -Iseconds)" >> "$AGORA_HOME/scripts/sessions.map"
 mkdir -p "$AGORA_HOME/inbox/loner"
 echo "- from:x | ts:y | ref:r | summary:ack gt-0000" > "$AGORA_HOME/inbox/loner/$(date +%s%N).md"
-NB 1
-[[ $? -eq 0 && $(grep -c "/session/" "$MOCK_LOG") == 1 ]] \
-  && ok "通知桥不可达静默跳过" || fail "通知桥不可达静默跳过"
+nb_reset inject_fail
+NB
+[[ $? -eq 0 && $(nb_calls) == 0 ]] \
+  && ok "通知桥注入失败静默跳过" || fail "通知桥注入失败静默跳过"
 # 无 sessions.map 映射的实体：静默跳过
+nb_reset none
 mkdir -p "$AGORA_HOME/inbox/ghost2"
 echo "- from:x | ts:y | ref:r | summary:ack gt-0000" > "$AGORA_HOME/inbox/ghost2/$(date +%s%N).md"
-NB "$MOCK_PORT"
-[[ $(grep -c "/session/" "$MOCK_LOG") == 1 ]] \
+NB
+[[ $(nb_calls) == 0 ]] \
   && ok "无映射实体静默跳过" || fail "无映射实体静默跳过"
-kill $MOCK_PID 2>/dev/null || true
 
 echo "===== 项目注册表（wiki/projects） ====="
 # 注册项目页（tester 注册 $PROJ，带默认 verify）
