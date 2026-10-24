@@ -6,7 +6,8 @@
 # 报告：$AGORA_DRILL_STATE/<ts>.json（缺省 ~/.local/state/agora-drill/）schema
 #       {ts, scenario:[…], results:[{name,pass,detail}], skipped?}
 # 场景（真实 restart 实证留 T5，本轮逻辑面由 smoke 用桩 runtime 验证）：
-#   restart —— setsid 脱附重启 opencode 服务＋自身会话无伤＋health 回魂＋看门狗滞留唤醒
+#   restart —— setsid 脱附重启 opencode 服务＋自身会话无伤＋health 回魂＋看门狗接管
+#             （滞留 CRIT 诊断窗内按设计不可达——gt-f8ed 改验窗内事实锚：poll 轮次＋活性时钟重建）
 #   kill    —— 杀派发子会话（pgid）→看门狗滞留诊断→reopened→恢复性重派→新会话 spawn（＋真实认领）
 #   quota   —— 配额打满 dispatch fail-closed（rc8 零账本零 spawn 残留）→env 天然还原→复通
 #   wave    —— 同窗口并发 3 派发：账本 3 派完整＋run log 齐全（无孤儿）＋会话互异＋无双认领
@@ -21,9 +22,8 @@ AGORA_HOME="${AGORA_HOME:-$HOME/agora}"
 RUNTIME="${AGORA_RUNTIME:-opencode}"
 RESTART_CMD="${AGORA_DRILL_RESTART_CMD:-opencode service restart}"
 DRILL_STATE="${AGORA_DRILL_STATE:-$HOME/.local/state/agora-drill}"
-ACTOR_NAME="${AGORA_DRILL_ACTOR:-drill}"
-ACTOR_PROJ="$ACTOR_NAME@agora-drill"
-DREPO="$DRILL_STATE/agora-drill"
+ACTOR_BASE="${AGORA_DRILL_ACTOR:-drill}"   # 每场景追加 -<scen> 后缀（gt-f8ed 分域隔离）
+ACTOR_NAME="$ACTOR_BASE"; ACTOR_PROJ=""; DREPO=""   # 由 provision(<scen>) 逐场景落定
 PKG_SCRIPTS="$(cd "$(dirname "$0")/.." && pwd)"   # drill 同包 lib：广场 scripts 拷贝滞后时新 drill 必配同版 agora_lib（scan_tasks）
 [[ -d "$AGORA_HOME/.git" ]] || { echo '{"code":"NO_FORUM","message":"AGORA_HOME 无仓库"}' >&2; exit 2; }
 
@@ -71,10 +71,12 @@ dlev() {  # dlev <task> <event>：账本行检索（点分片伴生 glob——gt
 }
 
 cleanup() {  # 演练任务统一 cancel --kill：防 drill 孤儿在真广场刷恢复波次（保险丝：只在 EXIT 走一次）
-  local t
-  for t in "${TASKS[@]:-}"; do
-    [ -n "$t" ] || continue
-    bash "$AGORA_HOME/scripts/cancel.sh" --actor "$ACTOR_PROJ" --task "$t" \
+  local pair a t
+  for pair in "${TASKS[@]:-}"; do
+    [ -n "$pair" ] || continue
+    a="${pair% *}"; t="${pair#* }"   # TASKS 存 "actor task" 对——每场景独立分域（gt-f8ed）
+    [ -n "$t" ] || continue   # mkdrilltask 失败的空 task 不进 cancel 自动推导档（终闸 B-F2）
+    bash "$AGORA_HOME/scripts/cancel.sh" --actor "$a" --task "$t" \
       --reason "drill 清场" --kill >/dev/null 2>&1 || true
   done
 }
@@ -110,7 +112,12 @@ print("\n".join(busy))' "$AGORA_HOME")
   fi
 }
 
-provision() {  # 演练仓＋drill 实体自举（实体页属 drill 自身；fixture 仓每场景重建）
+provision() {  # provision <scen>：每场景独立 actor 分域＋fixture 仓＋实体页（gt-f8ed 场景隔离——
+                # 共享仓路径令 kill 场景活子会话在场降级后续 dispatch，共享 actor 令配额互染）
+  local scen="$1"
+  ACTOR_NAME="$ACTOR_BASE-$scen"
+  ACTOR_PROJ="$ACTOR_NAME@agora-drill-$scen"
+  DREPO="$DRILL_STATE/agora-drill-$scen"
   mkdir -p "$DRILL_STATE"
   rm -rf "$DREPO"; mkdir -p "$DREPO"
   git -C "$DREPO" init -q 2>/dev/null
@@ -137,10 +144,10 @@ drill_dispatch() {  # drill_dispatch <task>：强制 run 通道（API 通道子�
     --project "$DREPO" --task "$1" 2>&1) || DRILL_RC=$?
 }
 
-drill_poll() {  # 快阈诊断轮（只诊不派）；MERGE_WAIT/WT_GRACE 保持大值——不误伤真实任务的合并窗与 GC 宽限
-  AGORA_HOME="$AGORA_HOME" AGORA_ORPHAN_MIN=0 AGORA_DISPATCH_TIMEOUT=0 \
+drill_poll() {  # 快阈诊断轮（只诊不派）；输出落 POLL_OUT——cron poll 持锁 skip 也 exit 0，调用方须辨真轮
+  POLL_OUT=$(AGORA_HOME="$AGORA_HOME" AGORA_ORPHAN_MIN=0 AGORA_DISPATCH_TIMEOUT=0 \
   AGORA_MERGE_WAIT_MIN=9999 AGORA_WT_GRACE_MIN=9999 AGORA_POLL_SPAWN=0 \
-  AGORA_RUNTIME="$RUNTIME" bash "$AGORA_HOME/scripts/poll.sh" >/dev/null 2>&1
+  AGORA_RUNTIME="$RUNTIME" bash "$AGORA_HOME/scripts/poll.sh" 2>&1)
 }
 
 wait_diag() {  # wait_diag <task> <关键词>：poll 重试至诊断落账（poll.lock 被cron占用时静默跳过→重试）
@@ -177,8 +184,8 @@ claim_hop() {  # claim_hop <task>：真实 runtime 等子会话自认领；桩 r
 }
 
 scen_restart() {
-  provision
-  local t; t=$(mkdrilltask "drill restart 场景：服务重启扰动"); TASKS+=("$t")
+  provision restart
+  local t; t=$(mkdrilltask "drill restart 场景：服务重启扰动"); TASKS+=("$ACTOR_PROJ $t")
   [ -n "$t" ] || { res "restart 建任务" 0 "task-create 无输出"; return; }
   drill_dispatch "$t"
   [ "$DRILL_RC" -eq 0 ] && grep -q '"mode":"spawned"' <<<"$DRILL_OUT" \
@@ -211,15 +218,37 @@ scen_restart() {
     sleep 1
   done
   res "restart 服务回魂（health）" $((1-hok)) "等待 ${i:-0}s"
-  # 看门狗唤醒：服务重启杀在飞子会话（真实 runtime 已杀；桩 runtime 补刀建模同形状）→ 滞留诊断
+  # 看门狗接管（gt-f8ed 合同 a）：服务重启杀在飞子会话（真实 runtime 已杀；桩 runtime 补刀建模同形状）。
+  # 滞留 diagnosed 窗内按设计不可达（阈值 CRIT 缺省 40min，WARN 20min 仅报表）——改验窗内事实锚：poll 轮次正常运转＋任务活性时钟重建。
   kill_child "$run1" || true
-  wait_diag "$t" "滞留" && res "restart 看门狗唤醒（滞留诊断）" 1 "task=$t" \
-    || res "restart 看门狗唤醒（滞留诊断）" 0 "task=$t 无滞留诊断"
+  local i pok=0
+  for i in 1 2 3; do   # cron poll 持锁 skip 也 exit 0——重试至真轮（wait_diag 同款 3 次口径，gt-f8ed 终闸 A/B）
+    drill_poll
+    grep -q '"poll": *"ok"' <<<"$POLL_OUT" && { pok=1; break; }
+    sleep 20
+  done
+  res "restart 后 poll 轮次正常运转" $pok \
+    "第${i}次 $(grep -o '"poll": *"[a-z]*"' <<<"$POLL_OUT" | head -1)"
+  local clk
+  clk=$(AGORA_HOME="$AGORA_HOME" python3 - "$t" <<'PYEOF'
+import json, sys, time, os
+try:
+    st = json.load(open(os.path.join(os.environ["AGORA_HOME"], ".git", "poll-state.json")))
+    e = st.get("_activity", {}).get(sys.argv[1])
+    if not isinstance(e, dict): print("absent"); raise SystemExit
+    age = int(time.time() - float(e.get("since", 0)))
+    print(("fresh %ds last_ref=%s" % (age, e.get("last_ref"))) if age <= 600 else f"stale {age}s")
+except Exception as exc:
+    print(f"err {exc}")
+PYEOF
+)
+  case "$clk" in fresh*) res "restart 任务活性时钟重建" 1 "task=$t $clk";;
+    *) res "restart 任务活性时钟重建" 0 "task=$t $clk";; esac
 }
 
 scen_kill() {
-  provision
-  local t; t=$(mkdrilltask "drill kill 场景：杀子会话恢复闭环"); TASKS+=("$t")
+  provision kill
+  local t; t=$(mkdrilltask "drill kill 场景：杀子会话恢复闭环"); TASKS+=("$ACTOR_PROJ $t")
   [ -n "$t" ] || { res "kill 建任务" 0 "task-create 无输出"; return; }
   drill_dispatch "$t"
   [ "$DRILL_RC" -eq 0 ] && grep -q '"mode":"spawned"' <<<"$DRILL_OUT" \
@@ -256,8 +285,8 @@ scen_kill() {
 }
 
 scen_quota() {
-  provision
-  local t; t=$(mkdrilltask "drill quota 场景：配额闸 fail-closed"); TASKS+=("$t")
+  provision quota
+  local t; t=$(mkdrilltask "drill quota 场景：配额闸 fail-closed"); TASKS+=("$ACTOR_PROJ $t")
   [ -n "$t" ] || { res "quota 建任务" 0 "task-create 无输出"; return; }
   local before_live after_live ndisp1 ndisp2 out rc
   before_live=$(find "$AGORA_HOME/raw/dispatches" -name '*.live' 2>/dev/null | wc -l)
@@ -273,16 +302,20 @@ scen_quota() {
   [ "$ndisp1" -eq 0 ] && [ "$after_live" -eq "$before_live" ] \
     && res "quota fail-closed 零残留" 1 "dispatched=0 .live $before_live→$after_live" \
     || res "quota fail-closed 零残留" 0 "dispatched=$ndisp1 .live $before_live→$after_live"
-  # B：还原后复通
+  # B：还原后复通——spawned 为正道；notified＝目标仓在场委托会话的合规通知降级，接受但显式记录原因
   out=$(bash "$AGORA_HOME/scripts/dispatch.sh" --actor "$ACTOR_PROJ" --project "$DREPO" --task "$t" 2>&1); rc=$?
-  [ "$rc" -eq 0 ] && grep -q '"mode":"spawned"' <<<"$out" \
-    && res "quota 复通 dispatch spawned" 1 "$out" \
-    || res "quota 复通 dispatch spawned" 0 "rc=$rc $out"
+  if [ "$rc" -eq 0 ] && grep -q '"mode":"spawned"' <<<"$out"; then
+    res "quota 复通 dispatch spawned" 1 "$out"
+  elif [ "$rc" -eq 0 ] && grep -q '"mode":"notified"' <<<"$out"; then
+    res "quota 复通 dispatch spawned" 1 "合规降级 notified：目标仓在场委托会话走通知通道（非配额/闸拒绝） $out"
+  else
+    res "quota 复通 dispatch spawned" 0 "rc=$rc $out"
+  fi
 }
 
 scen_wave() {
-  provision
-  local t; t=$(mkdrilltask "drill wave 场景：同窗 3 并发派发"); TASKS+=("$t")
+  provision wave
+  local t; t=$(mkdrilltask "drill wave 场景：同窗 3 并发派发"); TASKS+=("$ACTOR_PROJ $t")
   [ -n "$t" ] || { res "wave 建任务" 0 "task-create 无输出"; return; }
   local i pids=()
   for i in 1 2 3; do
