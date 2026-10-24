@@ -142,7 +142,7 @@ def scan_tasks(home):
                 if not e: continue
                 t = e.get("task") or ""
                 if not re.fullmatch(r"gt-[0-9a-f]+", t): continue
-                d = tasks.setdefault(t, {"dispatched": [], "has": set(), "last": None, "done_open": False, "terminal": False, "inflight": False, "last_actor": "", "last_terminal": None, "_rows": [], "post_disp": None})
+                d = tasks.setdefault(t, {"dispatched": [], "has": set(), "last": None, "done_open": False, "terminal": False, "inflight": False, "last_actor": "", "last_terminal": None, "_rows": [], "post_disp": None, "inblocked": False, "blocked_actor": ""})
                 d["_rows"].append((e.get("ts", ""), e["event"], e.get("actor", "")))
                 d["has"].add(e["event"])
                 d["last_actor"] = e.get("actor", "")
@@ -169,6 +169,10 @@ def scan_tasks(home):
             elif ev in ("merged", "cancelled"): d["inflight"] = False
             elif d["post_disp"] is not None and not _ac.startswith("watchdog@"):
                 d["post_disp"].add(ev)   # gt-7ca0：尾派发后的子会话活动（watchdog 机械回执不算——不遮蔽真停转）
+            # gt-ef98：blocked 泳道成员资格（ts 序重放）——认领者/派发/终态任一恢复即出泳道；
+            # watchdog 诊断/升级不复位（阶梯续燃）
+            if ev == "blocked": d["inblocked"] = True; d["blocked_actor"] = _ac
+            elif ev in ("merged", "cancelled", "reopened", "claimed", "done", "dispatched", "progress", "retired"): d["inblocked"] = False
         del d["_rows"]
     return tasks
 

@@ -383,6 +383,44 @@ seed_old; AGORA_WATCHDOG_ESCALATE_AFTER=1 AGORA_WATCHDOG_AUTO_REOPEN=1 AGORA_RUN
 grep -q "^- $LADT" "$AGORA_HOME/board/todo.md" \
   && ok "watchdog 自动回池（reopened → todo）" || fail "watchdog 自动回池（reopened → todo）"
 
+# blocked 泳道滞留档（gt-ef98）：blocked 入账后无自动出泳道路径 → 滞留超阈值 diagnosed＋mention 认领者与 dispatcher
+OUT=$(TITLE="blocked滞留任务" TC); BLKT=$(echo "$OUT" | sed -n 's/.*"task":"\(gt-[0-9a-f]*\)".*/\1/p')
+POST tester@proj --event claimed --task "$BLKT" >/dev/null
+POST tester@proj --event blocked --task "$BLKT" --reason "等下级合并" >/dev/null
+sed -i '0,/^id: /s//dispatcher: rival\nid: /' "$AGORA_HOME/wiki/tasks/$BLKT.md"   # 双目标 mention 需 dispatcher≠认领者
+AGORA_RUNTIME=true bash "$AGORA_HOME/scripts/poll.sh" >/dev/null   # 基线：建立 blocked 观察时钟（未触发分支）
+cat "$AGORA_HOME"/log/*/watchdog.md 2>/dev/null | grep "blocked 滞留" | grep -q "$BLKT" \
+  && fail "blocked 基线误报（阈值内）" || ok "blocked 基线不误报（阈值内）"
+seed_blk() { python3 - "$AGORA_HOME" "$BLKT" <<'PYEOF'
+import json, sys, time
+f = sys.argv[1] + "/.git/poll-state.json"
+s = json.load(open(f))
+e = s.get("_blocked_act", {}).get(sys.argv[2])
+assert e, "无 blocked 跟踪条目"
+e["since"] = time.time() - 5 * 3600
+json.dump(s, open(f, "w"))
+PYEOF
+}
+seed_blk; AGORA_RUNTIME=true bash "$AGORA_HOME/scripts/poll.sh" >/dev/null   # 默认阈值 4h：拨 5h 触发
+cat "$AGORA_HOME"/log/*/watchdog.md | grep "event:diagnosed" | grep "$BLKT" | grep -q "blocked 滞留" \
+  && ok "blocked 滞留→diagnosed（默认 4h）" || fail "blocked 滞留→diagnosed"
+cat "$AGORA_HOME"/log/*/watchdog.md | grep "event:diagnosed" | grep "$BLKT" | grep -q "mention:tester,rival" \
+  && ok "blocked 诊断 mention 认领者＋dispatcher" || fail "blocked 诊断 mention 双目标缺失"
+B1=$(cat "$AGORA_HOME"/log/*/watchdog.md | grep -c "blocked 滞留")
+AGORA_RUNTIME=true bash "$AGORA_HOME/scripts/poll.sh" >/dev/null   # cadence：diagnosed 重建时钟不刷屏
+B2=$(cat "$AGORA_HOME"/log/*/watchdog.md | grep -c "blocked 滞留")
+[[ "$B1" == "$B2" ]] && ok "blocked cadence 不刷屏" || fail "blocked cadence 不刷屏（$B1→$B2）"
+seed_blk; AGORA_WATCHDOG_ESCALATE_AFTER=1 AGORA_RUNTIME=true bash "$AGORA_HOME/scripts/poll.sh" >/dev/null
+cat "$AGORA_HOME"/log/*/watchdog.md | grep "event:escalated" | grep "$BLKT" | grep -q "blocked 滞留升级" \
+  && ok "blocked 升级阶梯：escalated" || fail "blocked 升级阶梯：escalated"
+POST tester@proj --event claimed --task "$BLKT" >/dev/null   # 认领者恢复 → 出泳道复位
+AGORA_RUNTIME=true bash "$AGORA_HOME/scripts/poll.sh" >/dev/null
+python3 - "$AGORA_HOME" "$BLKT" <<'PYEOF' && ok "blocked 后 claimed 复位出泳道" || fail "blocked 出泳道未清跟踪表"
+import json, sys
+s = json.load(open(sys.argv[1] + "/.git/poll-state.json"))
+assert sys.argv[2] not in s.get("_blocked_act", {}), "出泳道未清跟踪表"
+PYEOF
+
 # .live 滞留：超期 → 回溯 dispatched 事件 mention 派单方（每个 did 只提醒一次）
 OUT=$(TITLE="stale-live任务" TC); SLT=$(echo "$OUT" | sed -n 's/.*"task":"\(gt-[0-9a-f]*\)".*/\1/p')
 POST tester@proj --event claimed --task "$SLT" >/dev/null

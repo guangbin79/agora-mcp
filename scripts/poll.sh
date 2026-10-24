@@ -12,6 +12,8 @@
 #      dispatcher；再之后 AGORA_WATCHDOG_AUTO_REOPEN=1（默认关）则 reopened 回池，
 #      否则保持安静（不再刷屏）。发诊断前先 sync 再见一次账本，他机已处理则采信复位
 #      （跨机撞窗守卫）
+#      ②g blocked 泳道滞留（gt-ef98）：blocked 任务滞留超 AGORA_POLL_BLOCKED_H → diagnosed
+#      ＋mention 认领者与 dispatcher；升级阶梯沿用（连续诊断无响应 → escalated 后保持安静）
 #   ③ mention 拾取：本机实体（名册 dirs 在本机存在）的收件箱有新邮件且任务仍待认领
 #      （在 board/todo.md 中）→ 本机 dispatch 拉起；拉起模板内置"开工前复查 owner"惯例
 #   ④ 本地保洁：sessions.map 本机条目超 TTL（默认 24h）剔除；inbox 超期邮件
@@ -23,6 +25,7 @@
 #       AGORA_WATCHDOG_ESCALATE_AFTER=3（连续诊断升级阈值）；AGORA_WATCHDOG_AUTO_REOPEN=1
 #       时 escalated 之后任务自动 reopened 回池（默认关，保持人工）；
 #       AGORA_DISPATCH_TIMEOUT=30（.live 标记滞留阈值，分钟；滞留超阈值 mention 派单方一次）；
+#       AGORA_POLL_BLOCKED_H=4（blocked 泳道滞留阈值，小时；滞留超阈 diagnosed＋mention，阶梯沿用 stalled）；
 #       AGORA_SESSION_TTL_H=24（本机 sessions.map 条目存活小时数，0=不清）；
 #       AGORA_INBOX_ARCHIVE_DAYS=90（邮件归档阈值天数，0=不归档）；
 #       AGORA_NOTIFY_BRIDGE=0 关闭 notify 桥探活；AGORA_NOTIFY_BRIDGE_PAT 检测模式
@@ -92,7 +95,8 @@ report = {"poll": "ok", "host": HOST, "stalled": [], "suspicious": [], "escalate
           "reopened": [], "spawned": [], "held": [], "stale_live": 0,
           "sessions_reaped": 0, "mails_archived": 0, "idle_kicked": [],
           "merge_wait_diag": [], "redispatched": [], "escalated_merge": [], "merge_lagged": [],
-          "orphan_diag": [], "wt_removed": [], "wt_kept_dirty": [], "wt_kept_grace": [], "wt_remove_failed": [], "wt_branch_kept": []}
+          "orphan_diag": [], "blocked_diag": [], "blocked_escalated": [],
+          "wt_removed": [], "wt_kept_dirty": [], "wt_kept_grace": [], "wt_remove_failed": [], "wt_branch_kept": []}
 
 now = time.time()
 
@@ -195,6 +199,52 @@ for task, owner in inprog:
             act.pop(task, None)  # 回池后离开 in-progress，移出跟踪
         report["reopened"].append({"task": task, "owner": owner, "ok": r.returncode == 0})
     # else：已 escalated 且未开自动回池 —— 保持安静，不刷屏
+
+# ---------- ②g blocked 泳道滞留档（gt-ef98）：blocked 事件入账后无任何自动出泳道路径——
+# 滞留超阈值 → diagnosed ＋ mention 认领者与 dispatcher；升级阶梯沿用 stalled 口径
+# （尾部连续看门狗诊断 wn 达 ESCALATE_AFTER → escalated，之后保持安静——blocked 回池语义存疑，不开自动回池）
+blk = state.setdefault("_blocked_act", {})
+BLOCKED_H = int(os.environ.get("AGORA_POLL_BLOCKED_H", "4"))
+blocked_now = {t for t, d in TASKS.items() if d.get("inblocked")}
+for t in list(blk):
+    if t not in blocked_now: del blk[t]
+for task in sorted(blocked_now):
+    owner = (TASKS[task].get("blocked_actor") or "watchdog").split("@")[0]
+    cur = refs.get(task)
+    fp = cur[0] if cur else "none"
+    e = blk.get(task)
+    if not isinstance(e, dict) or e.get("last_ref") != fp:
+        e = {"last_ref": fp, "since": now}; blk[task] = e   # 初见 / 有新事件：活性时钟归零
+    age_h = (now - float(e.get("since", now))) / 3600
+    if age_h < BLOCKED_H: continue
+    # 撞窗守卫：发诊断前再见全网账本；他机已处理（指纹变）→ 采信复位
+    run("sync.sh", ["pre"])
+    cur2 = task_last_refs().get(task)
+    fp2 = cur2[0] if cur2 else "none"
+    if fp2 != fp:
+        blk[task] = {"last_ref": fp2, "since": now}
+        continue
+    wn = cur2[3] if cur2 else 0   # 尾部连续看门狗诊断条数（升级阶梯，账本推导跨机一致）
+    disp = task_dispatcher(task)
+    mention = owner if not disp or disp == owner else f"{owner},{disp}"
+    if wn < ESCALATE_AFTER:
+        r = run("post.sh", ["--actor", WATCHDOG, "--project", "watchdog",
+                            "--event", "diagnosed", "--task", task,
+                            "--conclusion", f"blocked 滞留: 任务 {task} 在 blocked 泳道已 {int(age_h)}h 无新事件（阈值 {BLOCKED_H}h，本机观察时钟），认领者 {owner}（第 {wn+1} 次诊断）——请认领者回报或 dispatcher 处置阻塞源",
+                            "--mention", mention])
+        if r.returncode == 0:
+            blk[task] = {"last_ref": None, "since": now}  # 复位：下轮拾取 diagnosed 新事件重建时钟
+        report["blocked_diag"].append({"task": task, "owner": owner, "age_h": int(age_h),
+                                       "diag": wn + 1, "ok": r.returncode == 0})
+    elif wn == ESCALATE_AFTER:
+        r = run("post.sh", ["--actor", WATCHDOG, "--project", "watchdog",
+                            "--event", "escalated", "--task", task,
+                            "--conclusion", f"blocked 滞留升级：任务 {task} 连续 {wn} 次诊断无响应（认领者 {owner} 与 dispatcher 均未处置阻塞源），请 operator 介入",
+                            "--mention", mention])
+        if r.returncode == 0:
+            blk[task] = {"last_ref": None, "since": now}
+        report["blocked_escalated"].append({"task": task, "owner": owner, "ok": r.returncode == 0})
+    # else：已 escalated —— 保持安静，不刷屏
 
 # .live 滞留（派生会话超时不退）：计数 + 回溯 dispatched 事件 mention 派单方（每个 did 一次）
 live_notified = state.setdefault("_live_notified", {})
