@@ -3268,6 +3268,61 @@ QLEDEV "$QD_HOME" "$QDID2" escalated | grep -q "idle 停转超限" \
   && ok "场景d：kick 超限升级 escalated（不再 inject）" || fail "场景d：超限未升级或仍 inject（$N5→$N6 escal=$(QLEDEV "$QD_HOME" "$QDID2" escalated | head -1)）"
 rm -rf "$QD_HOME" "$QDREPO" "$QDBIN" "$QDFAKE" "$T"/qd-repo__wt-*
 
+echo "===== runtime/report.sh 周报（golden fixture，T3 gt-77a8） ====="
+# fixture 账本：r001 3600s 净 / r002 5400s 净 / r003 1200s 脏(reopened+diagnosed) / r004 600s 净 / r005 只派发无 merged
+# 期望：中位墙钟 2400s(n=4)、reopened 2、diagnosed 2（其一藏点分片，gt-40cc 规矩）、dispatcher 干预 2、N=2（脏任务居中归零重数）
+RPT_H="$T/rpt-agora"; RPT_S="$T/rpt-state"
+mkdir -p "$RPT_H/log/2026-10-20" "$RPT_H/log/2026-10-21" "$RPT_H/wiki/tasks" "$RPT_S"
+RPTL() { printf -- '- seq:%s | ts:%s | actor:%s | event:%s | idem:rpt%s | task:%s\n' "$2" "$3" "$4" "$5" "$1" "$6" >> "$7"; }
+RPT_M="$RPT_H/log/2026-10-20/main.md"; RPT_D="$RPT_H/log/2026-10-21/.dotproj.md"
+RPTL 1 1 2026-10-20T10:00:00+08:00 orc@proj dispatched gt-r001 "$RPT_M"
+RPTL 2 2 2026-10-20T11:00:00+08:00 orc@proj merged gt-r001 "$RPT_M"
+RPTL 3 3 2026-10-20T10:00:00+08:00 orc@proj dispatched gt-r002 "$RPT_M"
+RPTL 4 4 2026-10-20T11:30:00+08:00 orc@proj merged gt-r002 "$RPT_M"
+RPTL 5 5 2026-10-20T10:00:00+08:00 orc@proj dispatched gt-r003 "$RPT_M"
+RPTL 6 6 2026-10-20T10:10:00+08:00 orc@proj reopened gt-r003 "$RPT_M"
+RPTL 7 7 2026-10-20T10:15:00+08:00 watchdog@hx diagnosed gt-r003 "$RPT_M"
+RPTL 8 8 2026-10-20T10:20:00+08:00 orc@proj merged gt-r003 "$RPT_M"
+RPTL 9 9 2026-10-20T10:00:00+08:00 orc@proj dispatched gt-r004 "$RPT_M"
+RPTL 10 10 2026-10-20T10:10:00+08:00 orc@proj merged gt-r004 "$RPT_M"
+RPTL 11 11 2026-10-20T10:00:00+08:00 orc@proj dispatched gt-r005 "$RPT_M"
+RPTL 12 12 2026-10-21T09:00:00+08:00 watchdog@hx diagnosed gt-r005 "$RPT_D"
+RPTL 13 13 2026-10-21T09:30:00+08:00 orc@proj reopened gt-r005 "$RPT_D"
+for i in 1 2 3 4 5; do printf -- '---\nid: gt-r00%s\ndispatcher: orc@proj\nstatus: open\n---\n' "$i" > "$RPT_H/wiki/tasks/gt-r00$i.md"; done
+RPT_RUN() { AGORA_HOME="$RPT_H" AGORA_DRILL_STATE="$RPT_S" bash "$PKG/scripts/runtime/report.sh"; }
+find "$RPT_H" -type f -exec sha256sum {} + | sort > "$T/rpt-before"
+RPT_OUT=$(RPT_RUN)
+find "$RPT_H" -type f -exec sha256sum {} + | sort > "$T/rpt-after"
+diff -q "$T/rpt-before" "$T/rpt-after" >/dev/null && ok "report 只读（账本零写入）" || fail "report 写了账本"
+echo "$RPT_OUT" | grep -qF '| spawn→merged 中位墙钟 | 2400s (n=4) |' && ok "四数字：中位墙钟精确值 2400s(n=4)" || fail "中位墙钟非 2400s(n=4)"
+echo "$RPT_OUT" | grep -qF '| reopened 数 | 2 |' && ok "四数字：reopened=2" || fail "reopened≠2"
+echo "$RPT_OUT" | grep -qF '| diagnosed 数 | 2 |' && ok "四数字：diagnosed=2（点分片伴生被扫到）" || fail "diagnosed≠2（点分片盲？）"
+echo "$RPT_OUT" | grep -qF '| dispatcher 干预数 | 2 |' && ok "四数字：dispatcher 干预=2" || fail "dispatcher 干预≠2"
+echo "$RPT_OUT" | grep -qF 'N=2' && ok "毕业计数：脏任务居中归零重数 N=2" || fail "归零重数错（N≠2）"
+echo "$RPT_OUT" | grep -qF 'last_run: N/A' && ok "drill JSON 缺席→N/A（禁计 0）" || fail "drill 缺席未 N/A"
+RPT_FILE=$(ls "$RPT_S"/report-*.md 2>/dev/null | head -1)
+[ -n "$RPT_FILE" ] && diff <(printf '%s\n' "$RPT_OUT") "$RPT_FILE" >/dev/null && ok "落盘 report-<YYYY-Www>.md 且 stdout 同内容" || fail "落盘缺失或 stdout 不一致"
+basename "$RPT_FILE" 2>/dev/null | grep -qE '^report-[0-9]{4}-W[0-9]{2}\.md$' && ok "文件名 ISO 周格式" || fail "文件名非 ISO 周格式"
+printf '{"ts":"2026-10-24T10:00:00+08:00","results":[{"name":"quota","pass":true},{"name":"wave","pass":false}]}' > "$RPT_S/2026-10-24T100000.json"
+RPT_OUT2=$(RPT_RUN)
+echo "$RPT_OUT2" | grep -qF 'last_run: 2026-10-24T10:00:00+08:00' && echo "$RPT_OUT2" | grep -qF 'pass 1/2' && ok "drill JSON 在场→last_run+pass 比例" || fail "drill JSON 在场未正确呈现"
+printf -- '- seq:14 | ts:garbage-ts | actor:x@y | event:dispatched | idem:rpt14 | task:gt-r006\n' >> "$RPT_M"
+printf -- '- seq:15 | ts:2026-10-20T10:00:00 | actor:x@y | event:dispatched | idem:rpt15 | task:gt-r007\n' >> "$RPT_M"
+printf -- '- seq:16 | ts:2026-10-20T10:05:00+08:00 | actor:x@y | event:merged | idem:rpt16 | task:gt-r007\n' >> "$RPT_M"
+printf -- '- seq:17 | ts:2026-10-20T10:30:00 | actor:x@y | event:merged | idem:rpt17 | task:gt-r006\n' >> "$RPT_M"
+printf '{"ts":"forge\\n### forged","results":[]}' > "$RPT_S/2026-10-24T110000.json"
+RPT_OUT4=$(RPT_RUN) && ok "终闸B1：坏 ts 行与 naive/aware 混存不崩（降级跳过）" || fail "坏 ts 致崩溃"
+echo "$RPT_OUT4" | grep -qF '| spawn→merged 中位墙钟 | 2400s (n=4) |' && ok "坏数据跳过不扭曲四数字（仍 2400s/n=4）" || fail "坏行处理扭曲度量"
+[ "$(echo "$RPT_OUT4" | grep -c 'last_run:')" = 1 ] && ! echo "$RPT_OUT4" | grep -q '^### forged' && ok "终闸C2：drill 字段消毒（markdown 结构注入被剥离）" || fail "drill 字段未消毒"
+AGORA_HOME="$RPT_H" AGORA_DRILL_STATE="$RPT_H" bash "$PKG/scripts/runtime/report.sh" >/dev/null 2>&1; [ $? -eq 2 ] && ok "终闸C3：AH==DS 同路径拒跑（只读不变量守卫）" || fail "AH==DS 未拒跑"
+AGORA_HOME="$RPT_H" AGORA_DRILL_STATE="$RPT_H/state" bash "$PKG/scripts/runtime/report.sh" >/dev/null 2>&1; [ $? -eq 2 ] && ok "终闸C3绕过收口：DS 为 AH 子路径拒跑" || fail "DS⊂AH 未拒跑（报告可落账本仓）"
+AGORA_HOME="$RPT_H/log" AGORA_DRILL_STATE="$RPT_H" bash "$PKG/scripts/runtime/report.sh" >/dev/null 2>&1; [ $? -eq 2 ] && ok "终闸C3绕过收口：AH 为 DS 子路径拒跑" || fail "AH⊂DS 未拒跑（报告可落账本仓）"
+RPT_E="$T/rpt-empty-agora"; RPT_ES="$T/rpt-empty-state"; mkdir -p "$RPT_E" "$RPT_ES"
+RPT_OUT3=$(AGORA_HOME="$RPT_E" AGORA_DRILL_STATE="$RPT_ES" bash "$PKG/scripts/runtime/report.sh")
+echo "$RPT_OUT3" | grep -qF '| spawn→merged 中位墙钟 | N/A' && echo "$RPT_OUT3" | grep -qF '| reopened 数 | N/A' && echo "$RPT_OUT3" | grep -qF '| diagnosed 数 | N/A' && echo "$RPT_OUT3" | grep -qF '| dispatcher 干预数 | N/A' && echo "$RPT_OUT3" | grep -qF 'N=N/A' && ok "账本缺席→四数字与 N 全 N/A" || fail "账本缺席未全 N/A"
+echo "$RPT_OUT3" | grep -qF '2400s' && fail "账本缺席仍出现具体数值" || ok "账本缺席无具体数值泄漏"
+rm -rf "$RPT_H" "$RPT_S" "$RPT_E" "$RPT_ES" "$T"/rpt-before "$T"/rpt-after
+
 echo
 echo "===== T2 扰动演练 drill.sh（四场景 fake runtime 逻辑断言，gt-40cc 后继） ====="
 # 独立论坛夹具：drill 实体/演练仓由 drill 自举；fakerun 挂睡保活（kill/restart 需活 .live 锚点）
