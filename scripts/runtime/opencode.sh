@@ -8,7 +8,7 @@ set -euo pipefail
 CMD="${1:-}"; [ -n "$CMD" ] || { echo "usage: opencode.sh <health|create|inject|alive|status|abort> ..." >&2; exit 2; }
 # 单调用超时：服务僵死不拖垮调用方（post.sh flock 内也走本适配器，必须快速返回）
 api() { timeout "${AGORA_API_TIMEOUT:-15}" opencode api "$@"; }
-jget() { python3 -c "$1" 2>/dev/null; }
+jget() { python3 -c "$1" "${@:2}" 2>/dev/null; }
 
 case "$CMD" in
   health)   # GET /api/info → rc0=API 可达
@@ -22,14 +22,19 @@ case "$CMD" in
     [ -n "${2:-}" ] && [ -n "${3:-}" ] || { echo "inject: sid text required" >&2; exit 2; }
     BODY=$(python3 -c 'import json,sys;print(json.dumps({"text":sys.argv[1],"delivery":"queue"}))' "$3")
     api POST "/api/session/$2/prompt" -d "$BODY" >/dev/null ;;
-  alive)    # alive <dir> → rc0=该目录有活会话（active 表逐 sid 比 location.directory）
+  alive)    # alive <dir> [delegated] → rc0=该目录有活会话；delegated 仅认委托子会话（title 前缀 "agora: gt-"，dispatch 两 spawn 通道统一命名 gt-2845②）——交互会话占坑不算在场（gt-0ed3）
     [ -n "${2:-}" ] || { echo "alive: dir required" >&2; exit 2; }
+    case "${3:-}" in ""|delegated) ;; *) echo "alive: unknown flag: $3" >&2; exit 2 ;; esac   # ocr：拼错标志静默退宽语义＝本任务要消灭的行为类，必须响
     D=$(realpath "$2")
     SIDS=$(api GET /api/session/active | jget 'import json,sys;print(" ".join(json.load(sys.stdin)["data"].keys()))') || exit 1
     [ -n "$SIDS" ] || exit 1
     for s in $SIDS; do
-      SD=$(api GET "/api/session/$s" | jget 'import json,sys;print(json.load(sys.stdin)["data"]["location"]["directory"])') || continue
-      [ "$(realpath "$SD" 2>/dev/null)" = "$D" ] && exit 0
+      api GET "/api/session/$s" | jget 'import json,sys,os
+d=json.load(sys.stdin)["data"]
+loc=(d.get("location") or {}).get("directory") or ""
+hit = bool(loc) and os.path.isdir(loc) and os.path.realpath(loc) == os.path.realpath(sys.argv[1])
+if hit and sys.argv[2] == "delegated" and not (d.get("title") or "").startswith("agora: gt-"): hit = False
+print("hit" if hit else "")' "$D" "${3:-}" | grep -q hit && exit 0
     done
     exit 1 ;;
   status)   # status <sid> → stdout=running|idle|dead（outcome=failed/interrupted 或不可达=dead；succeeded/time.idle=idle）
