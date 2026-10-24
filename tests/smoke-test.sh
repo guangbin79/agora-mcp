@@ -3269,6 +3269,115 @@ QLEDEV "$QD_HOME" "$QDID2" escalated | grep -q "idle 停转超限" \
 rm -rf "$QD_HOME" "$QDREPO" "$QDBIN" "$QDFAKE" "$T"/qd-repo__wt-*
 
 echo
+echo "===== T2 扰动演练 drill.sh（四场景 fake runtime 逻辑断言，gt-40cc 后继） ====="
+# 独立论坛夹具：drill 实体/演练仓由 drill 自举；fakerun 挂睡保活（kill/restart 需活 .live 锚点）
+DH=$(mktemp -d); DAH="$DH/agora"; DSTATE="$DH/state"; DFAKE="$DH/fake"; mkdir -p "$DFAKE"
+AGORA_HOME="$DAH" AGORA_PKG="$PKG" bash "$PKG/scripts/init.sh" >/dev/null 2>&1
+cat > "$DFAKE/fakerun.sh" <<'EOF'
+#!/usr/bin/env bash
+case "$1" in
+  --version) exit 0 ;;
+  run) shift; sleep "${FAKE_RUN_SLEEP:-60}" ;;
+  *) exit 0 ;;
+esac
+EOF
+chmod +x "$DFAKE/fakerun.sh"
+cat > "$DFAKE/restart-hook.sh" <<'EOF'
+#!/usr/bin/env bash
+{
+  echo "hook_sid=$(ps -o sid= -p $$ | tr -d ' ')"
+  echo "hook_mypid=${AGORA_DRILL_MY_PID:-none}"
+} > "${RESTART_HOOK_OUT:?}"
+EOF
+chmod +x "$DFAKE/restart-hook.sh"
+DDRILL() { AGORA_HOME="$DAH" AGORA_DRILL_STATE="$DSTATE" AGORA_RUNTIME="$DFAKE/fakerun.sh" \
+  AGORA_DRILL_RESTART_CMD="$DFAKE/restart-hook.sh" AGORA_VERIFY_WIN=1 AGORA_DRILL_HEALTH_WAIT=5 \
+  AGORA_DRILL_CLAIM_WAIT=0 FAKE_RUN_SLEEP=60 AGORA_LOCK_WAIT=30 RESTART_HOOK_OUT="$DH/restart-hook.log" \
+  bash "$PKG/scripts/runtime/drill.sh" "$@"; }
+DLEV() { cat "$DAH"/log/*/*.md "$DAH"/log/*/.*.md 2>/dev/null | grep -E "(^|[|] )task:$1( |$)" | grep "event:$2"; }   # gt-40cc：点分片伴生
+DSchema() { python3 - "$1" <<'PYEOF'
+import json, sys
+r = json.load(open(sys.argv[1]))
+assert set(r.keys()) >= {"ts", "scenario", "results"}, r
+assert isinstance(r["scenario"], list) and r["scenario"], r
+assert r["results"], r   # 空结果集＝报告序列化断（防 all() 空集真值化漏检）
+for x in r["results"]:
+    assert set(x) == {"name", "pass", "detail"} and isinstance(x["pass"], bool), x
+if "skipped" in r: assert isinstance(r["skipped"], str), r
+PYEOF
+}
+DDRILL --scenario bogus >/dev/null 2>&1; [[ $? -eq 2 ]] && ok "drill 非法场景 rc2" || fail "drill 非法场景 rc 非 2"
+# ① 忙碌让行：在飞波次在场 → rc2 零扰动（不建仓不举实体，报告 skipped）
+DBT=$(TITLE="drill busy 种子" VERIFY="true" PROJECT_DIR="$PROJ" AGORA_HOME="$DAH" bash "$DAH/scripts/task-create.sh")
+DBT=$(echo "$DBT" | sed -n 's/.*"task":"\(gt-[0-9a-f]*\)".*/\1/p')
+AGORA_HOME="$DAH" bash "$DAH/scripts/post.sh" --actor seed@proj --project proj --event dispatched \
+  --task "$DBT" --target "$PROJ" --child seed --run "raw/dispatches/d-drillbusy.log" >/dev/null
+DOUT=$(DDRILL --scenario quota 2>&1); DRC=$?
+[[ $DRC -eq 2 ]] && ok "drill 忙碌让行 rc2" || fail "drill 忙碌让行 rc2（got $DRC）"
+[ ! -e "$DSTATE/agora-drill" ] && [ ! -e "$DAH/wiki/entities/drill.md" ] \
+  && ok "忙碌让行零扰动（未建仓未举实体）" || fail "忙碌让行扰动环境"
+DR=$(ls -t "$DSTATE"/*.json 2>/dev/null | head -1)
+[ -n "$DR" ] && python3 - "$DR" <<'PYEOF' && ok "忙碌报告 skipped:busy" || fail "忙碌报告 skipped 缺失"
+import json, sys
+r = json.load(open(sys.argv[1]))
+assert r.get("skipped", "").startswith("busy"), r
+PYEOF
+AGORA_HOME="$DAH" bash "$DAH/scripts/post.sh" --actor seed@proj --project proj --event cancelled \
+  --task "$DBT" --reason "drill 清场" >/dev/null
+# ② quota：打满 fail-closed 零残留 → 复通（报告 schema 顺带首验）
+DDRILL --scenario quota >/dev/null 2>&1; [[ $? -eq 0 ]] && ok "quota 场景 rc0" || fail "quota 场景 rc 非 0"
+DR=$(ls -t "$DSTATE"/*.json | head -1)
+DSchema "$DR" && ok "quota 报告 schema" || fail "quota 报告 schema 异常"
+python3 - "$DR" <<'PYEOF' && ok "quota 场景断言全过" || fail "quota 场景断言有败"
+import json, sys
+r = json.load(open(sys.argv[1]))
+assert r["scenario"] == ["quota"], r
+assert r["results"] and all(x["pass"] for x in r["results"]), r["results"]
+PYEOF
+DQID=$(grep -o 'gt-[0-9a-f]*' "$DR" | head -1)
+[ "$(DLEV "$DQID" dispatched | grep -c event:dispatched)" -eq 1 ] \
+  && ok "quota fail-closed 零账本残留（2 尝试 1 落账）" || fail "quota 残留（$(DLEV "$DQID" dispatched | grep -c event:dispatched) 派）"
+DLEV "$DQID" cancelled | grep -q event:cancelled && ok "drill EXIT 清场 cancel 落账" || fail "drill 清场缺失（$DQID）"
+# ③ kill：杀子会话 → 滞留诊断 → reopened → 重派 → 新会话
+DDRILL --scenario kill >/dev/null 2>&1; [[ $? -eq 0 ]] && ok "kill 场景 rc0" || fail "kill 场景 rc 非 0"
+DR=$(ls -t "$DSTATE"/*.json | head -1); DKID=$(grep -o 'gt-[0-9a-f]*' "$DR" | head -1)
+[ "$(DLEV "$DKID" dispatched | grep -c event:dispatched)" -eq 2 ] && ok "kill 闭环：初派＋重派 2 派" || fail "kill 派次（$(DLEV "$DKID" dispatched | grep -c event:dispatched)）"
+DLEV "$DKID" diagnosed | grep -q "滞留" && ok "kill 闭环：看门狗滞留诊断" || fail "kill 无滞留诊断"
+DLEV "$DKID" reopened | grep -q event:reopened && ok "kill 闭环：reopened 回池" || fail "kill 无 reopened"
+[ "$(DLEV "$DKID" claimed | grep -c event:claimed)" -eq 2 ] && ok "kill 闭环：新会话认领" || fail "kill 认领（$(DLEV "$DKID" claimed | grep -c event:claimed)）"
+# ④ restart：setsid 脱附＋自身 PID 传递＋health 回魂＋看门狗唤醒
+DDRILL --scenario restart >/dev/null 2>&1; [[ $? -eq 0 ]] && ok "restart 场景 rc0" || fail "restart 场景 rc 非 0"
+grep -q "hook_mypid=[0-9]" "$DH/restart-hook.log" && ok "restart 自身 PID 传递排除集" || fail "restart 钩子未收到排除 PID"
+HSID=$(sed -n 's/hook_sid=//p' "$DH/restart-hook.log"); DSID=$(ps -o sid= -p $$ | tr -d ' ')
+[ -n "$HSID" ] && [ "$HSID" != "$DSID" ] && ok "restart 钩子运行于脱离会话" || fail "restart 脱附（hook_sid=$HSID drill_sid=$DSID）"
+DR=$(ls -t "$DSTATE"/*.json | head -1); DRID=$(grep -o 'gt-[0-9a-f]*' "$DR" | head -1)
+DLEV "$DRID" diagnosed | grep -q "滞留" && ok "restart 看门狗唤醒（滞留诊断）" || fail "restart 无滞留诊断"
+# ⑤ wave：同窗 3 并发——账本完整、无孤儿、会话互异、无双认领（冲突派生兜底）
+DDRILL --scenario wave >/dev/null 2>&1; [[ $? -eq 0 ]] && ok "wave 场景 rc0" || fail "wave 场景 rc 非 0"
+DR=$(ls -t "$DSTATE"/*.json | head -1); DWID=$(grep -o 'gt-[0-9a-f]*' "$DR" | head -1)
+[ "$(DLEV "$DWID" dispatched | grep -c event:dispatched)" -eq 3 ] && ok "wave 3 并发落账完整" || fail "wave 派次（$(DLEV "$DWID" dispatched | grep -c event:dispatched)）"
+WMISS=0; WRUNS=$(DLEV "$DWID" dispatched | sed -n 's/.*| run:\([^ |]*\).*/\1/p' | sort -u)
+[ "$(printf '%s\n' "$WRUNS" | grep -c .)" -eq 3 ] || WMISS=1
+for WR in $WRUNS; do [ -f "$DAH/$WR" ] || WMISS=1; done
+[ "$WMISS" -eq 0 ] && ok "wave run log 齐全（无孤儿）" || fail "wave 孤儿/缺 log（$WRUNS）"
+[ "$(DLEV "$DWID" claimed | grep -c event:claimed)" -eq 0 ] && ok "wave 桩子会话零认领（无双认领基线）" || fail "wave 意外认领"
+DC1=$(AGORA_HOME="$DAH" bash "$DAH/scripts/post.sh" --actor wchild1@agora-drill --project agora-drill --event claimed --task "$DWID" 2>&1)
+echo "$DC1" | grep -q claim_conflict && fail "wave 首认领误报冲突" || ok "wave 首认领无冲突"
+DC2=$(AGORA_HOME="$DAH" bash "$DAH/scripts/post.sh" --actor wchild2@agora-drill --project agora-drill --event claimed --task "$DWID" 2>&1)
+echo "$DC2" | grep -q "claim_conflict:wchild1@agora-drill" && ok "wave 双认领冲突派生" || fail "wave 双认领未派生冲突（$DC2）"
+# ⑥ --scenario all 退出码合同＋全报告 schema
+DDRILL --scenario all >/dev/null 2>&1; [[ $? -eq 0 ]] && ok "all 场景 rc0" || fail "all 场景 rc 非 0"
+for DRF in "$DSTATE"/*.json; do DSchema "$DRF" || fail "报告 schema（$DRF）"; done
+DR=$(ls -t "$DSTATE"/*.json | head -1)
+python3 - "$DR" <<'PYEOF' && ok "all 报告含四场景全过" || fail "all 报告场景/结果异常"
+import json, sys
+r = json.load(open(sys.argv[1]))
+assert sorted(r["scenario"]) == ["kill", "quota", "restart", "wave"], r["scenario"]
+assert r["results"] and all(x["pass"] for x in r["results"]), r["results"]
+PYEOF
+rm -rf "$DH"
+
+echo
 echo "===== 结果: $PASS 通过, $FAIL 失败 ====="
 
 wait_live_clear || true   # gt-2153：rm 夹具前等派发子会话退场（清空或超时再删）

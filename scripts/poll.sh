@@ -121,48 +121,7 @@ def task_dispatcher(task):
         if m: return m.group(1)
     return None
 
-def scan_tasks():
-    """task -> {"dispatched":[(actor,run,dispatcher_task)...], "has":set(events), "last":event, "inflight":bool}。
-    账本推导唯一口径（重派/孤儿/GC/豁免共用）；last/done_open/inflight 按 ts 序重放（跨分片文件序≠时间序）。"""
-    tasks = {}
-    for f in sorted((glob.glob(f"{HOME}/log/*/*.md") + glob.glob(f"{HOME}/log/*/.*.md"))):
-        with open(f, encoding="utf-8", errors="replace") as fh:
-            for line in fh:
-                e = lib.parse_event(line)
-                if not e: continue
-                t = e.get("task") or ""
-                if not re.fullmatch(r"gt-[0-9a-f]+", t): continue
-                d = tasks.setdefault(t, {"dispatched": [], "has": set(), "last": None, "done_open": False, "terminal": False, "inflight": False, "last_actor": "", "last_terminal": None, "_rows": [], "post_disp": None})
-                d["_rows"].append((e.get("ts", ""), e["event"], e.get("actor", "")))
-                d["has"].add(e["event"])
-                d["last_actor"] = e.get("actor", "")
-                if e["event"] == "dispatched":
-                    d["dispatched"].append((e.get("actor", ""), e.get("run", ""), e.get("dispatcher_task", ""), e.get("session", "")))
-    for d in tasks.values():
-        # gt-caf3/gt-db15：跨分片文件序≠时间序，状态机统一按 ts 序；gt-40cc①：同秒平局仅对
-        # 「真闭铃」merged/cancelled 升阶（2）——跨分片同秒时闭铃压过 done/dispached 的扫描序，
-        # 防已取消任务被孤儿档复活重派、被误燃 done-unmerged 梯子。done/reopened/dispatched 同为
-        # 0 阶：同片按追加序（＝真因果序）——守卫六 done→reopened 同秒须 reopened 收 done_open、
-        # redispatch 流 reopened→dispatched 同秒须 dispatched 压尾（终闸 ocr high），升阶任一即瞎
-        _RANK = {"merged": 2, "cancelled": 2}
-        rows = sorted(d["_rows"], key=lambda r: (r[0], _RANK.get(r[1], 0)))
-        d["last"] = rows[-1][1] if rows else None  # B-M3：last 按 ts 序取尾行——与 done_open 重放同口径（同 ts 平局一致）
-        for _ts, ev, _ac in rows:  # gt-db15：done_open 同按 ts 序重放——同日多分片文件名字典序≠时间序
-            if ev == "done": d["done_open"] = True          # done 未闭：merged/cancelled/reopened 才清
-            elif ev in ("merged", "cancelled", "reopened"): d["done_open"] = False
-            if ev in ("merged", "cancelled"): d["terminal"] = True; d["last_terminal"] = ev   # gt-99af：当前终态（mention 核查棒）；gt-b5e9：记明哪一种（GC 窄域判别）
-            elif ev == "reopened": d["terminal"] = False     # 返工/恢复重开 → 回到可拾取
-            # gt-ae6f 守卫二在飞口径：只计末次 reopened 之后（且未被终态闭合）的 dispatched——
-            # reopened 返工清空在飞（历史 dispatched 不永久压制回池任务），merged/cancelled 闭飞
-            if ev == "reopened": d["inflight"] = False; d["post_disp"] = None
-            elif ev == "dispatched": d["inflight"] = True; d["post_disp"] = set()
-            elif ev in ("merged", "cancelled"): d["inflight"] = False
-            elif d["post_disp"] is not None and not _ac.startswith("watchdog@"):
-                d["post_disp"].add(ev)   # gt-7ca0：尾派发后的子会话活动（watchdog 机械回执不算——不遮蔽真停转）
-        del d["_rows"]
-    return tasks
-
-TASKS = scan_tasks()
+TASKS = lib.scan_tasks(HOME)   # gt-ef4c：scan_tasks 提取至 agora_lib（drill 忙碌守卫同源复用，禁第二真源）
 TERMINALS = {"done", "merged", "cancelled"}
 
 # ×4 豁免集（设计 §六 watchdog）：任务被「活 dispatched 的 dispatcher_task」指向，
@@ -368,7 +327,7 @@ for t, d in TASKS.items():
         e = {"since": now, "n": 0}; mw[t] = e
     if (now - float(e.get("since", now))) / 60 < MERGE_WAIT: continue
     run("sync.sh", ["pre"])   # 撞窗守卫：发诊前再见一次全网账本
-    d2 = scan_tasks().get(t)
+    d2 = lib.scan_tasks(HOME).get(t)
     if not d2 or not d2.get("done_open") or "merged" in d2["has"]:
         mw.pop(t, None); continue
     ups = [x[2] for x in d["dispatched"] if x[2]]
