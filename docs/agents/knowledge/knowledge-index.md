@@ -14,3 +14,4 @@
 - [mention-pickup-loop-breaker.md](modules/mention-pickup-loop-breaker.md) — mention 拾取环断路契约：守卫序 done_open→todo→终态→retired→在飞去重、邮件=通知账本=真值分层、retired 回池须排除 done（gt-bb0b 风暴根因） (2026-10-23, gt-ae6f)
 - [runtime-adapter-guard.md](modules/runtime-adapter-guard.md) — runtime 适配器调用方三重守卫契约（AGORA_RUNTIME/AGORA_RUNTIME_API/-f）、守卫缺失＝静默空转非崩溃、哑 env 哨兵防传输回归 (2026-10-23, gt-2b25)
 - [quota-fuse-atomicity.md](modules/quota-fuse-atomicity.md) — 配额检查-落账 TOCTOU：dispatch.lock 锁内复核＋fail-closed（空扫描放行＝复辟）、风暴断言确定性来自串行化、槽位释放账本口径测 (2026-10-24, gt-2e4f)
+- [drill-busy-guard.md](modules/drill-busy-guard.md) — 演练忙碌守卫三课：扫描崩溃 fail-closed 让行（禁 fail-open 盲扰）、波次口径=尾事件 dispatched（inflight 计入积压会让 weekly drill 永久失效）、lib 取同包路径防广场拷贝滞后 (2026-10-24, gt-ef4c)

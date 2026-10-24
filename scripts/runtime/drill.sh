@@ -13,6 +13,7 @@
 # 环境：AGORA_DRILL_STATE（报告与演练仓根）AGORA_DRILL_ACTOR（缺省 drill；实体页缺失时自举——
 #       页属 drill 自身，先到先得口径）AGORA_DRILL_RESTART_CMD（缺省 "opencode service restart"）
 #       AGORA_DRILL_HEALTH_WAIT（缺省 60s）AGORA_DRILL_CLAIM_WAIT（缺省 -1＝opencode 300s/桩 0s）
+#       AGORA_DRILL_RESTART_TIMEOUT（重启命令超时秒，缺省 120；超时→health 如实记败不悬挂）
 # 用法：drill.sh --scenario <restart|kill|quota|wave|all>
 # shortcut: restart 真实执行未实证（T5）；API 通道子会话死亡无滞留档，kill/restart/wave 强制 run 通道建模
 set -u
@@ -79,7 +80,9 @@ cleanup() {  # 演练任务统一 cancel --kill：防 drill 孤儿在真广场�
 }
 trap cleanup EXIT
 
-# ---------- 忙碌让行守卫（所有场景先跑）：scan_tasks 在飞口径与 poll/重派完全同源 ----------
+# ---------- 忙碌让行守卫（所有场景先跑）：复用 lib.scan_tasks（与 poll/重派同一真源）；
+# 波次口径＝尾事件 dispatched，有意窄于 poll 的 inflight——done-unmerged 合并积压若计入，
+# weekly drill 将永久让行失效（真实广场 22 任务积压实证，gt-ef4c 评审轮 1-F2 如实化） ----------
 guard() {
   local busy
   busy=$(AGORA_HOME="$AGORA_HOME" PYTHONPATH="$PKG_SCRIPTS:$AGORA_HOME/scripts" python3 -c '
@@ -188,8 +191,9 @@ scen_restart() {
   # 扰动：setsid 脱附重启（重启命令不随 drill 进程组死；自身 PID 交由重启钩子排除）
   local my_sid rsid out
   my_sid=$(ps -o sid= -p $$ | tr -d ' ')
-  out=$(AGORA_DRILL_MY_PID=$$ AGORA_DRILL_RESTART_CMD="$RESTART_CMD" setsid bash -c \
-    'echo "drill_rsid=$(ps -o sid= -p $$ | tr -d " ")"; eval "$AGORA_DRILL_RESTART_CMD"' 2>&1)
+  out=$(AGORA_DRILL_MY_PID=$$ AGORA_DRILL_RESTART_CMD="$RESTART_CMD" \
+    AGORA_DRILL_RESTART_TIMEOUT="${AGORA_DRILL_RESTART_TIMEOUT:-120}" setsid bash -c \
+    'echo "drill_rsid=$(ps -o sid= -p $$ | tr -d " ")"; timeout "$AGORA_DRILL_RESTART_TIMEOUT" bash -c "$AGORA_DRILL_RESTART_CMD"' 2>&1)
   rsid=$(sed -n 's/drill_rsid=//p' <<<"$out" | head -1)
   [ -n "$rsid" ] && [ "$rsid" != "$my_sid" ] \
     && res "restart setsid 脱附" 1 "drill_sid=$my_sid restart_sid=$rsid" \
