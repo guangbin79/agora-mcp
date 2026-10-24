@@ -17,3 +17,4 @@
 - [drill-busy-guard.md](modules/drill-busy-guard.md) — 演练忙碌守卫三课：扫描崩溃 fail-closed 让行（禁 fail-open 盲扰）、波次口径=尾事件 dispatched（inflight 计入积压会让 weekly drill 永久失效）、lib 取同包路径防广场拷贝滞后 (2026-10-24, gt-ef4c)
 - [report-metrics-contract.md](modules/report-metrics-contract.md) — 周报度量口径契约：spawn/merged 取首条、干预事件集、dispatcher 归属任务页字段、N 归零重数、缺席→N/A 禁计 0、点分片伴生 glob、可测性 env 缝 (2026-10-24, gt-77a8)
 - [board-lane-membership.md](modules/board-lane-membership.md) — 看板泳道成员资格口径：poll 派生旗标复位集逐字对齐 derive-board 状态机（自行加宽＝失看护盲区）、瞬时活性与成员资格两层分离、出泳道集真源＝apply() 分支 (2026-10-24, gt-ef98)
+- [merged-terminal-precedence.md](modules/merged-terminal-precedence.md) — merged 机械终态先于 retired 过滤、缓存版本 bump 强制全量补账、夹具甄别力与分片因果序双闸 (2026-10-24, gt-5a59)
