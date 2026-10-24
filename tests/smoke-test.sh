@@ -3268,7 +3268,7 @@ RPTL 10 10 2026-10-20T10:10:00+08:00 orc@proj merged gt-r004 "$RPT_M"
 RPTL 11 11 2026-10-20T10:00:00+08:00 orc@proj dispatched gt-r005 "$RPT_M"
 RPTL 12 12 2026-10-21T09:00:00+08:00 watchdog@hx diagnosed gt-r005 "$RPT_D"
 RPTL 13 13 2026-10-21T09:30:00+08:00 orc@proj reopened gt-r005 "$RPT_D"
-for i in 1 2 3 4 5; do printf -- '---\nid: gt-r00%s\ndispatcher: orc@proj\nstatus: open\n---\n' "$i" > "$RPT_H/wiki/tasks/gt-r00$i.md"; done
+for i in 1 2 3 4 5; do printf -- '---\nid: gt-r00%s\ndispatcher: orc\nstatus: open\n---\n' "$i" > "$RPT_H/wiki/tasks/gt-r00$i.md"; done
 RPT_RUN() { AGORA_HOME="$RPT_H" AGORA_DRILL_STATE="$RPT_S" bash "$PKG/scripts/runtime/report.sh"; }
 find "$RPT_H" -type f -exec sha256sum {} + | sort > "$T/rpt-before"
 RPT_OUT=$(RPT_RUN)

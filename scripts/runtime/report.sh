@@ -84,8 +84,14 @@ else:
 def cnt(ev):
     return "N/A" if na else str(sum(1 for e in events if e[3] == ev))
 
+def actor_is(actor, disp_name):
+    # 身份规范化：账本 actor 带宿主后缀（name@host）、任务页 dispatcher 为裸名——按 @ 本地段比对
+    # （现网实证：严格串比较令 dispatcher 干预恒 0；同源 gt-eefd actor-attribution 教训）
+    return actor.split("@", 1)[0] == disp_name.split("@", 1)[0]
+
 dint = "N/A" if na else str(sum(
-    1 for task, ts, actor, ev in events if ev in INTERVENE and disp.get(task) == actor))
+    1 for task, ts, actor, ev in events
+    if ev in INTERVENE and disp.get(task) and actor_is(actor, disp[task])))
 
 if not runs:
     n_line = "N=N/A（无 merged 任务，禁计 0）"
@@ -121,7 +127,7 @@ out = "\n".join([
     "",
     "- generated: %s（只读扫描 %s，零账本写入）" % (now, ah),
     "- 口径：spawn=任务首条 dispatched；merged=任务首条 merged；干预=diagnosed/reopened/escalated/cancelled；"
-    "dispatcher 干预限 actor==任务页 dispatcher 字段；毕业 N=按 merged 时序扫 (spawn,merged] 窗口零干预连续任务数，"
+    "dispatcher 干预限 actor 与任务页 dispatcher 字段按 @ 本地段身份相等；毕业 N=按 merged 时序扫 (spawn,merged] 窗口零干预连续任务数，"
     "遇干预归零重数，未 merged 任务不入列",
     "",
     "## 四数字",
