@@ -25,6 +25,8 @@ check "init 幂等（再跑一次）" bash "$PKG/scripts/init.sh"
 PROJ="$T/proj"; mkdir -p "$PROJ"; cd "$PROJ" && git init -q . && echo FIXED > app.txt && git add -A && git -c user.name=t -c user.email=t@local commit -qm init
 PROJ2="$T/proj2"; mkdir -p "$PROJ2"; cd "$PROJ2" && git init -q .
 REG="$HOME/agora-smoke-reg-$$"; mkdir -p "$REG/auto" "$REG/late"   # gt-583b：/tmp 族拒自动注册，「可注册域」夹具迁出 mktemp（$HOME 子目录非 git 仓＝可注册）
+trap 'rm -rf "$REG"' EXIT   # 评审 F2：中断亦不留残（真 $HOME 非系统清理域；末尾显式 rm 幂等保留）
+REG_OK=$(python3 -c "import sys; sys.path.insert(0, '$PKG/scripts'); import agora_lib as l; print(1 if l.main_repo_of('$REG/auto') is None else 0)")   # 评审 F4：\$HOME=worktree 布局时 REG 归主不可注册，两用例降级 skip
 mkdir -p "$AGORA_HOME/wiki/entities"
 printf -- '---\nname: tester\ndirs:\n  - %s\ncan_spawn: true\n---\n' "$PROJ" > "$AGORA_HOME/wiki/entities/tester.md"
 printf -- '---\nname: rival\ndirs:\n  - %s\ncan_spawn: false\n---\n' "$PROJ2" > "$AGORA_HOME/wiki/entities/rival.md"
@@ -146,6 +148,7 @@ assert "@" in att["url"] + "@" + att["commit"] and att["ref"].endswith(tid), att
 p.stdin.close()
 PYEOF
 # 可自动注册目录：写工具直接可用且机械建页（2026-10-20 注册去人工闸；gt-583b 起可注册夹具须在 /tmp 族外）；不可注册目录（$HOME）仍拒
+if [ "$REG_OK" = 1 ]; then
 cd "$REG/auto" && python3 - "$PKG/server/agora_mcp.py" "$AGORA_HOME" <<'PYEOF' && ok "未注册目录自动注册后可写" || fail "未注册目录自动注册后可写"
 import json, subprocess, sys, os
 p = subprocess.Popen(["python3", sys.argv[1]], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
@@ -173,10 +176,14 @@ rpc("initialize", {})
 r = rpc("tools/call", {"name":"agora_task_create","arguments":{"title":"x"}}, 2)
 txt = json.loads(r["result"]["content"][0]["text"])
 assert txt.get("code") == "NOT_REGISTERED", txt
-ents = os.listdir(os.path.join(sys.argv[2], "wiki", "entities"))
-assert "fixture-proj" not in ents and "e2e" not in ents, ents
+ents_dir = os.path.join(sys.argv[2], "wiki", "entities")
+assert not os.path.isfile(os.path.join(ents_dir, "fixture-proj.md")) \
+    and not os.path.isfile(os.path.join(ents_dir, "e2e.md")), os.listdir(ents_dir)   # 页级断言（评审 F1：listdir 成员判断带 .md 恒真）
 p.stdin.close()
 PYEOF
+else
+ok "未注册目录自动注册后可写（skip：\$HOME=worktree 布局 REG 归主不可注册）"
+fi
 cd "$HOME" && python3 - "$PKG/server/agora_mcp.py" <<'PYEOF' && ok "不可注册目录（\$HOME）写仍被拒" || fail "不可注册目录（\$HOME）写仍被拒"
 import json, subprocess, sys
 p = subprocess.Popen(["python3", sys.argv[1]], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
@@ -1368,6 +1375,7 @@ echo "===== 身份裁决不冻结（2026-10-20 gt-9f24 事故回归） ====="
 # server 启动早于实体页覆盖：启动期 auto-register 因同名页 O_EXCL 撞名让位 → 匿名；
 # 旧代码冻结终身（共享 server 08:39 启动早于 10:14 实体页 → 派生会话写路径全拒）；
 # 修后每次工具调用重裁决 → 实体页后到补 dirs，同进程内身份立即生效
+if [ "$REG_OK" = 1 ]; then
 LATE="$REG/late"   # gt-583b：可注册域夹具（/tmp 族已拒注册，原 $T/late 会使 O_EXCL 让位路径失活）
 printf -- '---\nname: late\ndirs:\n  - /nonexistent-late-xyz\ncan_spawn: false\n---\n' > "$AGORA_HOME/wiki/entities/late.md"
 cd "$AGORA_HOME" && git add -A >/dev/null && AGORA_MECHANICAL=1 git commit -qm "late entity" >/dev/null
@@ -1395,7 +1403,10 @@ open(f, "w").write(txt)
 assert you() == "late@late", f"后到覆盖应立即生效，实际 {you()}"
 p.stdin.close()
 PYEOF
-rm -rf "$REG"   # 可注册夹具域用毕即清（真 $HOME 不留残）
+else
+ok "身份裁决不冻结（后到覆盖同进程生效）（skip：\$HOME=worktree 布局 REG 归主不可注册）"
+fi
+rm -rf "$REG"   # 可注册夹具域用毕即清（真 $HOME 不留残；trap EXIT 兜底中断路径）
 
 echo "===== task_create idem 幂等＋注入守卫（全量委托 L1 Task1） ====="
 rm -f /tmp/agora-pwn-l1
