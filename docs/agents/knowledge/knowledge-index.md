@@ -16,3 +16,4 @@
 - [quota-fuse-atomicity.md](modules/quota-fuse-atomicity.md) — 配额检查-落账 TOCTOU：dispatch.lock 锁内复核＋fail-closed（空扫描放行＝复辟）、风暴断言确定性来自串行化、槽位释放账本口径测 (2026-10-24, gt-2e4f)
 - [drill-busy-guard.md](modules/drill-busy-guard.md) — 演练忙碌守卫三课：扫描崩溃 fail-closed 让行（禁 fail-open 盲扰）、波次口径=尾事件 dispatched（inflight 计入积压会让 weekly drill 永久失效）、lib 取同包路径防广场拷贝滞后 (2026-10-24, gt-ef4c)
 - [report-metrics-contract.md](modules/report-metrics-contract.md) — 周报度量口径契约：spawn/merged 取首条、干预事件集、dispatcher 归属任务页字段、N 归零重数、缺席→N/A 禁计 0、点分片伴生 glob、可测性 env 缝 (2026-10-24, gt-77a8)
+- [cron-direct-exec-contract.md](modules/cron-direct-exec-contract.md) — cron 直执接线双合同：执行位 git mode 100755（diff 不可见，遗漏=126 静默潜伏）＋CLI 形态实测（字面速记 vs 实 usage，verify/grep 须逐字对齐）；实弹射击验收手法（systemd-run 等价脱附） (2026-10-24, gt-5f59)
