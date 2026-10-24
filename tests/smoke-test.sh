@@ -3577,13 +3577,19 @@ DR=$(ls -t "$DSTATE"/*.json | head -1); DKID=$(grep -o 'gt-[0-9a-f]*' "$DR" | he
 DLEV "$DKID" diagnosed | grep -q "滞留" && ok "kill 闭环：看门狗滞留诊断" || fail "kill 无滞留诊断"
 DLEV "$DKID" reopened | grep -q event:reopened && ok "kill 闭环：reopened 回池" || fail "kill 无 reopened"
 [ "$(DLEV "$DKID" claimed | grep -c event:claimed)" -eq 2 ] && ok "kill 闭环：新会话认领" || fail "kill 认领（$(DLEV "$DKID" claimed | grep -c event:claimed)）"
-# ④ restart：setsid 脱附＋自身 PID 传递＋health 回魂＋看门狗唤醒
+# ④ restart：setsid 脱附＋自身 PID 传递＋health 回魂＋看门狗窗内事实锚（gt-f8ed：CRIT 滞留诊断窗内按设计不可达）
 DDRILL --scenario restart >/dev/null 2>&1; [[ $? -eq 0 ]] && ok "restart 场景 rc0" || fail "restart 场景 rc 非 0"
 grep -q "hook_mypid=[0-9]" "$DH/restart-hook.log" && ok "restart 自身 PID 传递排除集" || fail "restart 钩子未收到排除 PID"
 HSID=$(sed -n 's/hook_sid=//p' "$DH/restart-hook.log"); DSID=$(ps -o sid= -p $$ | tr -d ' ')
 [ -n "$HSID" ] && [ "$HSID" != "$DSID" ] && ok "restart 钩子运行于脱离会话" || fail "restart 脱附（hook_sid=$HSID drill_sid=$DSID）"
 DR=$(ls -t "$DSTATE"/*.json | head -1); DRID=$(grep -o 'gt-[0-9a-f]*' "$DR" | head -1)
-DLEV "$DRID" diagnosed | grep -q "滞留" && ok "restart 看门狗唤醒（滞留诊断）" || fail "restart 无滞留诊断"
+python3 - "$DR" <<'PYEOF' && ok "restart 看门狗接管：poll 轮次＋活性时钟重建（窗内事实锚）" || fail "restart 窗内事实锚缺失（gt-f8ed 红绿对）"
+import json, sys
+r = json.load(open(sys.argv[1]))
+names = {x["name"] for x in r["results"] if x["pass"]}
+assert "restart 后 poll 轮次正常运转" in names, r["results"]
+assert "restart 任务活性时钟重建" in names, r["results"]
+PYEOF
 # ⑤ wave：同窗 3 并发——账本完整、无孤儿、会话互异、无双认领（冲突派生兜底）
 DDRILL --scenario wave >/dev/null 2>&1; [[ $? -eq 0 ]] && ok "wave 场景 rc0" || fail "wave 场景 rc 非 0"
 DR=$(ls -t "$DSTATE"/*.json | head -1); DWID=$(grep -o 'gt-[0-9a-f]*' "$DR" | head -1)
@@ -3607,6 +3613,15 @@ r = json.load(open(sys.argv[1]))
 assert sorted(r["scenario"]) == ["kill", "quota", "restart", "wave"], r["scenario"]
 assert r["results"] and all(x["pass"] for x in r["results"]), r["results"]
 PYEOF
+# ⑦ 场景分域隔离（gt-f8ed 根因2 红绿对）：每场景独立实体页＋fixture 仓＋wave 3 派全落在 wave 域——
+# 共享 actor/仓时 kill 场景活子会话在场降级 quota 复通与 wave（真跑 171553 mode=notified 实证）
+ISO=0
+for S in restart kill quota wave; do
+  [ -f "$DAH/wiki/entities/drill-$S.md" ] || ISO=1
+  [ -d "$DSTATE/agora-drill-$S" ] || ISO=1
+done
+[ "$(DLEV "$DWID" dispatched | grep -c 'actor:drill-wave@')" -eq 3 ] || ISO=1
+[ "$ISO" -eq 0 ] && ok "场景分域隔离（独立 actor/仓/实体页，wave 3 派全在 wave 域）" || fail "场景未隔离（gt-f8ed 根因2）"
 rm -rf "$DH"
 
 echo
