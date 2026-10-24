@@ -24,7 +24,10 @@
 #       时 escalated 之后任务自动 reopened 回池（默认关，保持人工）；
 #       AGORA_DISPATCH_TIMEOUT=30（.live 标记滞留阈值，分钟；滞留超阈值 mention 派单方一次）；
 #       AGORA_SESSION_TTL_H=24（本机 sessions.map 条目存活小时数，0=不清）；
-#       AGORA_INBOX_ARCHIVE_DAYS=90（邮件归档阈值天数，0=不归档）
+#       AGORA_INBOX_ARCHIVE_DAYS=90（邮件归档阈值天数，0=不归档）；
+#       AGORA_NOTIFY_BRIDGE=0 关闭 notify 桥探活；AGORA_NOTIFY_BRIDGE_PAT 检测模式
+#       （默认 [n]otify-opencode.sh，方括号防 pgrep 自匹配）；AGORA_NOTIFY_BRIDGE_SPAWN
+#       拉起命令覆盖（测试 mock）
 # 用法：crontab -e → */5 * * * * AGORA_HOME=~/agora bash ~/agora/scripts/poll.sh
 set -uo pipefail
 AGORA_HOME="${AGORA_HOME:-$HOME/agora}"
@@ -705,6 +708,33 @@ if report["sessions_reaped"] or report["mails_archived"]:
                        cwd=HOME, env=env, capture_output=True, text=True)
     if r.returncode == 0:
         run("sync.sh", ["post"])
+
+# ---------- ⑤ notify 桥探活（gt-edc4：poll 轮拉起取代 @reboot 开机拉起，T5 凭此删 @reboot） ----------
+# 桥无 .live 状态文件 → pgrep -f 方括号形态防 pgrep 自身 cmdline 自匹配；缺席→setsid nohup
+# 拉起（与 @reboot 行为一致，AGORA_HOME 显式透传）；任何失败只记 report.bridge，绝不阻断主流程
+try:
+    br = {"state": "off"}
+    if os.environ.get("AGORA_NOTIFY_BRIDGE", "1") != "0":
+        bridge = os.path.join(HOME, "scripts", "notify-opencode.sh")
+        if os.path.exists(bridge):
+            pat = os.environ.get("AGORA_NOTIFY_BRIDGE_PAT", "[n]otify-opencode.sh")
+            pg = subprocess.run(["pgrep", "-f", pat], capture_output=True)
+            if pg.returncode == 0:
+                br = {"state": "alive"}
+            elif pg.returncode == 1:
+                cmd = os.environ.get("AGORA_NOTIFY_BRIDGE_SPAWN") or \
+                      f'setsid nohup bash "{bridge}" >/dev/null 2>&1 &'
+                rs = subprocess.run(["bash", "-c", cmd], capture_output=True,
+                                    env={**os.environ, "AGORA_HOME": HOME})
+                br = {"state": "spawned" if rs.returncode == 0 else "spawn_failed"}
+                if rs.returncode != 0:
+                    br["err"] = ((rs.stderr or rs.stdout or "").strip().splitlines()
+                                 or [f"rc={rs.returncode}"])[-1][:120]
+            else:
+                br = {"state": "probe_failed", "err": f"pgrep rc={pg.returncode}"}
+    report["bridge"] = br
+except Exception as exc:   # 探活绝不阻断主流程（pgrep 缺失等一律降级记账）
+    report["bridge"] = {"state": "probe_failed", "err": str(exc)[:120]}
 
 os.makedirs(os.path.dirname(STATE_F), exist_ok=True)
 json.dump(state, open(STATE_F, "w"))
