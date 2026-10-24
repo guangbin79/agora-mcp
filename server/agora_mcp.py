@@ -363,9 +363,12 @@ for line in sys.stdin:
     if not line: continue
     try: req = json.loads(line)
     except Exception: continue
+    if not isinstance(req, dict):   # gt-35b5⑥：顶层非 dict 合法 JSON 帧回 error frame，不杀共享 server
+        reply(None, error={"code": -32600, "message": "invalid request: not an object"}); continue
     mid, method = req.get("id"), req.get("method")
     if method == "initialize":
-        reply(mid, {"protocolVersion": req.get("params",{}).get("protocolVersion","2025-03-26"),
+        pr = req.get("params")
+        reply(mid, {"protocolVersion": pr.get("protocolVersion", "2025-03-26") if isinstance(pr, dict) else "2025-03-26",
                     "capabilities": {"tools": {}},
                     "serverInfo": {"name": "agora-mcp", "version": VERSION},
                     "instructions": INSTRUCTIONS})
@@ -374,8 +377,16 @@ for line in sys.stdin:
     elif method == "tools/list":
         reply(mid, {"tools": TOOLS})
     elif method == "tools/call":
-        p = req.get("params", {})
-        res, err = call(p.get("name"), p.get("arguments", {}) or {})
+        p = req.get("params")
+        args = p.get("arguments") if isinstance(p, dict) else None
+        if args is None: args = {}   # null/缺省＝无参（既有语义）；其余非 dict 一律 isError（R1：or {} 会 coerce falsy 非 dict 放行）
+        if not isinstance(p, dict) or not isinstance(args, dict):   # gt-35b5②：形状守卫防 AttributeError
+            reply(mid, {"isError": True, "content": [{"type": "text",
+                        "text": json.dumps({"code": "VALIDATION_FAILED",
+                                            "message": "params 须为对象且 params.arguments 为对象"},
+                                           ensure_ascii=False)}]})
+            continue
+        res, err = call(p.get("name"), args)
         if err:
             reply(mid, {"isError": True, "content": [{"type": "text",
                         "text": json.dumps(err, ensure_ascii=False)}]})

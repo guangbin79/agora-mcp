@@ -2499,6 +2499,50 @@ echo "$OUT" | grep -q "\"task\":\"$CA3\"" && echo "$OUT" | grep -qF "$CA2" \
 # ③ 已终态再取消拒
 CANCEL --actor borch@repa --task "$CA3" 2>/dev/null
 [[ $? -eq 4 ]] && ok "③ 已终态再取消拒（rc=4）" || fail "③ 终态拒"
+# ⑦ gt-35b5 遗留三缺陷回归：① cancel 行尾 bare task 终态守卫 ／ ② tools/call 非 dict arguments ／ ⑥ 顶层非 dict 帧
+echo "===== gt-35b5 遗留三缺陷（① bare 行尾 ② 非参 ⑥ 非 dict 帧） ====="
+SHARD35="$AGORA_HOME/log/$(date +%F)/gt35b5.md"; mkdir -p "$(dirname "$SHARD35")"
+TS35="$(date +%FT%H:%M:%S)+08:00"
+CA5="gt-35b5a"; CA6="gt-35b5b"   # 行尾 bare（bug 形态）／尾随 body（阳性对照）
+echo "- seq:1 | ts:$TS35 | actor:borch@repa | event:cancelled | idem:x1 | seen:t@1 | task:$CA5" >> "$SHARD35"
+echo "- seq:2 | ts:$TS35 | actor:borch@repa | event:cancelled | idem:x2 | seen:t@1 | task:$CA6 | reason:x" >> "$SHARD35"
+CA7="gt-35b5c"   # R1-F3：dispatcher_task 尾段不得被子串误中为终态
+echo "- seq:3 | ts:$TS35 | actor:borch@repa | event:dispatched | idem:x3 | seen:t@1 | target:x | dispatcher_task:$CA7" >> "$SHARD35"
+CANCEL --actor borch@repa --task "$CA5" 2>/dev/null; [[ $? -eq 4 ]] \
+  && ok "① 行尾 bare task 的 cancelled 可见：拒 ALREADY_TERMINAL(rc=4)" || fail "① bare 行尾漏检（ALREADY_TERMINAL 绕过→双终态）"
+CANCEL --actor borch@repa --task "$CA6" 2>/dev/null; [[ $? -eq 4 ]] \
+  && ok "① 对照：尾随 body 的 cancelled 仍拒(rc=4)" || fail "① 对照组破坏"
+CANCEL --actor borch@repa --task "$CA7" 2>/dev/null; [[ $? -eq 5 ]] \
+  && ok "①-F3 dispatcher_task 尾段不误判终态（rc=5 非终态拒）" || fail "①-F3 dispatcher_task 子串误中（→rc=4 假终态）"
+cd "$REPA" && python3 - "$PKG/server/agora_mcp.py" <<'PYEOF' && ok "② tools/call arguments 非 dict：isError 且 server 存活" || fail "② 非 dict arguments 杀共享 server"
+import json, subprocess, sys
+p = subprocess.Popen(["python3", sys.argv[1]], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+def rpc(m, ps=None, i=1):
+    p.stdin.write(json.dumps({"jsonrpc":"2.0","id":i,"method":m,"params":ps or {}})+"\n"); p.stdin.flush()
+    return json.loads(p.stdout.readline())
+rpc("initialize", {})
+r = rpc("tools/call", {"name":"agora_task_create","arguments":"oops"}, 2)
+assert r.get("result", {}).get("isError"), r
+r = rpc("tools/call", {"name":"agora_task_create","arguments":[]}, 4)   # R1：falsy 非 dict 不得 coerce 放行
+assert r.get("result", {}).get("isError"), r
+r = rpc("tools/call", {"name":"agora_board","arguments":None}, 5)       # null＝无参，既有放行语义
+assert "content" in r.get("result", {}) and not r["result"].get("isError"), r
+assert rpc("ping", i=3).get("result") == {}, "server 已死"
+p.stdin.close()
+PYEOF
+cd "$REPA" && python3 - "$PKG/server/agora_mcp.py" <<'PYEOF' && ok "⑥ 顶层非 dict 帧：error frame 且 server 存活" || fail "⑥ 顶层非 dict 帧杀共享 server"
+import json, subprocess, sys
+p = subprocess.Popen(["python3", sys.argv[1]], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+def rpc(m, ps=None, i=1):
+    p.stdin.write(json.dumps({"jsonrpc":"2.0","id":i,"method":m,"params":ps or {}})+"\n"); p.stdin.flush()
+    return json.loads(p.stdout.readline())
+rpc("initialize", {})
+p.stdin.write(json.dumps([1,2,3])+"\n"); p.stdin.flush()
+r = json.loads(p.stdout.readline())
+assert r.get("error"), r
+assert rpc("ping", i=2).get("result") == {}, "server 已死"
+p.stdin.close()
+PYEOF
 # ④ MCP 双形态：agora_cancel 工具调用自动推导落账（十四工具注册断言在 heredoc 内）
 CA4=$(TID "$(TITLE="cancel MCP双形态用例" VERIFY=true PROJECT_DIR="$REPA" TC)")
 BDSP --actor borch@repa --project "$REPA" --task "$CA4" >/dev/null 2>&1

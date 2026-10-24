@@ -74,7 +74,7 @@ for f in sorted((glob.glob(f"{home}/log/*/*.md") + glob.glob(f"{home}/log/*/.*.m
     try: fh = open(f, encoding="utf-8", errors="replace")
     except OSError: continue
     for line in fh:
-        m = re.search(rf"task:({t0})( |\$)", line)
+        m = re.search(rf"(?:^|[|] )task:({t0})(?:\s|$)", line)   # 左锚防 dispatcher_task:<id> 尾段子串误中（merge.sh:38 边界范式，R1-F3）
         if not m: continue
         em = re.search(r"event:([a-z_]+)", line)
         ts = re.search(r"ts:(\S+)", line)
