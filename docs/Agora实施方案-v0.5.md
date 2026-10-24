@@ -23,16 +23,16 @@
 
 ### 交付物
 
-1. **仓库骨架**：`git init ~/agora`；按宣言 §4 建目录；`.gitattributes` 写入 `log/** merge=union`。
+1. **仓库骨架**：`git init ~/plaza`；按宣言 §4 建目录；`.gitattributes` 写入 `log/** merge=union`。
 2. **`post.sh`**（本期工程精力的 50% 押在这里）：
-   - flock 串行化（锁文件 `~/agora/.git/post.lock`）；
+   - flock 串行化（锁文件 `~/plaza/.git/post.lock`）；
    - 事件行文法校验（实现宣言 §5.2 的 ABNF，六必填字段固定顺序）；
    - per-actor seq 分配（扫分片取该 actor 最大值 +1）；
    - idem 查重（重复幂等键静默成功）；
    - `ts`、`seen`、`actor` 由脚本/调用方注入，agent 无权自填；
    - 分片文件不存在时自动创建并写入 `<!-- format: git-agora-log v1 -->` 头。
 3. **`derive-board.sh`**：实现宣言 §5.3 状态机最小子集（claimed/done/blocked），**可随时重跑、输出确定性**。
-4. **MCP server**（`~/agora/server/`，stdio，建议 TypeScript + 官方 SDK，<300 行）：
+4. **MCP server**（`~/plaza/server/`，stdio，建议 TypeScript + 官方 SDK，<300 行）：
    - 六工具：`agora_post / agora_check_mail / agora_board / agora_wiki_read / agora_wiki_write / agora_doctor`，每个工具内部 shell 调用机械层脚本，自身不实现任何逻辑；
    - 工具 schema 即文档：event 枚举、done 必带 commit/evidence 等都写在 schema description 里；
    - 身份裁决：每次工具调用读进程 cwd → 查 `wiki/entities/` 名册 → 绑定 actor（去冻结化：实体页可后到覆盖，长寿命 server 下启动期裁决会过期）；未命中则所有写工具返回"未注册"并引导自报名（server 建身份页入册）；

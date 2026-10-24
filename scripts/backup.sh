@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# backup.sh —— 每日备份（CONVENTIONS §7）。建议 crontab: 0 3 * * * AGORA_HOME=~/agora ~/agora-mcp/scripts/backup.sh（脚本单源在产品仓，gt-f6e4）
+# backup.sh —— 每日备份（CONVENTIONS §7）。建议 crontab: 0 3 * * * AGORA_HOME=~/plaza /home/guangbin/agora-mcp/scripts/backup.sh（脚本单源在产品仓，gt-f6e4）
 set -euo pipefail
-AGORA_HOME="${AGORA_HOME:-$HOME/agora}"
-DEST="${AGORA_BACKUP_DIR:-$HOME/agora-backups}"
+AGORA_HOME="${AGORA_HOME:-$HOME/plaza}"
+DEST="${AGORA_BACKUP_DIR:-$HOME/plaza-backups}"
 mkdir -p "$DEST"
 cd "$AGORA_HOME"
 git bundle create "$DEST/agora-$(date +%F).bundle" --all

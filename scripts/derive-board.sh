@@ -9,14 +9,14 @@
 #     分片被删、任务页集合变化、缓存损坏 → 自动退回全量重放。
 # 缓存是本机文件（.git/ 内），不进同步；任何可疑一律全量，正确性优先于省速。
 set -euo pipefail
-AGORA_HOME="${AGORA_HOME:-$HOME/agora}"
+AGORA_HOME="${AGORA_HOME:-$HOME/plaza}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"   # cd 前捕获：scripts 目录内相对调用亦能定位 agora_lib
 cd "$AGORA_HOME"
 PYTHONPATH="$SCRIPT_DIR${PYTHONPATH:+:$PYTHONPATH}" python3 - <<'PYEOF'
 import os, re, glob, json, hashlib, collections
 import agora_lib as lib   # LINE_RE/KV_RE/parse_event 唯一真源
 
-HOME = os.environ.get("AGORA_HOME", os.path.expanduser("~/agora"))
+HOME = os.environ.get("AGORA_HOME", os.path.expanduser("~/plaza"))
 CACHE_F = os.path.join(HOME, ".git", "derive-cache.json")
 
 # 任务元数据每次全量重读（deps/parent/title 供渲染；页面集合变化 = 缓存失效条件之一，

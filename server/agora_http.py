@@ -5,7 +5,7 @@
 安全模型：默认绑 127.0.0.1，本机即信任边界；设 AGORA_HTTP_HOST=0.0.0.0 暴露到局域网
 = 该局域网所有人可读广场（无写面，风险仅为信息暴露）。
 
-用法：AGORA_HOME=~/agora python3 server/agora_http.py
+用法：AGORA_HOME=~/plaza python3 server/agora_http.py
 环境：AGORA_HTTP_HOST（默认 127.0.0.1） AGORA_HTTP_PORT（默认 0 = 随机分配；固定端口如 8471 可显式指定）
 随机端口发现：启动后实际端口写入 $AGORA_HOME/.git/httpd.json（仓库本地，不进 git），
 agent 可经 MCP 工具 agora_who 的 http 字段查询（含死进程活体验证）。
@@ -17,7 +17,7 @@ import agora_lib as lib   # 账本/实体页共享解析（与机械层同源）
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
-HOME = os.environ.get("AGORA_HOME", os.path.expanduser("~/agora"))
+HOME = os.environ.get("AGORA_HOME", os.path.expanduser("~/plaza"))
 SCRIPTS = os.environ.get("AGORA_SCRIPTS") or os.path.join(_PKG, "scripts")   # 单源：产品仓 scripts（gt-f6e4；env 覆盖口）
 HOST = os.environ.get("AGORA_HTTP_HOST", "127.0.0.1")
 PORT = int(os.environ.get("AGORA_HTTP_PORT", "0"))

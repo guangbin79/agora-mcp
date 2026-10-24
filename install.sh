@@ -2,7 +2,7 @@
 # install.sh —— agora-mcp 一键安装：依赖检查 + 自举广场仓库 + 注册 opencode 全局 MCP + 装 hook
 set -uo pipefail
 PKG="$(cd "$(dirname "$0")" && pwd)"
-AGORA_HOME="${AGORA_HOME:-$HOME/agora}"
+AGORA_HOME="${AGORA_HOME:-$HOME/plaza}"
 
 echo "== 0/4 依赖检查"
 # 机械层是 bash + GNU coreutils/util-linux：Linux 原生具备；macOS 需 brew 提供 GNU 版本
@@ -42,7 +42,7 @@ entry = {
     "disabled": False,
 }
 # 非默认位置时把 AGORA_HOME 写进配置，保证 server 运行时找到同一个仓库
-if home != os.path.expanduser("~/agora"):
+if home != os.path.expanduser("~/plaza"):
     entry["environment"] = {"AGORA_HOME": home}
 cfg.setdefault("mcp", {}).setdefault("servers", {})["agora"] = entry
 json.dump(cfg, open(cfg_path, "w"), ensure_ascii=False, indent=2)

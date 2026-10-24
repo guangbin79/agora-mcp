@@ -3,9 +3,9 @@
 # 口径固定：spawn=任务首条 dispatched；merged=任务首条 merged；干预=diagnosed/reopened/escalated/cancelled
 # dispatcher 干预限 actor==任务页 dispatcher 字段；毕业 N=按 merged 时序扫 (spawn,merged] 窗口零干预连续任务数（遇干预归零重数，未 merged 不入列）
 # drill JSON（T2）缺席→drill 节显式 N/A，禁计 0；分片扫描含点分片伴生（gt-40cc：glob 的 * 不含点开头）
-# AGORA_HOME/AGORA_DRILL_STATE 可覆写（smoke fixture 缝），缺省 ~/agora 与 ~/.local/state/agora-drill
+# AGORA_HOME/AGORA_DRILL_STATE 可覆写（smoke fixture 缝），缺省 ~/plaza 与 ~/.local/state/agora-drill
 set -euo pipefail
-AH="${AGORA_HOME:-$HOME/agora}"
+AH="${AGORA_HOME:-$HOME/plaza}"
 DS="${AGORA_DRILL_STATE:-$HOME/.local/state/agora-drill}"
 exec python3 - "$AH" "$DS" <<'PY'
 import glob, json, os, re, sys

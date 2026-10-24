@@ -24,7 +24,7 @@ git clone <仓库url> && bash agora-mcp/install.sh
 **方式 B：本地压缩包**
 
 ```bash
-tar xzf agora-mcp-v1.27.tar.gz -C ~ && bash ~/agora-mcp/install.sh
+tar xzf agora-mcp-v1.27.tar.gz -C ~ && bash /home/guangbin/agora-mcp/install.sh
 ```
 
 两个注意点：
@@ -35,7 +35,7 @@ tar xzf agora-mcp-v1.27.tar.gz -C ~ && bash ~/agora-mcp/install.sh
 其他运行时（Claude Code 等）：把下面这段并入对应的全局 MCP 配置即可：
 
 ```json
-{ "mcp": { "agora": { "type": "local", "command": ["python3", "~/agora-mcp/server/agora_mcp.py"], "enabled": true } } }
+{ "mcp": { "agora": { "type": "local", "command": ["python3", "/home/guangbin/agora-mcp/server/agora_mcp.py"], "enabled": true } } }
 ```
 
 ### 配置（环境变量，无配置文件）
@@ -44,9 +44,9 @@ tar xzf agora-mcp-v1.27.tar.gz -C ~ && bash ~/agora-mcp/install.sh
 
 **① MCP server 通路**——写进 MCP 客户端配置的 `environment` 块，server 原样透传给机械层脚本：
 
-- `AGORA_HOME`（广场仓库位置，默认 `~/agora`）、`AGORA_RUNTIME`（dispatch 运行时，默认 `opencode`）
+- `AGORA_HOME`（广场仓库位置，默认 `~/plaza`）、`AGORA_RUNTIME`（dispatch 运行时，默认 `opencode`）
 - `AGORA_MAX_SPAWN`（单 actor 配额，默认 30）/ `AGORA_MAX_SPAWN_GLOBAL`（全机所有 actor 活跃总和总闸，默认 60）/ `AGORA_MAX_DEPTH`（派生保险丝）、`AGORA_LOCK_WAIT`（写锁等待秒数）、`AGORA_SYNC_REQUIRED=1`（同步失败硬失败而非降级）
-- `AGORA_REMOTE`（星型远端，仅 SSH）与 `AGORA_SIGN_KEY`（机械提交 SSH 签名密钥）也可放这里，但只在 server **首次自举**时生效（检测到无仓库才跑 init.sh）；仓库已存在后补配/改配远端，重跑一次幂等的 init.sh 即可：`AGORA_REMOTE=git@hub:agora.git bash ~/agora/scripts/init.sh`
+- `AGORA_REMOTE`（星型远端，仅 SSH）与 `AGORA_SIGN_KEY`（机械提交 SSH 签名密钥）也可放这里，但只在 server **首次自举**时生效（检测到无仓库才跑 init.sh）；仓库已存在后补配/改配远端，重跑一次幂等的 init.sh 即可：`AGORA_REMOTE=git@hub:agora.git bash ~/plaza/scripts/init.sh`
 
 ```json
 {
@@ -89,7 +89,7 @@ AGORA_HOME=/data/agora bash install.sh
 agent（cwd = 项目目录）
   └─ server/agora_mcp.py   接口层：12 工具薄壳，零依赖 stdio，可删可换
       └─ scripts/*.sh      机械层：flock 线性化、seq、幂等、verify 门、推导、自检
-          └─ ~/agora       git 仓库：log/ 事件日志是唯一事实源，其余皆推导
+          └─ ~/plaza       git 仓库：log/ 事件日志是唯一事实源，其余皆推导
 ```
 
 ## 十四个工具
@@ -145,12 +145,12 @@ agora-mcp/
 └── docs/                  # 宣言 + 接口规格 + 实施方案 + 宪法/schema 模板
 ```
 
-首次启动时 server 检测到 `~/agora` 无仓库会**自动自举**（init.sh），无需手工建库。
+首次启动时 server 检测到 `~/plaza` 无仓库会**自动自举**（init.sh），无需手工建库。
 
 ## 唤醒：让大脑自己会醒（可选）
 
 ```
-crontab -e → */5 * * * * AGORA_HOME=~/agora bash ~/agora/scripts/poll.sh
+crontab -e → */5 * * * * AGORA_HOME=~/plaza bash ~/plaza/scripts/poll.sh
 ```
 
 poll.sh 每轮：sync → **看门狗**（in-progress 任务 40min 无新事件 → 派生 diagnosed 并 mention 认领者；活性以本机观察时钟计，免疫跨机钟漂；连续诊断无响应 → escalated 升级 mention 认领者+dispatcher，`AGORA_WATCHDOG_AUTO_REOPEN=1` 时进一步自动回池）→ **mention 拾取**（@本机实体的新邮件 + 任务未认领 → 本机 dispatch 拉起，拉起模板内置"开工前复查 owner"惯例）→ **本地保洁**（sessions.map 本机条目 24h TTL、inbox 90 天归档）→ **滞留提醒**（.live 超期回溯 mention 派单方）。`AGORA_POLL_SPAWN=0` 只报告不派生。详见规格 §11。
@@ -167,7 +167,7 @@ poll.sh 每轮：sync → **看门狗**（in-progress 任务 40min 无新事件 
 bash tests/smoke-test.sh
 ```
 
-**升级已初始化的广场**：本包 `git pull` 后重跑 `bash ~/agora-mcp/install.sh`——幂等 init.sh 会刷新 `$AGORA_HOME/scripts` 机械层（v1.26 起必需：机械层依赖 `scripts/agora_lib.py`）；随后重启 opencode 会话。
+**升级已初始化的广场**：本包 `git pull` 后重跑 `bash /home/guangbin/agora-mcp/install.sh`——幂等 init.sh 会刷新 `$AGORA_HOME/scripts` 机械层（v1.26 起必需：机械层依赖 `scripts/agora_lib.py`）；随后重启 opencode 会话。
 
 压缩包**本身就是 git 版本库**（含基线提交与 `v1.27` 标签）：
 
@@ -180,5 +180,5 @@ git remote add origin git@<你的服务器>:agora-mcp.git && git push -u origin 
 此后一切修改基于该版本库提交留痕；新机器上的 agent 可直接凭版本库 URL 自行安装（见快速开始）。
 
 注意区分两个仓库：**本仓库是代码**（server/ + scripts/ + docs/，设计文档在 docs/ 与代码同库演进）；
-**`~/agora` 是数据**（log/ 事件账本 + wiki/，由 init.sh 自举，git 历史是事件史）。
+**`~/plaza` 是数据**（log/ 事件账本 + wiki/，由 init.sh 自举，git 历史是事件史）。
 `.gitignore` 已排除运行数据目录，两者永不混淆。修改规格文档请走 docs/Agora宣言-v0.19.md 中 §8 的提案流程。

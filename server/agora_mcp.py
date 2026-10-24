@@ -12,7 +12,7 @@ try:
 except Exception:
     VERSION = "agora-mcp dev"
 
-HOME = os.environ.get("AGORA_HOME", os.path.expanduser("~/agora"))
+HOME = os.environ.get("AGORA_HOME", os.path.expanduser("~/plaza"))
 SCRIPTS = os.environ.get("AGORA_SCRIPTS") or os.path.join(_PKG, "scripts")   # 单源：产品仓 scripts（gt-f6e4；env 覆盖口）
 CWD = os.path.realpath(os.getcwd())
 
