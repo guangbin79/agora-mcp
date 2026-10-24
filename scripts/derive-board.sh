@@ -46,8 +46,10 @@ wm, stats = {}, {"incr": 0, "full": 0}
 
 cache = None
 try:
+    # v4（gt-5a59）：merged 已入状态机——v3 缓存水位下的 merged 曾被当 no-op 消费，
+    # 旧缓存必须作废全量重放补账，否则修复合入后看板滞留不自愈
     c = json.load(open(CACHE_F))
-    if c.get("v") == 3 and c.get("task_ids") == task_ids and isinstance(c.get("watermark"), dict):
+    if c.get("v") == 4 and c.get("task_ids") == task_ids and isinstance(c.get("watermark"), dict):
         cache = c
 except Exception: pass
 
@@ -79,8 +81,15 @@ def apply(shard, i, actor, event, f):
             # 踢回 todo 曾造 gt-bb0b 拾取风暴（视图与 mention 守卫 done_open 口径对齐）
             if t["owner"] == actor and t["state"] != "done": t.update(state="todo", owner=None)
         return
-    if actor in retired: return
     tid = f.get("task")
+    if event == "merged" and tid in tasks:
+        # gt-5a59：merged＝机械簿记终态（merge.sh 机械票背书，非 actor 的任务主张）——先于 retired 过滤：
+        # 已退休 actor 补账的 merged 仍须闭环离板，否则 todo 永驻（实证：retired 盲化令当日 merged 全部失效）。
+        # 终态语义见任务页：merged 蕴含工作已落目标分支。含 cancelled→done（机械真值覆盖人工取消；
+        # merge.sh 实操链对 cancelled 任务不发 merged，此形态仅手工/raw 落账可达）
+        tasks[tid].update(state="done")
+        return
+    if actor in retired: return
     if event == "claimed" and tid in tasks:
         if tasks[tid]["owner"] is None and tasks[tid]["state"] == "todo":
             tasks[tid].update(state="in-progress", owner=actor)
@@ -100,7 +109,9 @@ def apply(shard, i, actor, event, f):
             tasks[tid].update(state="todo", owner=None)
     elif event == "verify_failed" and tid in tasks:
         pass  # 保持 in-progress（宣言 §5.3）
-    elif event == "blocked" and tid in tasks and tasks[tid]["owner"] == actor:
+    elif event == "blocked" and tid in tasks and tasks[tid]["owner"] == actor \
+            and tasks[tid]["state"] == "in-progress":
+        # gt-40cc：前置守卫对齐 reopened——done/cancelled/todo 不得被迟到的 blocked 拖走
         tasks[tid].update(state="blocked")
     elif event == "progress" and tid:
         last_progress[tid] = (f.get("ts", ""), (f.get("body") or "")[:60])   # (ts, body)：看板显示心跳 age（v1.31）
@@ -214,7 +225,7 @@ _write_optional("cancelled", "Cancelled",
                 [tid for tid in sorted(tasks) if tasks[tid]["state"] == "cancelled"])
 
 os.makedirs(os.path.dirname(CACHE_F), exist_ok=True)
-json.dump({"v": 3, "watermark": wm, "tasks": tasks, "retired": sorted(retired),
+json.dump({"v": 4, "watermark": wm, "tasks": tasks, "retired": sorted(retired),
            "conflicts": conflicts, "last_progress": last_progress,
            "task_ids": task_ids, "stats": stats},
           open(CACHE_F, "w"))

@@ -630,7 +630,7 @@ grep -q "$POLLT2" "$AGORA_HOME/board/conflicts.md" \
   && ok "双清 claim 回放兜底入 conflicts" || fail "双清 claim 回放兜底入 conflicts"
 
 echo "===== 增量推导（derive-cache） ====="
-python3 -c "import json;c=json.load(open('$AGORA_HOME/.git/derive-cache.json'));assert c['v']==3 and c['watermark']" \
+python3 -c "import json;c=json.load(open('$AGORA_HOME/.git/derive-cache.json'));assert c['v']==4 and c['watermark']" \
   && ok "增量缓存已建立" || fail "增量缓存已建立"
 S0=$(python3 -c "import json;print(json.load(open('$AGORA_HOME/.git/derive-cache.json'))['stats']['incr'])")
 bash "$AGORA_HOME/scripts/derive-board.sh"
@@ -1675,14 +1675,24 @@ R=$(AGORA_MERGE_WAIT_MIN=9999 AGORA_ORPHAN_MIN=9999 AGORA_WT_GRACE_MIN=9999 AGOR
   bash "$AGORA_HOME/scripts/poll.sh" 2>/dev/null)
 echo "$R" | grep -q "$HO" && echo "$R" | grep -q "wt_host" && [ -z "$(LEV "$HO" dispatched)" ] \
   && ok "⑥ wt_host 异机任务拾取跳过（held）" || fail "⑥ host 限定"
-# ⑥b 账本真值终态核查棒：任务已 merged（簿记收尾）而看板 todo 滞后残留 → mention 不派发（gt-99af 修复一；
-# derive-board 不处理 merged 事件 → todo 残留，现状拾取段只信看板会派发雪球）
+# ⑥b 终态核查棒：merged 已由 derive 消费（gt-5a59）→ merged 落账即离板（post.sh 同锁重推导），
+# mention 零派发——雪球根因消除；账本终态守卫（gt-99af 修复一）留作派生滞后窗第二道防线
 TZ=$(TID "$(TITLE="终态不派" VERIFY="true" PROJECT_DIR="$PROJ" TC)")
 tick "$TZ"; POST tester@proj --event merged --task "$TZ" --commit "$(git -C "$PROJ" rev-parse HEAD)" --branch "$(git -C "$PROJ" symbolic-ref --short HEAD)" >/dev/null; untick "$TZ"
 POST rival@proj2 --event progress --task "$TZ" --mention tester --body "终态后不应派发" >/dev/null
+POLLT >/dev/null
+[ -z "$(LEV "$TZ" dispatched)" ] && ! grep -q "^- $TZ" "$AGORA_HOME/board/todo.md" \
+  && ok "⑥b 终态（merged）任务 todo 不残留＋mention 不派发（雪球根因消除）" || fail "⑥b 终态任务被派发或 todo 残留（got: $(LEV "$TZ" dispatched | head -1)）"
+# ⑥b-lag 滞后形态（ocr-R1#2 改判）：raw 追加 merged（不经 post.sh 同锁 derive）→ 提及拾取前的
+# 看板一度滞后。注意 poll.sh:38 启动即 derive——新 derive 下滞后窗在生产路径结构性不可达，
+# gt-99af 修复一（held 终态守卫）降为崩溃窗纵深；此处锚定可达不变量：滞后形态零派发＋poll 自愈离板
+TZ2=$(TID "$(TITLE="终态滞后窗" VERIFY="true" PROJECT_DIR="$PROJ" TC)")
+POST rival@proj2 --event progress --task "$TZ2" --mention tester --body "滞后窗不应派发" >/dev/null
+printf -- '- seq:98701 | ts:%s | actor:agora-mcp@proj | event:merged | idem:rawmg1 | seen:proj@0 | task:%s | commit:%s\n' \
+  "$(date --iso-8601=seconds)" "$TZ2" "$(git -C "$PROJ" rev-parse HEAD)" >> "$AGORA_HOME/log/$(date +%F)/proj.md"
 RB=$(POLLT)
-[ -z "$(LEV "$TZ" dispatched)" ] && echo "$RB" | grep -q "$TZ" && echo "$RB" | grep -q "终态" \
-  && ok "⑥b 终态（merged）任务 mention 不派发（held）" || fail "⑥b 终态任务被派发（雪球）或 held 缺失（got: $(LEV "$TZ" dispatched | head -1))"
+[ -z "$(LEV "$TZ2" dispatched)" ] && ! grep -q "^- $TZ2" "$AGORA_HOME/board/todo.md" \
+  && ok "⑥b-lag 滞后形态：零派发＋poll 启动 derive 自愈离板" || fail "⑥b-lag 滞后形态失守（dispatched=$(LEV "$TZ2" dispatched | head -1)）"
 # ⑦ stale-live 回归（既有档）
 SL=$(MKWT2 "滞留" t7l)
 POST tester@proj --event claimed --task "$SL" >/dev/null
@@ -2422,6 +2432,59 @@ assert not any(s['task']=='$G7' for s in r['spawned']), r['spawned']
 h=[x for x in r['held'] if x['task']=='$G7']
 assert h and '在飞去重' in h[0]['reason'], r['held']
 " && ok "守卫七：心跳在飞（dispatched→progress）回声零派＋held" || fail "守卫七 心跳在飞（$GOUT）"
+
+echo "===== gt-5a59：derive merged handler＋blocked 前置守卫 ====="
+# 迁移矩阵（任务页合同三用例＋retired 盲化回归）：①claimed→merged 离场（「state 任意→done」甄别形；
+# 任务页字面 done→merged 不可甄别——done 已终态 handler 缺席也离场，故取无 done 形，⑥b 覆盖 todo→merged、
+# ③覆盖 done→reopened→todo→merged）②done→blocked 不入 blocked 栏（gt-40cc）③done→reopened→todo→merged
+# 离场（gt-35b5 sweep 补账生效；reopened 同片落账保因果序，ocr-R1#4）——merged 走机械票（F7 形态）
+MB1=$(TID "$(TITLE="g5a59甲claimed后merged离场" VERIFY=true PROJECT_DIR="$PROJ" TC)")
+MB2=$(TID "$(TITLE="g5a59乙done后blocked守卫" VERIFY=true PROJECT_DIR="$PROJ" TC)")
+MB3=$(TID "$(TITLE="g5a59丙重开后merged离场" VERIFY=true PROJECT_DIR="$PROJ" TC)")
+POST tester@proj --event claimed --task "$MB1" >/dev/null
+POST tester@proj --event claimed --task "$MB2" >/dev/null
+POST tester@proj --event done --task "$MB2" --commit HEAD --evidence ok >/dev/null
+POST tester@proj --event claimed --task "$MB3" >/dev/null
+POST tester@proj --event done --task "$MB3" --commit HEAD --evidence ok >/dev/null
+# ocr-R1#4：reopened 必须与 done/merged 同分片（POST 助手按 actor 后缀路由分片，watchdog@$(hostname)
+# 会落他片破坏因果序）——显式 --project proj 同片落账
+bash "$AGORA_HOME/scripts/post.sh" --actor watchdog@proj --project proj --event reopened --task "$MB3" --reason "done-unmerged 阶梯拖回 todo（gt-35b5 形态）" >/dev/null
+tick "$MB1"; POST tester@proj --event merged --task "$MB1" --commit "$(git -C "$PROJ" rev-parse HEAD)" --branch "$(git -C "$PROJ" symbolic-ref --short HEAD)" >/dev/null; untick "$MB1"
+POST tester@proj --event blocked --task "$MB2" --reason "合并冲突" >/dev/null
+tick "$MB3"; POST tester@proj --event merged --task "$MB3" --commit "$(git -C "$PROJ" rev-parse HEAD)" --branch "$(git -C "$PROJ" symbolic-ref --short HEAD)" >/dev/null; untick "$MB3"
+bash "$AGORA_HOME/scripts/derive-board.sh"
+! grep -q "$MB1" "$AGORA_HOME/board/in-progress.md" 2>/dev/null \
+  && python3 -c "import json;c=json.load(open('$AGORA_HOME/.git/derive-cache.json'));assert c['tasks']['$MB1']['state']=='done'" \
+  && ok "① claimed→merged 落终态（state==done，离 in-progress）" || fail "① merged 未落终态（$MB1）"
+! grep -q "$MB2" "$AGORA_HOME/board/blocked.md" 2>/dev/null \
+  && ok "② done 后 blocked 不入 blocked 栏（前置守卫）" || fail "② done 被拖进 blocked（gt-40cc，$MB2）"
+! grep -q "$MB3" "$AGORA_HOME/board/todo.md" \
+  && ok "③ reopened→todo→merged 离场（sweep 补账生效）" || fail "③ merged 后永驻 todo（gt-35b5，$MB3）"
+# ⑤ v3→v4 迁移自愈（ocr-R1#6）：毒化 v3 缓存（merged 任务拨回 todo）→ derive 须作废缓存全量重放补账
+python3 -c "
+import json
+f = '$AGORA_HOME/.git/derive-cache.json'
+c = json.load(open(f))
+c['v'] = 3; c['tasks']['$MB3']['state'] = 'todo'
+json.dump(c, open(f, 'w'))"
+bash "$AGORA_HOME/scripts/derive-board.sh"
+! grep -q "$MB3" "$AGORA_HOME/board/todo.md" \
+  && python3 -c "import json;c=json.load(open('$AGORA_HOME/.git/derive-cache.json'));assert c['v']==4" \
+  && ok "⑤ 毒化 v3 缓存被作废：全量重放自愈＋v4" || fail "⑤ 旧缓存未自愈（$MB3 滞留或版本未翻新）"
+# ④ retired 盲化回归：收工会话误发 retired 把共享 actor 整体拉黑（真账本实证 126 条），其后的
+# 机械 merged 补账不得被盲——merged 是 merge.sh 机械票终态，非 actor 任务主张
+# 注意：此后本套件 AGORA_HOME 内 agora-mcp@proj 被 derive 永久盲化（retired 不可逆），勿再以该
+# actor 发状态事件（ocr-R1#3 脚枪标注）
+OUT4=$(POST agora-mcp@proj --event retired --task "$MB3" --reason "收工演练（污染共享 actor）")
+echo "$OUT4" | grep -q '"seq"' || fail "④ 前置：retired 落账失败（$OUT4）"
+MB4=$(TID "$(TITLE="g5a59丁退休actor补merged" VERIFY=true PROJECT_DIR="$PROJ" TC)")
+POST tester@proj --event claimed --task "$MB4" >/dev/null
+POST tester@proj --event done --task "$MB4" --commit HEAD --evidence ok >/dev/null
+bash "$AGORA_HOME/scripts/post.sh" --actor watchdog@proj --project proj --event reopened --task "$MB4" --reason "阶梯拖回 todo" >/dev/null
+tick "$MB4"; POST agora-mcp@proj --event merged --task "$MB4" --commit "$(git -C "$PROJ" rev-parse HEAD)" --branch "$(git -C "$PROJ" symbolic-ref --short HEAD)" >/dev/null; untick "$MB4"
+bash "$AGORA_HOME/scripts/derive-board.sh"
+! grep -q "$MB4" "$AGORA_HOME/board/todo.md" \
+  && ok "④ retired 后机械 merged 仍闭环离场（不过滤）" || fail "④ retired 盲化机械终态（$MB4）"
 
 echo
 echo "===== 多仓关联测试场（B批 gt-2153）：跨仓链/删树重建/中途 cancelled/深度边界＋teardown 竞态 ====="

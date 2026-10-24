@@ -9,6 +9,6 @@
 - 夹具必须造真形态：done-unmerged 路径的夹具若借「分支==HEAD（已并形态）」偷懒，任何新增 git 层守卫都会把它静默吞掉且测试全灭（S4a-d 实证 6 断言红）。夹具态＝生产态，逐字对齐。
 
 ## 逐字证据
-- derive-board `apply()` 无 merged 分支：merged 落账后任务留 todo 原位——这就是「账本终态＋看板滞后」的常态窗口（smoke ⑥b 构造法：tick 机械票 post merged，看板不刷新）。
+- derive-board `apply()` 的 merged 分支曾缺失（merged 落账后任务留 todo 原位）——即「账本终态＋看板滞后」的历史常态窗口；gt-5a59 已补 merged handler（机械终态先于 retired 过滤）＋缓存 v3→v4 全量补账，滞后窗仅剩 raw 落账形态（smoke ⑥b-lag 锚）。
 - 短路判据（poll.sh ②c）：`refs/heads/wt/<t>` 或 `refs/remotes/origin/wt/<t>` 存在且 `merge-base --is-ancestor <sha> HEAD` → `mw.pop`＋`report["merge_lagged"]`；`os.path.isdir(project_dir)` 不成立时跳过检查（不短路）。
 - S4 夹具改造前后对照：夹具无树内提交 → `merge_lagged: [T4D…]`、redispatched 空（6 断言红）；树内产提交后 redispatched 恢复 injected/spawned（304/0 绿）。
