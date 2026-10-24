@@ -19,3 +19,4 @@
 - [board-lane-membership.md](modules/board-lane-membership.md) — 看板泳道成员资格口径：poll 派生旗标复位集逐字对齐 derive-board 状态机（自行加宽＝失看护盲区）、瞬时活性与成员资格两层分离、出泳道集真源＝apply() 分支 (2026-10-24, gt-ef98)
 - [merged-terminal-precedence.md](modules/merged-terminal-precedence.md) — merged 机械终态先于 retired 过滤、缓存版本 bump 强制全量补账、夹具甄别力与分片因果序双闸 (2026-10-24, gt-5a59)
 - 共享主检出写入纪律: `docs/agents/knowledge/modules/shared-checkout-commit-first.md`
+- [cron-direct-exec-contract.md](modules/cron-direct-exec-contract.md) — cron 直执接线双合同：执行位 git mode 100755（diff 不可见，遗漏=126 静默潜伏）＋CLI 形态实测（字面速记 vs 实 usage，verify/grep 须逐字对齐）；实弹射击验收手法（systemd-run 等价脱附） (2026-10-24, gt-5f59)
