@@ -1615,6 +1615,7 @@ MERGE "$N8" >/dev/null 2>&1
 [ "$(LEDEV "$N8" merged | grep -c "event:merged")" -eq 1 ] && ok "⑧ 重跑幂等（merged 恰一条）" || fail "⑧ 重跑幂等（merged 恰一条）"
 # ⑧b done commit 未并入主仓→NOT_IN_TARGET 拒、无 merged 落账
 N8B=$(TID "$(TITLE="非wt未并" VERIFY=true PROJECT_DIR="$PROJ" TC)")
+POST tester@proj --event claimed --task "$N8B" >/dev/null   # ⑧d 闸后 claimed 链＝非 wt 闭环前置（夹具态=生产态）
 D8C=$(git -C "$PROJ" -c user.name=t -c user.email=t@l commit-tree 'HEAD^{tree}' -m dangling8b)
 POST tester@proj --event done --task "$N8B" --commit "$D8C" --evidence ok >/dev/null
 MERGE "$N8B" 2>&1 | grep -q NOT_IN_TARGET && ok "⑧b done 未并入主仓被拒" || fail "⑧b done 未并入主仓被拒"
@@ -1622,6 +1623,33 @@ MERGE "$N8B" 2>&1 | grep -q NOT_IN_TARGET && ok "⑧b done 未并入主仓被拒
 # ⑧c 账本无 done 事件→锚点缺失拒
 N8C=$(TID "$(TITLE="非wt无done" VERIFY=true PROJECT_DIR="$PROJ" TC)")
 MERGE "$N8C" 2>&1 | grep -q VALIDATION_FAILED && ok "⑧c 无 done commit 拒" || fail "⑧c 无 done commit 拒"
+# ⑧d actor 链闸（gt-7117 评审 C-1 fail-closed）：无 claimed 直 done→VALIDATION_FAILED；done≠首个 claimed actor→DONE_ACTOR_MISMATCH
+N8D=$(TID "$(TITLE="非wt无claimed" VERIFY=true PROJECT_DIR="$PROJ" TC)")
+POST rival@proj2 --event done --task "$N8D" --commit "$(git -C "$PROJ" rev-parse HEAD)" --evidence ok >/dev/null
+MERGE "$N8D" 2>&1 | grep -q VALIDATION_FAILED && ok "⑧d 无 claimed 链拒（fail-closed）" || fail "⑧d 无 claimed 链拒（fail-closed）"
+N8E=$(TID "$(TITLE="非wt冒领done" VERIFY=true PROJECT_DIR="$PROJ" TC)")
+POST tester@proj --event claimed --task "$N8E" >/dev/null
+POST rival@proj2 --event done --task "$N8E" --commit "$(git -C "$PROJ" rev-parse HEAD)" --evidence ok >/dev/null
+MERGE "$N8E" 2>&1 | grep -q DONE_ACTOR_MISMATCH && ok "⑧d done actor≠claimed actor 拒" || fail "⑧d done actor≠claimed actor 拒"
+# ⑧e（R1 评审锚定回归）：自由文本字段不得伪造/污染链闸信号——progress body 引 event:claimed 不放行；done evidence 引 actor:x 不假拒
+N8F=$(TID "$(TITLE="非wt伪claimed" VERIFY=true PROJECT_DIR="$PROJ" TC)")
+POST rival@proj2 --event progress --task "$N8F" --body "补录 event:claimed 待查" >/dev/null
+POST rival@proj2 --event done --task "$N8F" --commit "$(git -C "$PROJ" rev-parse HEAD)" --evidence ok >/dev/null
+MERGE "$N8F" 2>&1 | grep -q VALIDATION_FAILED && ok "⑧e 自由文本伪造 claimed 不放行" || fail "⑧e 自由文本伪造 claimed 不放行"
+N8G=$(TID "$(TITLE="非wt证据引actor" VERIFY=true PROJECT_DIR="$PROJ" TC)")
+POST tester@proj --event claimed --task "$N8G" >/dev/null
+POST tester@proj --event done --task "$N8G" --commit "$(git -C "$PROJ" rev-parse HEAD)" --evidence "handoff reviewed by actor:alice" >/dev/null
+MERGE "$N8G" 2>/dev/null | grep -q '"result":"merged"' && ok "⑧e evidence 引 actor:x 不假拒" || fail "⑧e evidence 引 actor:x 不假拒"
+# ⑧e 补（R2 评审）：非行尾伪造 actor（evidence 后随字段＝生产常态）不放行；末条 done 垃圾 commit 不回退旧锚
+N8H=$(TID "$(TITLE="非wt中位伪造actor" VERIFY=true PROJECT_DIR="$PROJ" TC)")
+POST tester@proj --event claimed --task "$N8H" >/dev/null
+POST rival@proj2 --event done --task "$N8H" --commit "$(git -C "$PROJ" rev-parse HEAD)" --evidence "fin actor:tester@proj" --body wrap >/dev/null
+MERGE "$N8H" 2>&1 | grep -q DONE_ACTOR_MISMATCH && ok "⑧e 非行尾伪造 actor 不放行" || fail "⑧e 非行尾伪造 actor 不放行"
+N8I=$(TID "$(TITLE="非wt末条垃圾commit" VERIFY=true PROJECT_DIR="$PROJ" TC)")
+POST tester@proj --event claimed --task "$N8I" >/dev/null
+POST tester@proj --event done --task "$N8I" --commit "$(git -C "$PROJ" rev-parse HEAD)" --evidence ok >/dev/null
+POST tester@proj --event done --task "$N8I" --commit HEAD --evidence 重跑 >/dev/null
+MERGE "$N8I" 2>&1 | grep -q VALIDATION_FAILED && ok "⑧e 末条垃圾 commit 不回退旧锚" || fail "⑧e 末条垃圾 commit 不回退旧锚"
 
 echo "===== poll 补档：重派/孤儿/豁免/GC/host（全量委托 L1 Task7） ====="
 rm -f "$AGORA_HOME/scripts/sessions.map"

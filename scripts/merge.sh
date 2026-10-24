@@ -40,11 +40,25 @@ p = sys.argv[1]; m = agora_lib.main_repo_of(p); print(m or p)' "$(realpath "$PD"
 # 机械 verify 锚 project_dir 真跑背书；此处验 done commit 已被主仓默认分支包含
 # 即出票补 merged——对齐 wt 幂等路径「已含→只补账不重验」（无可合并新状态）。
 if [ -z "$WTD" ]; then
-  DONEC=$( { cat $(find "$AGORA_HOME/log" -mindepth 2 -name "*.md" -type f 2>/dev/null | sort) 2>/dev/null || true; } \
-    | grep -E "(^|[|] )task:$TASK( |$)" | grep -E "event:done( |$)" \
-    | awk '{ if (match($0, /[ |]commit:[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]+/)) print substr($0, RSTART+8, RLENGTH-8) }' \
-    | tail -1 || true)
+  # B-1（gt-7117 评审）：find 空时裸 cat $(find) 吞调用方 stdin/挂起——post.sh T1 同款硬化；
+  # LC_ALL=C 钉分片序（R1 评审 C-F2：collation 漂移会改「首个 claimed」判定）
+  LEDCAT() { find "$AGORA_HOME/log" -mindepth 2 -name "*.md" -type f -print0 2>/dev/null | LC_ALL=C sort -z | xargs -0 -r cat 2>/dev/null || true; }
+  # R1 评审（ocr/B-F2/C-F1）：结构字段双侧定界锚——自由文本（禁 | 但可含字段形 token）不得伪造 event:/actor:/commit: 信号；
+  # R2 评审（ocr-F1/F2/F3）：actor sed 左锚升结构位 [|] actor:（右锚可由后续字段供给）；DONEC/DONEA 同源 LASTDONE 快照防异源行配对
+  TASKL=$(LEDCAT | grep -E "(^|[|] )task:$TASK( |$)" || true)
+  DONEL=$(printf '%s\n' "$TASKL" | grep -E "[|] event:done( |$)" || true)
+  LASTDONE=$(printf '%s\n' "$DONEL" | tail -1 || true)
+  DONEC=$(printf '%s\n' "$LASTDONE" \
+    | awk '{ if (match($0, /[|] commit:[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]+/)) print substr($0, RSTART+9, RLENGTH-9) }' \
+    || true)
   [ -n "$DONEC" ] || fail VALIDATION_FAILED "task $TASK 账本无 done commit（非 wt 闭环缺锚点）"
+  # C-1（gt-7117 评审）actor 链闸：无锚制品时 claimed→done 链＝wt 路径「锚制品仅派发链可造」的替代闸，fail-closed；
+  # sed 双侧结构锚（值禁 |，「| actor:x |」字面序自由文本不可得）
+  DONEA=$(printf '%s\n' "$LASTDONE" | sed -n 's/.*[|] actor:\([^ |]*\) [|].*/\1/p' || true)
+  CLAIMA=$(printf '%s\n' "$TASKL" | grep -E "[|] event:claimed( |$)" | head -1 \
+    | sed -n 's/.*[|] actor:\([^ |]*\) [|].*/\1/p' || true)
+  [ -n "$CLAIMA" ] || fail VALIDATION_FAILED "task $TASK 账本无 claimed 事件（无认领链拒，fail-closed）"
+  [ "$DONEA" = "$CLAIMA" ] || fail DONE_ACTOR_MISMATCH "done actor ${DONEA:-∅} ≠ 首个 claimed actor $CLAIMA" 4
   TBRANCH=$(git -C "$MAIN" symbolic-ref -q --short HEAD 2>/dev/null || echo HEAD)
   TARG=$(git -C "$MAIN" rev-parse --verify --quiet "$TBRANCH") || fail VALIDATION_FAILED "目标分支不可解析: $MAIN@$TBRANCH"
   git -C "$MAIN" merge-base --is-ancestor "$DONEC" "$TARG" 2>/dev/null \
