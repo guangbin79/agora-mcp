@@ -1523,6 +1523,26 @@ M7=$(MKWT "脏目标" "true" t6h); W7=$(ls -d "$T"/proj__wt-${M7}__*)
 WTCOMMIT "$W7" x m7; printf 'dirty\n' >> "$PROJ/app.txt"   # 已跟踪文件的未提交修改（untracked 已放行）
 MERGE "$M7" 2>&1 | grep -q TARGET_DIRTY && ok "⑦ 脏目标（tracked 修改）拒绝合并" || fail "⑦ 脏目标拒绝合并"
 git -C "$PROJ" checkout -q -- app.txt
+# ⑧ 非 wt 闭环（gt-7117）：页无 wt_dir＝直改仓任务——done commit 已在主仓默认分支→出票补 merged，无树操作；
+# verify 背书＝done 时机械 verify 锚 project_dir（对齐 wt 幂等路径⑤「已含→只补账不重验」）
+N8=$(TID "$(TITLE="非wt闭环" VERIFY=true PROJECT_DIR="$PROJ" TC)")
+echo nwt > "$PROJ/nwt-file"; git -C "$PROJ" add -A; git -C "$PROJ" -c user.name=t -c user.email=t@l commit -qm nwt
+POST tester@proj --event claimed --task "$N8" >/dev/null
+POST tester@proj --event done --task "$N8" --commit "$(git -C "$PROJ" rev-parse HEAD)" --evidence ok >/dev/null
+MERGE "$N8" 2>/dev/null | grep -q '"result":"merged"' && ok "⑧ 非 wt 闭环 merged JSON" || fail "⑧ 非 wt 闭环 merged JSON"
+LEDEV "$N8" merged | grep -q "commit:$(git -C "$PROJ" rev-parse HEAD)" && ok "⑧ merged 落账 commit=主仓 HEAD" || fail "⑧ merged 落账 commit=主仓 HEAD"
+[ -z "$(ls -d "$T"/proj__wt-${N8}__* 2>/dev/null)" ] && ok "⑧ 非 wt 无树操作" || fail "⑧ 非 wt 无树操作"
+MERGE "$N8" >/dev/null 2>&1
+[ "$(LEDEV "$N8" merged | grep -c "event:merged")" -eq 1 ] && ok "⑧ 重跑幂等（merged 恰一条）" || fail "⑧ 重跑幂等（merged 恰一条）"
+# ⑧b done commit 未并入主仓→NOT_IN_TARGET 拒、无 merged 落账
+N8B=$(TID "$(TITLE="非wt未并" VERIFY=true PROJECT_DIR="$PROJ" TC)")
+D8C=$(git -C "$PROJ" -c user.name=t -c user.email=t@l commit-tree 'HEAD^{tree}' -m dangling8b)
+POST tester@proj --event done --task "$N8B" --commit "$D8C" --evidence ok >/dev/null
+MERGE "$N8B" 2>&1 | grep -q NOT_IN_TARGET && ok "⑧b done 未并入主仓被拒" || fail "⑧b done 未并入主仓被拒"
+[ -z "$(LEDEV "$N8B" merged)" ] && ok "⑧b 拒后无 merged 落账" || fail "⑧b 拒后无 merged 落账"
+# ⑧c 账本无 done 事件→锚点缺失拒
+N8C=$(TID "$(TITLE="非wt无done" VERIFY=true PROJECT_DIR="$PROJ" TC)")
+MERGE "$N8C" 2>&1 | grep -q VALIDATION_FAILED && ok "⑧c 无 done commit 拒" || fail "⑧c 无 done commit 拒"
 
 echo "===== poll 补档：重派/孤儿/豁免/GC/host（全量委托 L1 Task7） ====="
 rm -f "$AGORA_HOME/scripts/sessions.map"

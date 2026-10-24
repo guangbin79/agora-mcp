@@ -3,6 +3,9 @@
 #   ff-only 合并 wt/<task> 分支到合并目标 → 集成 verify 在目标目录真跑 → merged 落账 → 清树
 #   合并目标二分：同仓链（上游 dispatcher 任务主仓==本任务主仓且上游有 wt_dir）→ 上游 wt 分支；
 #               跨仓链/无上游 → project_dir 默认分支
+#   非 wt 闭环（gt-7117）：页无 wt_dir＝直改仓任务——done commit 已被主仓默认分支包含
+#               → 出票补 merged（verify 背书＝done 时机械 verify 锚 project_dir，等价 wt 幂等路径
+#               「已含→只补账不重验」；无树操作）
 #   失败路径：集成 verify FAIL → reset --hard 原子回滚零痕迹 → blocked(附 verify 尾) → reopened；
 #            non-ff → blocked(冲突摘要) → reopened；脏目标 → TARGET_DIRTY 拒合并（防 reset --hard 吞未提交改动）
 #   幂等：目标分支已含本任务提交 → 只补 merged 落账（不重合并不重验）
@@ -24,7 +27,6 @@ PAGE="$AGORA_HOME/wiki/tasks/$TASK.md"
 [ -f "$PAGE" ] || fail TASK_NOT_FOUND "task page missing: $TASK"
 FM() { grep -m1 "^$1:" "$PAGE" | sed "s/^$1:[[:space:]]*//; s/^\"\(.*\)\"\$/\1/" || true; }
 WTD="$(FM wt_dir)"; PD="$(FM project_dir)"; VF="$(FM verify)"
-[ -n "$WTD" ] || fail VALIDATION_FAILED "task $TASK 无 wt_dir（非 wt 任务不走 merge.sh）"
 [ -n "$VF" ]  || fail VALIDATION_FAILED "task $TASK has no verify"
 [ -d "$PD" ]  || fail VALIDATION_FAILED "project_dir 不存在: $PD"
 # wt_host 守卫（S3）：跨机 wt 任务不在本机合并（wt_dir 锚点会在本机重建树＝错误现场）
@@ -33,6 +35,29 @@ WHOST="$(FM wt_host)"
 
 MAIN=$(PYTHONPATH="$AGORA_HOME/scripts" python3 -c 'import sys, agora_lib
 p = sys.argv[1]; m = agora_lib.main_repo_of(p); print(m or p)' "$(realpath "$PD")")
+
+# ---- gt-7117 非 wt 闭环：页无 wt_dir＝直改仓任务（无树可清）。done 已由 post.sh
+# 机械 verify 锚 project_dir 真跑背书；此处验 done commit 已被主仓默认分支包含
+# 即出票补 merged——对齐 wt 幂等路径「已含→只补账不重验」（无可合并新状态）。
+if [ -z "$WTD" ]; then
+  DONEC=$( { cat $(find "$AGORA_HOME/log" -mindepth 2 -name "*.md" -type f 2>/dev/null | sort) 2>/dev/null || true; } \
+    | grep -E "(^|[|] )task:$TASK( |$)" | grep -E "event:done( |$)" \
+    | awk '{ if (match($0, /[ |]commit:[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]+/)) print substr($0, RSTART+8, RLENGTH-8) }' \
+    | tail -1 || true)
+  [ -n "$DONEC" ] || fail VALIDATION_FAILED "task $TASK 账本无 done commit（非 wt 闭环缺锚点）"
+  TBRANCH=$(git -C "$MAIN" symbolic-ref -q --short HEAD 2>/dev/null || echo HEAD)
+  TARG=$(git -C "$MAIN" rev-parse --verify --quiet "$TBRANCH") || fail VALIDATION_FAILED "目标分支不可解析: $MAIN@$TBRANCH"
+  git -C "$MAIN" merge-base --is-ancestor "$DONEC" "$TARG" 2>/dev/null \
+    || fail NOT_IN_TARGET "done commit $DONEC 不在 $MAIN:$TBRANCH——非 wt 任务无可合并动作，产出先落主支再闭环" 4
+  mkdir -p "$AGORA_HOME/.git/merge-tickets"
+  : > "$AGORA_HOME/.git/merge-tickets/$TASK"
+  bash "$AGORA_HOME/scripts/post.sh" --actor "$ACTOR" --project "$(basename "$MAIN")" --event merged \
+    --task "$TASK" --commit "$TARG" --branch "$TBRANCH" >/dev/null \
+    || { rm -f "$AGORA_HOME/.git/merge-tickets/$TASK"; fail LEDGER_FAILED "merged 补账失败（post.sh 详见 stderr）" 4; }
+  rm -f "$AGORA_HOME/.git/merge-tickets/$TASK"
+  printf '{"result":"merged","task":"%s","branch":"%s","commit":"%s","nonwt":true}\n' "$TASK" "$TBRANCH" "$TARG"
+  exit 0
+fi
 
 # ---- 合并目标二分：任务链 dispatcher_task → 上游任务页 ----
 # 字段边界匹配 (^|[|] )task:<id>( |$)：防 dispatcher_task: 字段子串误中（gt-ab12 前缀撞 gt-ab1234 同防）
