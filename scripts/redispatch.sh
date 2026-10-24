@@ -5,6 +5,7 @@
 # 守卫：当前终态 merged/cancelled 拒；在飞（活跃 dispatched 未闭合且非 escalated/done-unmanaged 尾态）拒。
 # 用法: redispatch.sh --actor NAME@PROJ [--task gt-xxxx]
 set -euo pipefail
+SCRIPTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"   # 单源自定位：兄弟脚本/库一律本仓 scripts（gt-f6e4）
 AGORA_HOME="${AGORA_HOME:-$HOME/agora}"
 fail() { python3 -c 'import json,sys; print(json.dumps({"code":sys.argv[1],"message":sys.argv[2]}, ensure_ascii=False), file=sys.stderr)' "$1" "$2"; exit "${3:-2}"; }
 ACTOR=""; TASK=""
@@ -77,12 +78,12 @@ PDIR=$(sed -n 's/^project_dir:[[:space:]]*//p' "$PAGE" | head -1)
 REOPENED=0
 if [[ "$ST_LAST" == "escalated" || "$ST_OPEN" == "1" ]]; then
   ORIG="done-unmerged"; [[ "$ST_LAST" == "escalated" ]] && ORIG="escalated"
-  bash "$AGORA_HOME/scripts/post.sh" --actor "$ACTOR" --project "$PROJECT" --event reopened \
+  bash "$SCRIPTS_DIR/post.sh" --actor "$ACTOR" --project "$PROJECT" --event reopened \
     --task "$TASK" --reason "redispatch 回池（原态:$ORIG）" >/dev/null \
     || fail POST_FAILED "reopened 落账失败" 4
   REOPENED=1
 fi
-OUT=$(bash "$AGORA_HOME/scripts/dispatch.sh" --actor "$ACTOR" --project "$PDIR" --task "$TASK") || {
+OUT=$(bash "$SCRIPTS_DIR/dispatch.sh" --actor "$ACTOR" --project "$PDIR" --task "$TASK") || {
   printf '%s\n' "$OUT" >&2; fail DISPATCH_FAILED "dispatch.sh 失败（详情见 stderr 上一行）" 4; }
 DJ=$(echo "$OUT" | tail -1)
 python3 - "$TASK" "$REOPENED" "$ST_LAST" "$S" "$DJ" <<'PYEOF'

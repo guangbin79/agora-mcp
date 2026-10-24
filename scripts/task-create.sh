@@ -11,6 +11,7 @@
 # 输出：{"task":"gt-xxxx","path":"wiki/tasks/gt-xxxx.md"}
 # 失败：JSON → stderr，exit 2 参数校验 / 5 引用不存在
 set -u
+SCRIPTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"   # 单源自定位：兄弟脚本/库一律本仓 scripts（gt-f6e4）
 AGORA_HOME="${AGORA_HOME:-$HOME/agora}"
 
 [ -z "${TITLE:-}" ] && { echo '{"error":"TITLE_REQUIRED","hint":"需要 TITLE"}' >&2; exit 2; }
@@ -26,11 +27,10 @@ fi
 # verify fallback：项目页注册过该目录的默认 verify 则回填（编排大脑无需重复提供验收命令）
 # 归一口径：PROJECT_DIR 经 agora_lib.main_repo_of 归一到主仓再匹配（worktree 路径同样命中，设计 §五）
 if [ -n "${PROJECT_DIR:-}" ] && [ -z "${VERIFY:-}" ]; then
-  VERIFY=$(AGORA_HOME="$AGORA_HOME" PROJECT_DIR="$PROJECT_DIR" python3 - <<'PYEOF'
+  VERIFY=$(PYTHONPATH="$SCRIPTS_DIR" AGORA_HOME="$AGORA_HOME" PROJECT_DIR="$PROJECT_DIR" python3 - <<'PYEOF'
 import os, glob, re, sys
 home = os.environ["AGORA_HOME"]
-sys.path.insert(0, os.path.join(home, "scripts"))
-import agora_lib
+import agora_lib   # 经 PYTHONPATH=本仓 scripts 导入（单源，gt-f6e4）
 raw = os.path.expanduser(os.environ["PROJECT_DIR"])
 target = os.path.realpath(agora_lib.main_repo_of(raw) or raw)
 for f in glob.glob(f"{home}/wiki/projects/*.md"):
@@ -101,7 +101,7 @@ FOUND=$(idem_lookup) && { printf '{"task":"%s","path":"wiki/tasks/%s.md"}\n' "$F
 WT_DIR=""; WT_MAIN=""
 if [ "${WT:-0}" = "1" ]; then
   MR=$(realpath "$PROJECT_DIR")
-  WT_MAIN=$(PYTHONPATH="$AGORA_HOME/scripts" python3 -c 'import sys, agora_lib
+  WT_MAIN=$(PYTHONPATH="$SCRIPTS_DIR" python3 -c 'import sys, agora_lib
 p = sys.argv[1]; m = agora_lib.main_repo_of(p); print(m or p)' "$MR")
   WT_DIR="$(dirname "$WT_MAIN")/$(basename "$WT_MAIN")__wt-${TASK_ID}__$(date +%m%d%H%M)"
   git -C "$WT_MAIN" worktree add -q -b "wt/$TASK_ID" "$WT_DIR" \
@@ -127,7 +127,7 @@ SHORTOUT=$( (
     printf '{"task":"%s","path":"wiki/tasks/%s.md"}' "$FOUND" "$FOUND"
     exit 0
   }
-  bash "$AGORA_HOME/scripts/sync.sh" pre >/dev/null 2>&1 || true
+  bash "$SCRIPTS_DIR/sync.sh" pre >/dev/null 2>&1 || true
   {
     echo "---"
     echo "id: $TASK_ID"
@@ -143,12 +143,12 @@ SHORTOUT=$( (
     echo
     echo "${BODY:-（无描述）}"
   } > "$TASKS_DIR/$TASK_ID.md"
-  bash "$AGORA_HOME/scripts/derive-board.sh" >/dev/null   # 创建与看板重推导同锁完成：返回时新任务已在 todo 可见
+  bash "$SCRIPTS_DIR/derive-board.sh" >/dev/null   # 创建与看板重推导同锁完成：返回时新任务已在 todo 可见
   cd "$AGORA_HOME"
   export AGORA_MECHANICAL=1
   git add "wiki/tasks/$TASK_ID.md" board/
   git commit -q -m "task: create $TASK_ID $TITLE"
-  bash "$AGORA_HOME/scripts/sync.sh" post >/dev/null 2>&1 || true
+  bash "$SCRIPTS_DIR/sync.sh" post >/dev/null 2>&1 || true
 ) 9>"$AGORA_HOME/.git/post.lock" ); SRC=$?
 if [ "$SRC" -ne 0 ]; then
   # 锁超时（exit 3）或锁内失败：错误细节已在 stderr；此处显式失败，杜绝假成功

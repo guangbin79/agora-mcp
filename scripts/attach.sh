@@ -10,6 +10,7 @@
 #   PROJECT_DIR 可选，缺省 cwd（必须是 git 仓库）
 # 输出：{"task","ref","url","commit"}；失败 JSON → stderr，exit 2 校验 / 5 任务不存在
 set -u
+SCRIPTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"   # 单源自定位：兄弟脚本/库一律本仓 scripts（gt-f6e4）
 AGORA_HOME="${AGORA_HOME:-$HOME/agora}"
 PROJECT_DIR="${PROJECT_DIR:-$PWD}"
 
@@ -49,7 +50,7 @@ fi
 # 落账：attached 事件（task 类，evidence=<url>@<commit>）
 ARGS=(--actor "$ACTOR" --project "${ACTOR#*@}" --event attached --task "$TASK" --evidence "$URL@$CMT")
 [ -n "${NOTE:-}" ] && ARGS+=(--body "$NOTE")
-OUT=$(bash "$AGORA_HOME/scripts/post.sh" "${ARGS[@]}" 2>&1) || fail POST_FAILED "$OUT" 2
+OUT=$(bash "$SCRIPTS_DIR/post.sh" "${ARGS[@]}" 2>&1) || fail POST_FAILED "$OUT" 2
 
 printf '{"task":"%s","ref":"%s","url":"%s","commit":"%s"%s}\n' \
   "$TASK" "$REF" "$URL" "$CMT" "${PUSH_WARN:+,\"warn\":\"ref 未推送到远端，证据暂仅本机可达\"}"

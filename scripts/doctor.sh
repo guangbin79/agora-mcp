@@ -2,6 +2,7 @@
 # doctor.sh —— 自检与恢复（宣言 §6：任何故障 MUST 有文档化恢复路径）
 # 用法: doctor.sh [--fix]；退出码 0=全绿 1=有 fail
 set -euo pipefail
+SCRIPTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"   # 单源自定位：兄弟脚本/库一律本仓 scripts（gt-f6e4）
 AGORA_HOME="${AGORA_HOME:-$HOME/agora}"; export AGORA_HOME   # heredoc python 经 os.environ 读取——裸调用不再 KeyError（与 wiki-write r1 修法同类）
 FIX="${1:-}"
 FAIL=0
@@ -57,7 +58,7 @@ BOARD_STATE=ok
 {
   flock -w "${AGORA_LOCK_WAIT:-5}" 9 || true   # 拿不到锁仍继续（只报告）；锁内 cp→推导→diff 原子
   cp -r "$AGORA_HOME/board" "$TMP/board.orig"
-  AGORA_HOME="$AGORA_HOME" bash "$AGORA_HOME/scripts/derive-board.sh" >/dev/null 2>&1
+  AGORA_HOME="$AGORA_HOME" bash "$SCRIPTS_DIR/derive-board.sh" >/dev/null 2>&1
   if ! diff -rq "$TMP/board.orig" "$AGORA_HOME/board" >/dev/null 2>&1; then
     if [[ "$FIX" == "--fix" ]]; then BOARD_STATE=fixed
     else cp -r "$TMP/board.orig/." "$AGORA_HOME/board/"; BOARD_STATE=bad; fi   # 还原，保持只报告
@@ -198,5 +199,47 @@ print("\n".join(out))
 PYEOF
 )
 [[ -z "$WT_ORPHAN" ]] && ok "孤儿 wt 树（缺任务页）" || warn "缺任务页的 wt 树（B4 只报告不删）: $WT_ORPHAN（人工确认后 git worktree remove）"
+
+# 10. 名册卫生：owner 实体页 dirs 指向 /tmp/*（测试/临时残留）或不存在目录 → warn 只报告不删
+#    os.listdir 而非 glob：点前缀实体页（如 .dotfiles.md）glob 默认致盲（Python<3.11，gt-abe8 教训）
+#    dirs 与 /tmp 根都经 realpath(expanduser) 归一化再比（防 symlink/穿越绕过，含 /tmp 本身是链接的环境；与 lib.covers() 同口径）
+ROSTER_BAD=$(PYTHONPATH="$(cd "$(dirname "$0")" && pwd)${PYTHONPATH:+:$PYTHONPATH}" python3 - <<'PYEOF'
+import os
+import agora_lib as lib
+HOME = os.environ["AGORA_HOME"]
+entdir = f"{HOME}/wiki/entities"
+tmproot = os.path.realpath("/tmp")
+def esc(s):
+    return "".join(c if c.isprintable() else f"\\x{ord(c):02x}" for c in s)  # 非打印字符统一转义，防伪造输出行/ANSI 注入
+out = []
+try:
+    entries = sorted(os.listdir(entdir))
+except OSError:
+    print(f"{entdir}（entities 目录缺失或不可枚举）")
+    raise SystemExit(0)
+for fn in entries:
+    p = os.path.join(entdir, fn)
+    if not fn.endswith(".md") or not os.path.isfile(p): continue  # archived/ 等子目录天然排除
+    fn = esc(fn)
+    try:
+        txt = open(p, encoding="utf-8", errors="replace").read()
+    except FileNotFoundError:
+        continue  # 枚举与读取间被并发 mv/删（归档常态）——本轮跳过
+    except OSError as e:
+        out.append(f"{fn}: 读失败（{e.strerror}）——巡检盲区，人工核查")
+        continue
+    for d in lib.entity_dirs(txt):
+        if "\x00" in d:
+            out.append(f"{fn}: {d!r}（dirs 含 NUL，路径不可归一化）")
+            continue
+        rd = os.path.realpath(os.path.expanduser(d))
+        if rd == tmproot or rd.startswith(tmproot + "/"):
+            out.append(f"{fn}: {esc(d)}（/tmp 临时目录）")
+        elif not os.path.isdir(rd):
+            out.append(f"{fn}: {esc(d)}（目录不存在）")
+print("\n".join(out))
+PYEOF
+)
+[[ -z "$ROSTER_BAD" ]] && ok "名册卫生（dirs 存在且非 /tmp）" || warn "名册卫生异常（只报告不删）: $ROSTER_BAD（人工确认后归档 wiki/entities/archived/）"
 
 [[ $FAIL -eq 0 ]] && echo "== doctor: ALL GREEN ==" || { echo "== doctor: FAILURES PRESENT =="; exit 1; }

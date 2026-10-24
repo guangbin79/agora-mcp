@@ -13,7 +13,7 @@ except Exception:
     VERSION = "agora-mcp dev"
 
 HOME = os.environ.get("AGORA_HOME", os.path.expanduser("~/agora"))
-SCRIPTS = os.path.join(HOME, "scripts")
+SCRIPTS = os.environ.get("AGORA_SCRIPTS") or os.path.join(_PKG, "scripts")   # 单源：产品仓 scripts（gt-f6e4；env 覆盖口）
 CWD = os.path.realpath(os.getcwd())
 
 # 自举：AGORA_HOME 无 git 仓库时自动初始化（幂等，宣言"clone 即入职"的单机形态）

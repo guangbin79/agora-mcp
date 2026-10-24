@@ -76,7 +76,7 @@ cleanup() {  # 演练任务统一 cancel --kill：防 drill 孤儿在真广场�
     [ -n "$pair" ] || continue
     a="${pair% *}"; t="${pair#* }"   # TASKS 存 "actor task" 对——每场景独立分域（gt-f8ed）
     [ -n "$t" ] || continue   # mkdrilltask 失败的空 task 不进 cancel 自动推导档（终闸 B-F2）
-    bash "$AGORA_HOME/scripts/cancel.sh" --actor "$a" --task "$t" \
+    bash "$PKG_SCRIPTS/cancel.sh" --actor "$a" --task "$t" \
       --reason "drill 清场" --kill >/dev/null 2>&1 || true
   done
 }
@@ -87,7 +87,7 @@ trap cleanup EXIT
 # weekly drill 将永久让行失效（真实广场 22 任务积压实证，gt-ef4c 评审轮 1-F2 如实化） ----------
 guard() {
   local busy
-  busy=$(AGORA_HOME="$AGORA_HOME" PYTHONPATH="$PKG_SCRIPTS:$AGORA_HOME/scripts" python3 -c '
+  busy=$(AGORA_HOME="$AGORA_HOME" PYTHONPATH="$PKG_SCRIPTS" python3 -c '
 import os, sys
 import agora_lib as lib
 mine = (os.environ.get("AGORA_TASK") or "").strip()   # 自身会话任务豁免：派发链自身在飞不构成他扰
@@ -134,20 +134,20 @@ provision() {  # provision <scen>：每场景独立 actor 分域＋fixture 仓�
 
 mkdrilltask() {  # mkdrilltask <标题> → gt-id（verify 恒 true：演练任务无产出合同）
   TITLE="$1" VERIFY="true" PROJECT_DIR="$DREPO" AGORA_HOME="$AGORA_HOME" \
-    bash "$AGORA_HOME/scripts/task-create.sh" 2>/dev/null \
+    bash "$PKG_SCRIPTS/task-create.sh" 2>/dev/null \
     | sed -n 's/.*"task":"\(gt-[0-9a-f]*\)".*/\1/p'
 }
 
 drill_dispatch() {  # drill_dispatch <task>：强制 run 通道（API 通道子会话死亡无滞留档，演练需 .live 锚点）
   DRILL_RC=0
-  DRILL_OUT=$(AGORA_RUNTIME_API=0 bash "$AGORA_HOME/scripts/dispatch.sh" --actor "$ACTOR_PROJ" \
+  DRILL_OUT=$(AGORA_RUNTIME_API=0 bash "$PKG_SCRIPTS/dispatch.sh" --actor "$ACTOR_PROJ" \
     --project "$DREPO" --task "$1" 2>&1) || DRILL_RC=$?
 }
 
 drill_poll() {  # 快阈诊断轮（只诊不派）；输出落 POLL_OUT——cron poll 持锁 skip 也 exit 0，调用方须辨真轮
   POLL_OUT=$(AGORA_HOME="$AGORA_HOME" AGORA_ORPHAN_MIN=0 AGORA_DISPATCH_TIMEOUT=0 \
   AGORA_MERGE_WAIT_MIN=9999 AGORA_WT_GRACE_MIN=9999 AGORA_POLL_SPAWN=0 \
-  AGORA_RUNTIME="$RUNTIME" bash "$AGORA_HOME/scripts/poll.sh" 2>&1)
+  AGORA_RUNTIME="$RUNTIME" bash "$PKG_SCRIPTS/poll.sh" 2>&1)
 }
 
 wait_diag() {  # wait_diag <task> <关键词>：poll 重试至诊断落账（poll.lock 被cron占用时静默跳过→重试）
@@ -179,7 +179,7 @@ claim_hop() {  # claim_hop <task>：真实 runtime 等子会话自认领；桩 r
     done
     return 1
   fi
-  bash "$AGORA_HOME/scripts/post.sh" --actor "$ACTOR_PROJ" --project agora-drill \
+  bash "$PKG_SCRIPTS/post.sh" --actor "$ACTOR_PROJ" --project agora-drill \
     --event claimed --task "$1" >/dev/null 2>&1
 }
 
@@ -210,8 +210,8 @@ scen_restart() {
   # 服务回魂：opencode 走适配器 health；其余 runtime 以 --version 为可达代理
   local hw="${AGORA_DRILL_HEALTH_WAIT:-60}" i hok=1
   for i in $(seq "$hw"); do
-    if [ "$RUNTIME" = "opencode" ] && [ -f "$AGORA_HOME/scripts/runtime/opencode.sh" ]; then
-      bash "$AGORA_HOME/scripts/runtime/opencode.sh" health >/dev/null 2>&1 && { hok=0; break; }
+    if [ "$RUNTIME" = "opencode" ] && [ -f "$PKG_SCRIPTS/runtime/opencode.sh" ]; then
+      bash "$PKG_SCRIPTS/runtime/opencode.sh" health >/dev/null 2>&1 && { hok=0; break; }
     else
       "$RUNTIME" --version >/dev/null 2>&1 && { hok=0; break; }
     fi
@@ -268,7 +268,7 @@ scen_kill() {
   wait_diag "$t" "滞留" && res "kill 看门狗滞留诊断" 1 "task=$t" \
     || { res "kill 看门狗滞留诊断" 0 "task=$t 无滞留诊断"; return; }
   # 闭环②：恢复性重派（redispatch.sh 对在飞拒绝——按派单方语义 reopened 回池再派，全真实通道）
-  bash "$AGORA_HOME/scripts/post.sh" --actor "$ACTOR_PROJ" --project agora-drill \
+  bash "$PKG_SCRIPTS/post.sh" --actor "$ACTOR_PROJ" --project agora-drill \
     --event reopened --task "$t" --reason "drill kill 闭环：恢复性重派" >/dev/null 2>&1
   drill_dispatch "$t"
   [ "$DRILL_RC" -eq 0 ] && grep -q '"mode":"spawned"' <<<"$DRILL_OUT" \
@@ -291,7 +291,7 @@ scen_quota() {
   local before_live after_live ndisp1 ndisp2 out rc
   before_live=$(find "$AGORA_HOME/raw/dispatches" -name '*.live' 2>/dev/null | wc -l)
   # A：配额打满 → dispatch 必须 fail-closed（rc8 QUOTA_EXCEEDED；锁内外双闸都打满）
-  out=$(AGORA_MAX_SPAWN=0 AGORA_MAX_SPAWN_GLOBAL=0 bash "$AGORA_HOME/scripts/dispatch.sh" \
+  out=$(AGORA_MAX_SPAWN=0 AGORA_MAX_SPAWN_GLOBAL=0 bash "$PKG_SCRIPTS/dispatch.sh" \
     --actor "$ACTOR_PROJ" --project "$DREPO" --task "$t" 2>&1); rc=$?
   [ "$rc" -eq 8 ] && grep -q QUOTA_EXCEEDED <<<"$out" \
     && res "quota fail-closed rc8" 1 "task=$t $out" \
@@ -303,7 +303,7 @@ scen_quota() {
     && res "quota fail-closed 零残留" 1 "dispatched=0 .live $before_live→$after_live" \
     || res "quota fail-closed 零残留" 0 "dispatched=$ndisp1 .live $before_live→$after_live"
   # B：还原后复通——spawned 为正道；notified＝目标仓在场委托会话的合规通知降级，接受但显式记录原因
-  out=$(bash "$AGORA_HOME/scripts/dispatch.sh" --actor "$ACTOR_PROJ" --project "$DREPO" --task "$t" 2>&1); rc=$?
+  out=$(bash "$PKG_SCRIPTS/dispatch.sh" --actor "$ACTOR_PROJ" --project "$DREPO" --task "$t" 2>&1); rc=$?
   if [ "$rc" -eq 0 ] && grep -q '"mode":"spawned"' <<<"$out"; then
     res "quota 复通 dispatch spawned" 1 "$out"
   elif [ "$rc" -eq 0 ] && grep -q '"mode":"notified"' <<<"$out"; then
@@ -319,7 +319,7 @@ scen_wave() {
   [ -n "$t" ] || { res "wave 建任务" 0 "task-create 无输出"; return; }
   local i pids=()
   for i in 1 2 3; do
-    ( bash "$AGORA_HOME/scripts/dispatch.sh" --actor "$ACTOR_PROJ" --project "$DREPO" \
+    ( bash "$PKG_SCRIPTS/dispatch.sh" --actor "$ACTOR_PROJ" --project "$DREPO" \
         --task "$t" >"$DRILL_STATE/wave-$i.out" 2>&1; echo $? >"$DRILL_STATE/wave-$i.rc" ) &
     pids+=($!)
   done

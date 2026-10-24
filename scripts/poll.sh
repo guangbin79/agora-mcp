@@ -31,24 +31,27 @@
 #       AGORA_NOTIFY_BRIDGE=0 关闭 notify 桥探活；AGORA_NOTIFY_BRIDGE_PAT 检测模式
 #       （默认 [n]otify-opencode.sh，方括号防 pgrep 自匹配）；AGORA_NOTIFY_BRIDGE_SPAWN
 #       拉起命令覆盖（测试 mock）
-# 用法：crontab -e → */5 * * * * AGORA_HOME=~/agora bash ~/agora/scripts/poll.sh
+# 用法：crontab -e → */5 * * * * AGORA_HOME=~/agora bash ~/agora-mcp/scripts/poll.sh（脚本单源自定位，gt-f6e4）
 set -uo pipefail
 AGORA_HOME="${AGORA_HOME:-$HOME/agora}"
+SCRIPTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"   # 单源自定位：兄弟脚本/库一律本仓 scripts（gt-f6e4）
 [[ -d "$AGORA_HOME/.git" ]] || { echo '{"code":"NO_FORUM","message":"AGORA_HOME 无仓库"}' >&2; exit 2; }
 
 # 防 cron 重叠：拿不到锁说明上一轮还在跑，安静退出
 exec 9>"$AGORA_HOME/.git/poll.lock"
 flock -n 9 || { echo '{"poll":"skip","reason":"another poll running"}'; exit 0; }
 
-bash "$AGORA_HOME/scripts/sync.sh" pre >/dev/null 2>&1 || true
-bash "$AGORA_HOME/scripts/derive-board.sh" >/dev/null 2>&1 || true
+bash "$SCRIPTS_DIR/sync.sh" pre >/dev/null 2>&1 || true
+bash "$SCRIPTS_DIR/derive-board.sh" >/dev/null 2>&1 || true
 
-AGORA_HOME="$AGORA_HOME" PYTHONPATH="$(cd "$(dirname "$0")" && pwd)${PYTHONPATH:+:$PYTHONPATH}" python3 - <<'PYEOF'
+AGORA_HOME="$AGORA_HOME" SCRIPTS_DIR="$SCRIPTS_DIR" PYTHONPATH="$SCRIPTS_DIR${PYTHONPATH:+:$PYTHONPATH}" python3 - <<'PYEOF'
 import os, re, glob, json, time, shutil, hashlib, subprocess, socket
 import agora_lib as lib
 from datetime import datetime, timedelta
 
 HOME = os.environ["AGORA_HOME"]
+SCRIPTS = os.environ["SCRIPTS_DIR"]   # 单源自定位（gt-f6e4）：兄弟脚本/桥/runtime 一律本仓 scripts
+SCRIPTS = os.environ["SCRIPTS_DIR"]   # 单源自定位（gt-f6e4）：兄弟脚本/桥/runtime 一律本仓 scripts
 WARN = int(os.environ.get("AGORA_POLL_WARN_MIN", "20"))
 CRIT = int(os.environ.get("AGORA_POLL_CRIT_MIN", "40"))
 LIVE_TIMEOUT = int(os.environ.get("AGORA_DISPATCH_TIMEOUT", "30"))
@@ -68,7 +71,7 @@ RECHECK = ("纪律：开工前先 agora_sync，再用 agora_history 复查该任
            "若已被他人认领，立即 agora_post(event=retired, task=本任务) 收工，一行代码都不要写。")
 
 def run(script, args, inp=None):
-    return subprocess.run(["bash", os.path.join(HOME, "scripts", script)] + args,
+    return subprocess.run(["bash", os.path.join(SCRIPTS, script)] + args,
                           capture_output=True, text=True, input=inp,
                           env={**os.environ, "AGORA_HOME": HOME})
 
@@ -120,6 +123,7 @@ for t in list(act):  # 已离开 in-progress 的任务清出跟踪表，状态�
     if t not in live_tasks: del act[t]
 
 ESCALATE_AFTER = int(os.environ.get("AGORA_WATCHDOG_ESCALATE_AFTER", "3"))
+BLOCKED_H = int(os.environ.get("AGORA_POLL_BLOCKED_H", "4"))  # gt-e7cd 评审归位：env 解析须在副作用前（B-1）
 AUTO_REOPEN = os.environ.get("AGORA_WATCHDOG_AUTO_REOPEN", "0") == "1"
 
 def task_dispatcher(task):
@@ -205,7 +209,6 @@ for task, owner in inprog:
 # 滞留超阈值 → diagnosed ＋ mention 认领者与 dispatcher；升级阶梯沿用 stalled 口径
 # （尾部连续看门狗诊断 wn 达 ESCALATE_AFTER → escalated，之后保持安静——blocked 回池语义存疑，不开自动回池）
 blk = state.setdefault("_blocked_act", {})
-BLOCKED_H = int(os.environ.get("AGORA_POLL_BLOCKED_H", "4"))
 blocked_now = {t for t, d in TASKS.items() if d.get("inblocked")}
 for t in list(blk):
     if t not in blocked_now: del blk[t]
@@ -407,7 +410,7 @@ for t, d in TASKS.items():
             upd = re.search(r'^project_dir:\s*(\S+)', open(upage, encoding="utf-8").read(), re.M)
             if upd:
                 boot = (f"恢复性重派：你的下级任务 {t} 已 done 未合并。先 agora_history(task={t}) 自查，"
-                        f"再评审其 diff（任务页 wt_dir 的树），然后 bash {HOME}/scripts/merge.sh"
+                        f"再评审其 diff（任务页 wt_dir 的树），然后 bash {SCRIPTS}/merge.sh"
                         f" --actor {disp_actor} --task {t} 闭环；若 non-ff 先在原树 rebase 到合并目标分支"
                         f"再重走 verify。完成后继续你自己的任务。")
                 # L2 注入式续跑（设计 §三）：上游最新 dispatched 带 session: 且 wt_host==本机 → inject 优先
@@ -415,7 +418,7 @@ for t, d in TASKS.items():
                 injected = False
                 api_on = (os.environ.get("AGORA_RUNTIME_API", "1") != "0"
                           and os.environ.get("AGORA_RUNTIME", "opencode") == "opencode"
-                          and os.path.exists(f"{HOME}/scripts/runtime/opencode.sh"))
+                          and os.path.exists(f"{SCRIPTS}/runtime/opencode.sh"))
                 if api_on:
                     upsess = ""
                     for _row in (TASKS.get(up) or {}).get("dispatched", []):
@@ -484,7 +487,7 @@ kick = state.setdefault("_idle_kick", {})
 IDLE_KICK_MIN = int(os.environ.get("AGORA_IDLE_KICK_MIN", "15"))
 api_on = (os.environ.get("AGORA_RUNTIME_API", "1") != "0"
           and os.environ.get("AGORA_RUNTIME", "opencode") == "opencode"
-          and os.path.exists(f"{HOME}/scripts/runtime/opencode.sh"))
+          and os.path.exists(f"{SCRIPTS}/runtime/opencode.sh"))
 if SPAWN and api_on:
     for t, d in TASKS.items():
         if not d.get("inflight") or d.get("terminal") or d.get("done_open") or d.get("post_disp") != set():
@@ -517,7 +520,7 @@ if SPAWN and api_on:
             report["escalated_merge"].append({"task": t, "idle_kick": True, "n": n, "ok": r.returncode == 0})
             continue
         boot = (f"idle 停转自恢复：你的会话已 idle 超 {IDLE_KICK_MIN}min 且任务 {t} 未终态。"
-                f"先 bash {HOME}/scripts/sync.sh pre，再用 agora_history(task={t}) 自查进度、git status 查半成品，接着做；"
+                f"先 bash {SCRIPTS}/sync.sh pre，再用 agora_history(task={t}) 自查进度、git status 查半成品，接着做；"
                 f"若已收工请补落相应事件（done/blocked）。")
         ri = run("runtime/opencode.sh", ["inject", sid, boot])
         r = run("post.sh", ["--actor", WATCHDOG, "--project", "watchdog", "--event", "diagnosed",
@@ -718,7 +721,7 @@ for page in glob.glob(f"{HOME}/wiki/tasks/*.md"):
                     else "owner 未定（main_repo_of 断链且注册指针未命中），分支保守保留"})
 
 # ---------- ④a sessions.map TTL 保洁（只清本机条目；他机条目由它自己机器的 poll 清） ----------
-SMAP = f"{HOME}/scripts/sessions.map"
+SMAP = f"{HOME}/sessions.map"
 if TTL_H > 0 and os.path.exists(SMAP):
     kept, reaped = [], 0
     with open(f"{HOME}/.git/sessions.map.lock", "w") as _lk:   # gt-8a3c 评审 B-F1：截断重写全程持锁，防并发追加被快照覆盖
@@ -771,7 +774,7 @@ if report["sessions_reaped"] or report["mails_archived"]:
 try:
     br = {"state": "off"}
     if os.environ.get("AGORA_NOTIFY_BRIDGE", "1") != "0":
-        bridge = os.path.join(HOME, "scripts", "notify-opencode.sh")
+        bridge = os.path.join(SCRIPTS, "notify-opencode.sh")
         if os.path.exists(bridge):
             pat = os.environ.get("AGORA_NOTIFY_BRIDGE_PAT", "[n]otify-opencode.sh")
             pg = subprocess.run(["pgrep", "-f", pat], capture_output=True)

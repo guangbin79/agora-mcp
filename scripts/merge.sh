@@ -11,6 +11,7 @@
 #   幂等：目标分支已含本任务提交 → 只补 merged 落账（不重合并不重验）
 # 用法: merge.sh --actor NAME@PROJ --task gt-xxxx
 set -euo pipefail
+SCRIPTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"   # 单源自定位：兄弟脚本/库一律本仓 scripts（gt-f6e4）
 AGORA_HOME="${AGORA_HOME:-$HOME/agora}"
 ACTOR=""; TASK=""
 while [[ $# -gt 0 ]]; do case "$1" in
@@ -33,7 +34,7 @@ WTD="$(FM wt_dir)"; PD="$(FM project_dir)"; VF="$(FM verify)"
 WHOST="$(FM wt_host)"
 [ -z "$WHOST" ] || [ "$WHOST" = "$(hostname)" ] || fail WT_HOST_MISMATCH "wt_host=$WHOST ≠ 本机 $(hostname)——跨机 wt 任务不本机合并" 9
 
-MAIN=$(PYTHONPATH="$AGORA_HOME/scripts" python3 -c 'import sys, agora_lib
+MAIN=$(PYTHONPATH="$SCRIPTS_DIR" python3 -c 'import sys, agora_lib
 p = sys.argv[1]; m = agora_lib.main_repo_of(p); print(m or p)' "$(realpath "$PD")")
 
 # ---- gt-7117 非 wt 闭环：页无 wt_dir＝直改仓任务（无树可清）。done 已由 post.sh
@@ -65,7 +66,7 @@ if [ -z "$WTD" ]; then
     || fail NOT_IN_TARGET "done commit $DONEC 不在 $MAIN:$TBRANCH——非 wt 任务无可合并动作，产出先落主支再闭环" 4
   mkdir -p "$AGORA_HOME/.git/merge-tickets"
   : > "$AGORA_HOME/.git/merge-tickets/$TASK"
-  bash "$AGORA_HOME/scripts/post.sh" --actor "$ACTOR" --project "$(basename "$MAIN")" --event merged \
+  bash "$SCRIPTS_DIR/post.sh" --actor "$ACTOR" --project "$(basename "$MAIN")" --event merged \
     --task "$TASK" --commit "$TARG" --branch "$TBRANCH" >/dev/null \
     || { rm -f "$AGORA_HOME/.git/merge-tickets/$TASK"; fail LEDGER_FAILED "merged 补账失败（post.sh 详见 stderr）" 4; }
   rm -f "$AGORA_HOME/.git/merge-tickets/$TASK"
@@ -84,7 +85,7 @@ if [ -n "${UP:-}" ]; then
     UPWTD=$(grep -m1 '^wt_dir:' "$UPAGE" | sed 's/^wt_dir:[[:space:]]*//' || true)
     UPPD=$(grep -m1 '^project_dir:' "$UPAGE" | sed 's/^project_dir:[[:space:]]*//' || true)
     UPMAIN=""
-    [ -n "${UPPD:-}" ] && UPMAIN=$(PYTHONPATH="$AGORA_HOME/scripts" python3 -c 'import sys, agora_lib
+    [ -n "${UPPD:-}" ] && UPMAIN=$(PYTHONPATH="$SCRIPTS_DIR" python3 -c 'import sys, agora_lib
 p = sys.argv[1]; m = agora_lib.main_repo_of(p); print(m or p)' "$(realpath "$UPPD")" || true)
     if [ -n "${UPWTD:-}" ] && [ "$UPMAIN" = "$MAIN" ]; then
       # gt-7ca0 场景b（链目标死循环）祖先检查：上游 tip 已并入主仓默认分支（已并）或分支已清
@@ -144,7 +145,7 @@ TARG=$(git -C "$TARGET_DIR" rev-parse "$TARGET_BRANCH")
 if [ "$WTC" = "$TARG" ] || git -C "$TARGET_DIR" merge-base --is-ancestor "$WTC" "$TARG" 2>/dev/null; then
   mkdir -p "$AGORA_HOME/.git/merge-tickets"
   : > "$AGORA_HOME/.git/merge-tickets/$TASK"
-  bash "$AGORA_HOME/scripts/post.sh" --actor "$ACTOR" --project "$PNAME" --event merged \
+  bash "$SCRIPTS_DIR/post.sh" --actor "$ACTOR" --project "$PNAME" --event merged \
     --task "$TASK" --commit "$TARG" --branch "$TARGET_BRANCH" >/dev/null \
     || { rm -f "$AGORA_HOME/.git/merge-tickets/$TASK"; fail LEDGER_FAILED "merged 补账失败（post.sh 详见 stderr）" 4; }
   rm -f "$AGORA_HOME/.git/merge-tickets/$TASK"
@@ -161,9 +162,9 @@ if [ "$CURBR" != "$TARGET_BRANCH" ]; then
 fi
 PRE=$(git -C "$TARGET_DIR" rev-parse "$TARGET_BRANCH")
 if ! MERR=$(git -C "$TARGET_DIR" merge --ff-only "wt/$TASK" 2>&1); then
-  bash "$AGORA_HOME/scripts/post.sh" --actor "$ACTOR" --project "$PNAME" --event blocked \
+  bash "$SCRIPTS_DIR/post.sh" --actor "$ACTOR" --project "$PNAME" --event blocked \
     --task "$TASK" --reason "non-ff: $(echo "$MERR" | tail -2 | tr '\n' ' ' | tr -d '|')" >/dev/null 2>&1 || true
-  bash "$AGORA_HOME/scripts/post.sh" --actor "$ACTOR" --project "$PNAME" --event reopened \
+  bash "$SCRIPTS_DIR/post.sh" --actor "$ACTOR" --project "$PNAME" --event reopened \
     --task "$TASK" --reason "non-ff 返工：原树 rebase 到 $TARGET_BRANCH 后重走 verify" >/dev/null 2>&1 || true
   fail NOT_FF "目标 $TARGET_BRANCH 不能快进到 wt/$TASK（已落 blocked→reopened）" 4
 fi
@@ -174,14 +175,14 @@ NEWH_PREV=$(git -C "$TARGET_DIR" rev-parse "$TARGET_BRANCH")
 if ! VOUT=$(cd "$TARGET_DIR" && timeout "${AGORA_VERIFY_TIMEOUT:-300}" bash -c "$VF" 2>&1 | tail -c 2048); then
   CURH2=$(git -C "$TARGET_DIR" rev-parse "$TARGET_BRANCH")
   if [ "$CURH2" != "$NEWH_PREV" ]; then
-    bash "$AGORA_HOME/scripts/post.sh" --actor "$ACTOR" --project "$PNAME" --event blocked \
+    bash "$SCRIPTS_DIR/post.sh" --actor "$ACTOR" --project "$PNAME" --event blocked \
       --task "$TASK" --reason "集成 verify 失败且窗口内目标被并发推进（$NEWH_PREV→$CURH2），已跳过回滚保现场，人工核查" >/dev/null 2>&1 || true
     fail VERIFY_FAILED "集成 verify 失败＋目标并发推进——未回滚（现场保留），人工核查 $TARGET_BRANCH" 4
   fi
   git -C "$TARGET_DIR" reset -q --hard "$PRE"
-  bash "$AGORA_HOME/scripts/post.sh" --actor "$ACTOR" --project "$PNAME" --event blocked \
+  bash "$SCRIPTS_DIR/post.sh" --actor "$ACTOR" --project "$PNAME" --event blocked \
     --task "$TASK" --reason "集成 verify FAIL: $(echo "$VOUT" | tail -5 | tr '\n' ' ' | tr -d '|')" >/dev/null 2>&1 || true
-  bash "$AGORA_HOME/scripts/post.sh" --actor "$ACTOR" --project "$PNAME" --event reopened \
+  bash "$SCRIPTS_DIR/post.sh" --actor "$ACTOR" --project "$PNAME" --event reopened \
     --task "$TASK" --reason "集成 verify 失败返工（主支已原子回滚）" >/dev/null 2>&1 || true
   fail VERIFY_FAILED "集成 verify 失败，$TARGET_BRANCH 已回滚至 $PRE（blocked→reopened 已落账）" 4
 fi
@@ -190,7 +191,7 @@ fi
 NEWH=$(git -C "$TARGET_DIR" rev-parse "$TARGET_BRANCH")
 mkdir -p "$AGORA_HOME/.git/merge-tickets"
 : > "$AGORA_HOME/.git/merge-tickets/$TASK"
-bash "$AGORA_HOME/scripts/post.sh" --actor "$ACTOR" --project "$PNAME" --event merged \
+bash "$SCRIPTS_DIR/post.sh" --actor "$ACTOR" --project "$PNAME" --event merged \
   --task "$TASK" --commit "$NEWH" --branch "$TARGET_BRANCH" >/dev/null \
   || { rm -f "$AGORA_HOME/.git/merge-tickets/$TASK"; fail LEDGER_FAILED "merged 落账失败（post.sh 详见 stderr）" 4; }
 rm -f "$AGORA_HOME/.git/merge-tickets/$TASK"

@@ -8,6 +8,7 @@
 # 终了清 .live（兼容 .pid 旁文件）；kill 结果并入 cancelled body（kill: 键）与 JSON 输出。
 # 用法: cancel.sh --actor NAME@PROJ [--task gt-xxxx] [--reason "..."] [--kill]
 set -euo pipefail
+SCRIPTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"   # 单源自定位：兄弟脚本/库一律本仓 scripts（gt-f6e4）
 AGORA_HOME="${AGORA_HOME:-$HOME/agora}"
 RUNTIME="${AGORA_RUNTIME:-opencode}"
 fail() { python3 -c 'import json,sys; print(json.dumps({"code":sys.argv[1],"message":sys.argv[2]}, ensure_ascii=False), file=sys.stderr)' "$1" "$2"; exit "${3:-2}"; }
@@ -107,8 +108,8 @@ KINFO=""
 if [[ "$KILL" == 1 ]]; then
   KRUN=$(python3 -c 'import json,sys; print(json.load(sys.stdin).get("run",""))' <<<"$EVAL")
   KSID=$(python3 -c 'import json,sys; print(json.load(sys.stdin).get("session",""))' <<<"$EVAL")
-  if [[ -n "$KSID" && "$KSID" =~ ^[-A-Za-z0-9_]+$ && "$RUNTIME" == opencode && -f "$AGORA_HOME/scripts/runtime/opencode.sh" ]]; then
-    timeout 5 bash "$AGORA_HOME/scripts/runtime/opencode.sh" abort "$KSID" >/dev/null 2>&1 || true
+  if [[ -n "$KSID" && "$KSID" =~ ^[-A-Za-z0-9_]+$ && "$RUNTIME" == opencode && -f "$SCRIPTS_DIR/runtime/opencode.sh" ]]; then
+    timeout 5 bash "$SCRIPTS_DIR/runtime/opencode.sh" abort "$KSID" >/dev/null 2>&1 || true
   fi
   LIVEF=""
   [[ -n "$KRUN" ]] && LIVEF="$AGORA_HOME/$KRUN.live"
@@ -131,7 +132,7 @@ if [[ "$KILL" == 1 ]]; then
     rm -f "$LIVEF" "${KRUN%.log}.pid"
   fi
 fi
-bash "$AGORA_HOME/scripts/post.sh" --actor "$ACTOR" --project "$PROJECT" --event cancelled \
+bash "$SCRIPTS_DIR/post.sh" --actor "$ACTOR" --project "$PROJECT" --event cancelled \
   --task "$TASK" --reason "${REASON:-cancel via agora_cancel}" --body "${WINFO}${KINFO:+$KINFO }tree:$TSTAT" >/dev/null \
   || fail POST_FAILED "cancelled 落账失败" 4
 python3 - "$TASK" "$TSTAT" "$EVAL" "$KINFO" <<'PYEOF'

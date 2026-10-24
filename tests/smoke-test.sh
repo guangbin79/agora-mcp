@@ -32,8 +32,8 @@ printf -- '---\nname: tester\ndirs:\n  - %s\ncan_spawn: true\n---\n' "$PROJ" > "
 printf -- '---\nname: rival\ndirs:\n  - %s\ncan_spawn: false\n---\n' "$PROJ2" > "$AGORA_HOME/wiki/entities/rival.md"
 cd "$AGORA_HOME" && git add -A && AGORA_MECHANICAL=1 git commit -qm "entities"
 
-POST() { local who="$1"; shift; bash "$AGORA_HOME/scripts/post.sh" --actor "$who" --project "${who#*@}" "$@"; }
-TC()   { bash "$AGORA_HOME/scripts/task-create.sh"; }
+POST() { local who="$1"; shift; bash "$PKG/scripts/post.sh" --actor "$who" --project "${who#*@}" "$@"; }
+TC()   { bash "$PKG/scripts/task-create.sh"; }
 
 echo "===== agora_task_create ====="
 OUT=$(TITLE="计划根" TC); PLAN=$(echo "$OUT" | sed -n 's/.*"task":"\(gt-[0-9a-f]*\)".*/\1/p')
@@ -84,7 +84,7 @@ echo "===== 计划进度聚合 ====="
 grep -q "2/2 完成" "$AGORA_HOME/board/todo.md" && ok "计划聚合 2/2" || fail "计划聚合 2/2"
 
 echo "===== agora_history ====="
-H=$(TASK="$B" bash "$AGORA_HOME/scripts/history.sh")
+H=$(TASK="$B" bash "$PKG/scripts/history.sh")
 N=$(echo "$H" | python3 -c "import json,sys; print(json.load(sys.stdin)['count'])")
 [ "$N" -eq 7 ] && ok "history 事件链完整（7 条）" || fail "history 事件链完整（$N 条, want 7）"
 echo "$H" | python3 -c "
@@ -97,7 +97,7 @@ assert evs==want, evs
 echo "===== agora_attach（证据落项目库） ====="
 cd "$PROJ" && echo "12 passed, 0 failed" > pytest-report.txt
 HEAD_BEFORE=$(git -C "$PROJ" rev-parse HEAD)
-OUT=$(ACTOR=tester@proj TASK="$A" FILES="pytest-report.txt" NOTE="测试报告" PROJECT_DIR="$PROJ" bash "$AGORA_HOME/scripts/attach.sh")
+OUT=$(ACTOR=tester@proj TASK="$A" FILES="pytest-report.txt" NOTE="测试报告" PROJECT_DIR="$PROJ" bash "$PKG/scripts/attach.sh")
 ATT_CMT=$(echo "$OUT" | sed -n 's/.*"commit":"\([0-9a-f]*\)".*/\1/p')
 [[ -n "$ATT_CMT" ]] && ok "attach 返回证据 commit" || fail "attach 返回证据 commit"
 git -C "$PROJ" rev-parse -q --verify "refs/agora/evidence/$A" >/dev/null && ok "证据 ref 已建（orphan）" || fail "证据 ref 已建（orphan）"
@@ -107,12 +107,12 @@ git -C "$PROJ" show "$ATT_CMT:pytest-report.txt" | grep -q "12 passed" && ok "�
 cat "$AGORA_HOME"/log/*/*.md | grep "event:attached" | grep -q "@$ATT_CMT" && ok "attached 事件落账（URL@commit）" || fail "attached 事件落账（URL@commit）"
 # 链式：第二次 attach 以第一次为父
 echo "v2" > "$PROJ/pytest-report.txt"
-OUT2=$(ACTOR=tester@proj TASK="$A" FILES="pytest-report.txt" PROJECT_DIR="$PROJ" bash "$AGORA_HOME/scripts/attach.sh")
+OUT2=$(ACTOR=tester@proj TASK="$A" FILES="pytest-report.txt" PROJECT_DIR="$PROJ" bash "$PKG/scripts/attach.sh")
 ATT_CMT2=$(echo "$OUT2" | sed -n 's/.*"commit":"\([0-9a-f]*\)".*/\1/p')
 [[ "$(git -C "$PROJ" rev-parse "$ATT_CMT2^")" == "$ATT_CMT" ]] && ok "证据链式（二次 attach 以前次为父）" || fail "证据链式"
-ACTOR=tester@proj TASK="$A" FILES="不存在.txt" PROJECT_DIR="$PROJ" bash "$AGORA_HOME/scripts/attach.sh" 2>/dev/null
+ACTOR=tester@proj TASK="$A" FILES="不存在.txt" PROJECT_DIR="$PROJ" bash "$PKG/scripts/attach.sh" 2>/dev/null
 [[ $? -eq 2 ]] && ok "attach 缺文件被拒(rc=2)" || fail "attach 缺文件被拒(rc=2)"
-ACTOR=tester@proj TASK="gt-zzzz" FILES="pytest-report.txt" PROJECT_DIR="$PROJ" bash "$AGORA_HOME/scripts/attach.sh" 2>/dev/null
+ACTOR=tester@proj TASK="gt-zzzz" FILES="pytest-report.txt" PROJECT_DIR="$PROJ" bash "$PKG/scripts/attach.sh" 2>/dev/null
 [[ $? -eq 5 ]] && ok "attach 未知任务被拒(rc=5)" || fail "attach 未知任务被拒(rc=5)"
 
 echo "===== 并发写入 ====="
@@ -204,18 +204,18 @@ git -C "$AGORA_HOME" remote get-url origin | grep -q "remote.git" && ok "已有�
 # 机器 B：clone 远端后 init（骨架必须幂等补齐 scripts/）
 HOME2="$T/agora-b"; git clone -q "file://$REMOTE" "$HOME2" 2>/dev/null
 AGORA_HOME="$HOME2" AGORA_PKG="$PKG" bash "$PKG/scripts/init.sh" >/dev/null 2>&1
-[[ -f "$HOME2/scripts/post.sh" ]] && ok "clone 后 init 补齐骨架" || fail "clone 后 init 补齐骨架"
+[[ ! -f "$HOME2/scripts/post.sh" ]] && ok "clone 后 init 不再装脚本（单源在产品包，gt-f6e4）" || fail "clone 后 init 仍装脚本（应已停装）"
 # 非 SSH 远端被拒
 AGORA_HOME="$T/agora-x" AGORA_PKG="$PKG" AGORA_REMOTE="https://github.com/x/y.git" bash "$PKG/scripts/init.sh" >/dev/null 2>&1
 [[ $? -eq 1 ]] && ok "https 远端被拒(rc=1)" || fail "https 远端被拒(rc=1)"
 # 双机写入：B 发事件 → A 写前 pre-pull 应合并到 B 的事件
-AGORA_HOME="$HOME2" bash "$HOME2/scripts/post.sh" --actor rival@proj2 --project proj2 --event proposal --body "B机的提案" >/dev/null
+AGORA_HOME="$HOME2" bash "$PKG/scripts/post.sh" --actor rival@proj2 --project proj2 --event proposal --body "B机的提案" >/dev/null
 POST tester@proj --event proposal --body "A机的提案" >/dev/null
 cat "$AGORA_HOME"/log/*/*.md | grep -q "B机的提案" && ok "pre-pull 合并远端事件" || fail "pre-pull 合并远端事件"
 git -C "$REMOTE" log --format=%s 2>/dev/null | grep -q "proposal" && ok "post 后 push 到远端" || fail "post 后 push 到远端"
 # 读路径同步：B 再发一条，A 不写任何东西、只调 agora_sync 就应看到
-AGORA_HOME="$HOME2" bash "$HOME2/scripts/post.sh" --actor rival@proj2 --project proj2 --event proposal --body "B机第二提案" >/dev/null
-SYNCO=$(bash "$AGORA_HOME/scripts/sync.sh" pre)
+AGORA_HOME="$HOME2" bash "$PKG/scripts/post.sh" --actor rival@proj2 --project proj2 --event proposal --body "B机第二提案" >/dev/null
+SYNCO=$(bash "$PKG/scripts/sync.sh" pre)
 echo "$SYNCO" | grep -q '"merged_new":true' && ok "agora_sync 显式拉取（merged_new=true）" || fail "agora_sync 显式拉取（$SYNCO）"
 cat "$AGORA_HOME"/log/*/*.md | grep -q "B机第二提案" && ok "读路径同步后可见他机事件" || fail "读路径同步后可见他机事件"
 # agora_who 名册发现（经 MCP）
@@ -234,14 +234,14 @@ assert r2.get("sync") == "ok", r2
 p.stdin.close()
 PYEOF
 # dispatch 机器隔离：他机的在场记录不触发 notified
-printf '%s tester sess-1 2026-10-14\n' "foreign-host" > "$AGORA_HOME/scripts/sessions.map"
-OUT=$(AGORA_RUNTIME=true bash "$AGORA_HOME/scripts/dispatch.sh" --actor tester@proj --project "$PROJ" --task "$C" 2>&1)
+printf '%s tester sess-1 2026-10-14\n' "foreign-host" > "$AGORA_HOME/sessions.map"
+OUT=$(AGORA_RUNTIME=true bash "$PKG/scripts/dispatch.sh" --actor tester@proj --project "$PROJ" --task "$C" 2>&1)
 echo "$OUT" | grep -q '"mode":"spawned"' && ok "他机在场记录被忽略（仍派生）" || fail "他机在场记录被忽略（$OUT）"
 rm -f "$AGORA_HOME"/raw/dispatches/*.live
-printf '%s tester sess-1 2026-10-14\n' "$(hostname)" > "$AGORA_HOME/scripts/sessions.map"
-OUT=$(AGORA_RUNTIME=true bash "$AGORA_HOME/scripts/dispatch.sh" --actor tester@proj --project "$PROJ" --task "$C" 2>&1)
+printf '%s tester sess-1 2026-10-14\n' "$(hostname)" > "$AGORA_HOME/sessions.map"
+OUT=$(AGORA_RUNTIME=true bash "$PKG/scripts/dispatch.sh" --actor tester@proj --project "$PROJ" --task "$C" 2>&1)
 echo "$OUT" | grep -q '"mode":"spawned"' && ok "本机交互注册（sessions.map）不算在场——直接派生（gt-0ed3）" || fail "本机交互注册应直接派生（$OUT）"
-printf '# <机器名>  <agent名>  <opencode session id>  <登记时间>\n' > "$AGORA_HOME/scripts/sessions.map"
+printf '# <机器名>  <agent名>  <opencode session id>  <登记时间>\n' > "$AGORA_HOME/sessions.map"
 # SSH 签名
 ssh-keygen -q -t ed25519 -N "" -f "$T/id_ed25519" 2>/dev/null
 if [[ -f "$T/id_ed25519.pub" ]]; then
@@ -339,7 +339,7 @@ POST rival@proj2 --event progress --task "$C" --mention ghost --body "给他机�
 # 本机拾取：rival 派活给 tester（任务未认领、在 todo）
 OUT=$(TITLE="poll唤醒任务" TC); POLLT=$(echo "$OUT" | sed -n 's/.*"task":"\(gt-[0-9a-f]*\)".*/\1/p')
 POST rival@proj2 --event progress --task "$POLLT" --mention tester --body "来接活" >/dev/null
-POLL_OUT=$(AGORA_RUNTIME=true bash "$AGORA_HOME/scripts/poll.sh")
+POLL_OUT=$(AGORA_RUNTIME=true bash "$PKG/scripts/poll.sh")
 echo "$POLL_OUT" | python3 -c "
 import json,sys
 r=json.loads(sys.stdin.read())
@@ -352,7 +352,7 @@ r=json.loads(sys.stdin.read())
 assert not any(s['entity']=='ghost' for s in r['spawned']), r['spawned']
 " && ok "外机实体不被拾取" || fail "外机实体不被拾取"
 # 水位：第二次 poll 不重复派生
-POLL_OUT2=$(AGORA_RUNTIME=true bash "$AGORA_HOME/scripts/poll.sh")
+POLL_OUT2=$(AGORA_RUNTIME=true bash "$PKG/scripts/poll.sh")
 echo "$POLL_OUT2" | python3 -c "
 import json,sys
 r=json.loads(sys.stdin.read())
@@ -360,7 +360,7 @@ assert r['spawned']==[], r['spawned']
 " && ok "邮件水位不重复派生" || fail "邮件水位不重复派生（$POLL_OUT2）"
 # stalled 看门狗（活性 = 本机观察时钟）：先跑一次建立基线（不得误报），
 # 再把 poll-state 的 since 拨回 1 小时前模拟停滞 → 应派生 diagnosed
-AGORA_RUNTIME=true bash "$AGORA_HOME/scripts/poll.sh" >/dev/null
+AGORA_RUNTIME=true bash "$PKG/scripts/poll.sh" >/dev/null
 cat "$AGORA_HOME"/log/*/watchdog.md 2>/dev/null | grep -q "stalled" \
   && fail "基线 poll 误报 stalled" || ok "基线 poll 不误报（活性时钟自首次观察起计）"
 python3 - "$AGORA_HOME" <<'PYEOF'
@@ -371,19 +371,19 @@ assert s.get("_activity"), "无活性跟踪表"
 for t in s["_activity"]: s["_activity"][t]["since"] = time.time() - 3600
 json.dump(s, open(f, "w"))
 PYEOF
-AGORA_RUNTIME=true bash "$AGORA_HOME/scripts/poll.sh" >/dev/null
+AGORA_RUNTIME=true bash "$PKG/scripts/poll.sh" >/dev/null
 cat "$AGORA_HOME"/log/*/watchdog.md 2>/dev/null | grep "event:diagnosed" | grep -q "stalled" \
   && ok "stalled 看门狗派生 diagnosed（本机观察时钟）" || fail "stalled 看门狗派生 diagnosed"
 # cadence：刚诊断过的任务下轮不重复诊断（diagnosed 事件重建活性时钟）
 W1=$(cat "$AGORA_HOME"/log/*/watchdog.md 2>/dev/null | grep -c "event:diagnosed")
-AGORA_RUNTIME=true bash "$AGORA_HOME/scripts/poll.sh" >/dev/null
+AGORA_RUNTIME=true bash "$PKG/scripts/poll.sh" >/dev/null
 W2=$(cat "$AGORA_HOME"/log/*/watchdog.md 2>/dev/null | grep -c "event:diagnosed")
 [[ "$W1" == "$W2" ]] && ok "看门狗 cadence 不刷屏" || fail "看门狗 cadence 不刷屏（$W1→$W2）"
 
 # 升级阶梯（ESCALATE_AFTER=1）：diagnosed → escalated →（AUTO_REOPEN=1）reopened 回池
 OUT=$(TITLE="升级阶梯任务" TC); LADT=$(echo "$OUT" | sed -n 's/.*"task":"\(gt-[0-9a-f]*\)".*/\1/p')
 POST tester@proj --event claimed --task "$LADT" >/dev/null
-AGORA_RUNTIME=true bash "$AGORA_HOME/scripts/poll.sh" >/dev/null   # 建立活性基线
+AGORA_RUNTIME=true bash "$PKG/scripts/poll.sh" >/dev/null   # 建立活性基线
 seed_old() { python3 - "$AGORA_HOME" "$LADT" <<'PYEOF'
 import json, sys, time
 f = sys.argv[1] + "/.git/poll-state.json"
@@ -394,16 +394,16 @@ e["since"] = time.time() - 3600
 json.dump(s, open(f, "w"))
 PYEOF
 }
-seed_old; AGORA_WATCHDOG_ESCALATE_AFTER=1 AGORA_RUNTIME=true bash "$AGORA_HOME/scripts/poll.sh" >/dev/null
+seed_old; AGORA_WATCHDOG_ESCALATE_AFTER=1 AGORA_RUNTIME=true bash "$PKG/scripts/poll.sh" >/dev/null
 cat "$AGORA_HOME"/log/*/watchdog.md | grep "event:diagnosed" | grep -q "$LADT" \
   || { fail "阶梯第 1 级 diagnosed"; }
 # 每次 fire 后看门狗把跟踪条目标记为待采纳；先跑一轮采纳新事件复位时钟，再播种再 fire
-AGORA_RUNTIME=true bash "$AGORA_HOME/scripts/poll.sh" >/dev/null
-seed_old; AGORA_WATCHDOG_ESCALATE_AFTER=1 AGORA_RUNTIME=true bash "$AGORA_HOME/scripts/poll.sh" >/dev/null
+AGORA_RUNTIME=true bash "$PKG/scripts/poll.sh" >/dev/null
+seed_old; AGORA_WATCHDOG_ESCALATE_AFTER=1 AGORA_RUNTIME=true bash "$PKG/scripts/poll.sh" >/dev/null
 cat "$AGORA_HOME"/log/*/watchdog.md | grep "event:escalated" | grep -q "$LADT" \
   && ok "stalled 升级阶梯：escalated" || fail "stalled 升级阶梯：escalated"
-AGORA_RUNTIME=true bash "$AGORA_HOME/scripts/poll.sh" >/dev/null
-seed_old; AGORA_WATCHDOG_ESCALATE_AFTER=1 AGORA_WATCHDOG_AUTO_REOPEN=1 AGORA_RUNTIME=true bash "$AGORA_HOME/scripts/poll.sh" >/dev/null
+AGORA_RUNTIME=true bash "$PKG/scripts/poll.sh" >/dev/null
+seed_old; AGORA_WATCHDOG_ESCALATE_AFTER=1 AGORA_WATCHDOG_AUTO_REOPEN=1 AGORA_RUNTIME=true bash "$PKG/scripts/poll.sh" >/dev/null
 grep -q "^- $LADT" "$AGORA_HOME/board/todo.md" \
   && ok "watchdog 自动回池（reopened → todo）" || fail "watchdog 自动回池（reopened → todo）"
 
@@ -412,7 +412,7 @@ OUT=$(TITLE="blocked滞留任务" TC); BLKT=$(echo "$OUT" | sed -n 's/.*"task":"
 POST tester@proj --event claimed --task "$BLKT" >/dev/null
 POST tester@proj --event blocked --task "$BLKT" --reason "等下级合并" >/dev/null
 sed -i '0,/^id: /s//dispatcher: rival\nid: /' "$AGORA_HOME/wiki/tasks/$BLKT.md"   # 双目标 mention 需 dispatcher≠认领者
-AGORA_RUNTIME=true bash "$AGORA_HOME/scripts/poll.sh" >/dev/null   # 基线：建立 blocked 观察时钟（未触发分支）
+AGORA_RUNTIME=true bash "$PKG/scripts/poll.sh" >/dev/null   # 基线：建立 blocked 观察时钟（未触发分支）
 cat "$AGORA_HOME"/log/*/watchdog.md 2>/dev/null | grep "blocked 滞留" | grep -q "$BLKT" \
   && fail "blocked 基线误报（阈值内）" || ok "blocked 基线不误报（阈值内）"
 seed_blk() { python3 - "$AGORA_HOME" "$BLKT" <<'PYEOF'
@@ -425,31 +425,31 @@ e["since"] = time.time() - 5 * 3600
 json.dump(s, open(f, "w"))
 PYEOF
 }
-seed_blk; AGORA_RUNTIME=true bash "$AGORA_HOME/scripts/poll.sh" >/dev/null   # 默认阈值 4h：拨 5h 触发
+seed_blk; AGORA_RUNTIME=true bash "$PKG/scripts/poll.sh" >/dev/null   # 默认阈值 4h：拨 5h 触发
 cat "$AGORA_HOME"/log/*/watchdog.md | grep "event:diagnosed" | grep "$BLKT" | grep -q "blocked 滞留" \
   && ok "blocked 滞留→diagnosed（默认 4h）" || fail "blocked 滞留→diagnosed"
 cat "$AGORA_HOME"/log/*/watchdog.md | grep "event:diagnosed" | grep "$BLKT" | grep -q "mention:tester,rival" \
   && ok "blocked 诊断 mention 认领者＋dispatcher" || fail "blocked 诊断 mention 双目标缺失"
 B1=$(cat "$AGORA_HOME"/log/*/watchdog.md | grep -c "blocked 滞留")
-AGORA_RUNTIME=true bash "$AGORA_HOME/scripts/poll.sh" >/dev/null   # cadence：diagnosed 重建时钟不刷屏
+AGORA_RUNTIME=true bash "$PKG/scripts/poll.sh" >/dev/null   # cadence：diagnosed 重建时钟不刷屏
 B2=$(cat "$AGORA_HOME"/log/*/watchdog.md | grep -c "blocked 滞留")
 [[ "$B1" == "$B2" ]] && ok "blocked cadence 不刷屏" || fail "blocked cadence 不刷屏（$B1→$B2）"
-seed_blk; AGORA_WATCHDOG_ESCALATE_AFTER=1 AGORA_RUNTIME=true bash "$AGORA_HOME/scripts/poll.sh" >/dev/null
+seed_blk; AGORA_WATCHDOG_ESCALATE_AFTER=1 AGORA_RUNTIME=true bash "$PKG/scripts/poll.sh" >/dev/null
 cat "$AGORA_HOME"/log/*/watchdog.md | grep "event:escalated" | grep "$BLKT" | grep -q "blocked 滞留升级" \
   && ok "blocked 升级阶梯：escalated" || fail "blocked 升级阶梯：escalated"
 E1=$(cat "$AGORA_HOME"/log/*/watchdog.md | grep -c "$BLKT")
-seed_blk; AGORA_WATCHDOG_ESCALATE_AFTER=1 AGORA_RUNTIME=true bash "$AGORA_HOME/scripts/poll.sh" >/dev/null   # escalated 后保持安静
+seed_blk; AGORA_WATCHDOG_ESCALATE_AFTER=1 AGORA_RUNTIME=true bash "$PKG/scripts/poll.sh" >/dev/null   # escalated 后保持安静
 E2=$(cat "$AGORA_HOME"/log/*/watchdog.md | grep -c "$BLKT")
 [[ "$E1" == "$E2" ]] && ok "blocked escalated 后保持安静" || fail "blocked escalated 后刷屏（$E1→$E2）"
 POST tester@proj --event claimed --task "$BLKT" >/dev/null   # 同 owner re-claim：看板仍 blocked（derive-board no-op）→ 不出泳道
-AGORA_RUNTIME=true bash "$AGORA_HOME/scripts/poll.sh" >/dev/null
+AGORA_RUNTIME=true bash "$PKG/scripts/poll.sh" >/dev/null
 python3 - "$AGORA_HOME" "$BLKT" <<'PYEOF' && ok "claimed 不出泳道（与 derive-board 口径对齐）" || fail "claimed 误出泳道（看板仍 blocked 却失去看护）"
 import json, sys
 s = json.load(open(sys.argv[1] + "/.git/poll-state.json"))
 assert sys.argv[2] in s.get("_blocked_act", {}), "claimed 误清跟踪表"
 PYEOF
 POST tester@proj --event reopened --task "$BLKT" >/dev/null   # 返工回池 → 看板出 blocked 泳道 → 跟踪复位
-AGORA_RUNTIME=true bash "$AGORA_HOME/scripts/poll.sh" >/dev/null
+AGORA_RUNTIME=true bash "$PKG/scripts/poll.sh" >/dev/null
 python3 - "$AGORA_HOME" "$BLKT" <<'PYEOF' && ok "blocked 后 reopened 复位出泳道" || fail "reopened 出泳道未清跟踪表"
 import json, sys
 s = json.load(open(sys.argv[1] + "/.git/poll-state.json"))
@@ -462,18 +462,18 @@ POST tester@proj --event claimed --task "$SLT" >/dev/null
 DID_TEST="d-staletest"
 POST tester@proj --event dispatched --task "$SLT" --target "$PROJ" --child tester --run "raw/dispatches/$DID_TEST.log" >/dev/null
 touch -d "1 hour ago" "$AGORA_HOME/raw/dispatches/$DID_TEST.live"
-AGORA_RUNTIME=true bash "$AGORA_HOME/scripts/poll.sh" >/dev/null
+AGORA_RUNTIME=true bash "$PKG/scripts/poll.sh" >/dev/null
 cat "$AGORA_HOME"/log/*/watchdog.md | grep "event:diagnosed" | grep -q ".live 滞留" \
   && ok "stale .live 提醒派单方" || fail "stale .live 提醒派单方"
 N1=$(cat "$AGORA_HOME"/log/*/watchdog.md | grep -c ".live 滞留")
-AGORA_RUNTIME=true bash "$AGORA_HOME/scripts/poll.sh" >/dev/null
+AGORA_RUNTIME=true bash "$PKG/scripts/poll.sh" >/dev/null
 N2=$(cat "$AGORA_HOME"/log/*/watchdog.md | grep -c ".live 滞留")
 [[ "$N1" == "$N2" ]] && ok "stale .live 不重复提醒" || fail "stale .live 不重复提醒（$N1→$N2）"
 rm -f "$AGORA_HOME/raw/dispatches/$DID_TEST.live"   # gt-2153：清 stale 标记——teardown 轮询须零等待
 # 只报告模式：SPAWN=0 → held 不派生
 OUT=$(TITLE="poll只报告任务" TC); POLLT2=$(echo "$OUT" | sed -n 's/.*"task":"\(gt-[0-9a-f]*\)".*/\1/p')
 POST rival@proj2 --event progress --task "$POLLT2" --mention tester --body "再来一单" >/dev/null
-POLL_OUT3=$(AGORA_POLL_SPAWN=0 AGORA_RUNTIME=true bash "$AGORA_HOME/scripts/poll.sh")
+POLL_OUT3=$(AGORA_POLL_SPAWN=0 AGORA_RUNTIME=true bash "$PKG/scripts/poll.sh")
 echo "$POLL_OUT3" | python3 -c "
 import json,sys
 r=json.loads(sys.stdin.read())
@@ -483,15 +483,15 @@ assert not any(s['task']=='$POLLT2' for s in r['spawned']), r
 
 echo "===== dispatch 注入防御 ====="
 # 非法 task id（可能来自他机邮件摘要）→ 进 bash -c 前被拒
-bash "$AGORA_HOME/scripts/dispatch.sh" --actor tester@proj --project "$PROJ" --task 'gt-1;id' >/dev/null 2>&1
+bash "$PKG/scripts/dispatch.sh" --actor tester@proj --project "$PROJ" --task 'gt-1;id' >/dev/null 2>&1
 [[ $? -eq 2 ]] && ok "dispatch 拒绝非法 task id" || fail "dispatch 拒绝非法 task id"
 # prompt 中的命令替换绝不被执行（env 传数据 + 单引号脚本）
 MARK="$T/pwned-$RANDOM"
-AGORA_RUNTIME=true bash "$AGORA_HOME/scripts/dispatch.sh" --actor tester@proj --project "$PROJ" \
+AGORA_RUNTIME=true bash "$PKG/scripts/dispatch.sh" --actor tester@proj --project "$PROJ" \
   --task "$POLLT" --prompt '$(touch '"$MARK"')' >/dev/null 2>&1
 [[ ! -e "$MARK" ]] && ok "dispatch prompt 注入不执行" || fail "dispatch prompt 注入不执行"
 # 拉起形态：runtime 参数含 --auto（无人值守权限），且不含已随 opencode 2.0.32 移除的 --dir（echo stub 把参数回显进 dispatch 日志）
-AGORA_RUNTIME=echo bash "$AGORA_HOME/scripts/dispatch.sh" --actor tester@proj --project "$PROJ" \
+AGORA_RUNTIME=echo bash "$PKG/scripts/dispatch.sh" --actor tester@proj --project "$PROJ" \
   --task "$POLLT" >/dev/null 2>&1
 sleep 1
 RLOG=$(ls -t "$AGORA_HOME"/raw/dispatches/*.log | head -1)
@@ -500,56 +500,56 @@ grep -q -- '--auto' "$RLOG" && ! grep -q -- '--dir' "$RLOG" \
 
 # gt-8a3c：spawn 成功后 sessions.map 注册写入（通知桥唯一路由源，此前全链无写入方→通知静默根因）
 SMT1=$(TITLE="smemap注册甲" TC); SMT1=$(echo "$SMT1" | sed -n 's/.*"task":"\(gt-[0-9a-f]*\)".*/\1/p')
-SMOUT=$(AGORA_RUNTIME=echo bash "$AGORA_HOME/scripts/dispatch.sh" --actor tester@proj --project "$PROJ" --task "$SMT1")
+SMOUT=$(AGORA_RUNTIME=echo bash "$PKG/scripts/dispatch.sh" --actor tester@proj --project "$PROJ" --task "$SMT1")
 SMCHILD=$(echo "$SMOUT" | sed -n 's/.*"child_actor":"\([^"@]*\)@.*/\1/p')
 SMLOG=$(echo "$SMOUT" | sed -n 's/.*"run":"\([^"]*\)".*/\1/p')
 SMSID1=$(sed -n 's/^SESSION:1=//p' "$AGORA_HOME/$SMLOG" 2>/dev/null | head -1)
-grep -qE "^$(hostname) $SMCHILD $SMSID1 [0-9]{4}-[0-9]{2}-[0-9]{2}T" "$AGORA_HOME/scripts/sessions.map" \
+grep -qE "^$(hostname) $SMCHILD $SMSID1 [0-9]{4}-[0-9]{2}-[0-9]{2}T" "$AGORA_HOME/sessions.map" \
   && ok "spawn 后 sessions.map 出现注册行（gt-8a3c）" || fail "spawn 后无 sessions.map 注册行（child=$SMCHILD sid=$SMSID1）"
 SMT2=$(TITLE="smemap注册乙" TC); SMT2=$(echo "$SMT2" | sed -n 's/.*"task":"\(gt-[0-9a-f]*\)".*/\1/p')
-SMOUT2=$(AGORA_RUNTIME=echo bash "$AGORA_HOME/scripts/dispatch.sh" --actor tester@proj --project "$PROJ" --task "$SMT2")
+SMOUT2=$(AGORA_RUNTIME=echo bash "$PKG/scripts/dispatch.sh" --actor tester@proj --project "$PROJ" --task "$SMT2")
 SMLOG2=$(echo "$SMOUT2" | sed -n 's/.*"run":"\([^"]*\)".*/\1/p')
 SMSID2=$(sed -n 's/^SESSION:1=//p' "$AGORA_HOME/$SMLOG2" 2>/dev/null | head -1)
-SMR1=$(grep -cE "^$(hostname) $SMCHILD $SMSID1 " "$AGORA_HOME/scripts/sessions.map" || true)
-SMR2=$(grep -cE "^$(hostname) $SMCHILD $SMSID2 " "$AGORA_HOME/scripts/sessions.map" || true)
-[ "$SMR1" -eq 1 ] && [ "$SMR2" -eq 1 ] && [ -z "$(sort "$AGORA_HOME/scripts/sessions.map" | uniq -d)" ] \
+SMR1=$(grep -cE "^$(hostname) $SMCHILD $SMSID1 " "$AGORA_HOME/sessions.map" || true)
+SMR2=$(grep -cE "^$(hostname) $SMCHILD $SMSID2 " "$AGORA_HOME/sessions.map" || true)
+[ "$SMR1" -eq 1 ] && [ "$SMR2" -eq 1 ] && [ -z "$(sort "$AGORA_HOME/sessions.map" | uniq -d)" ] \
   && ok "重派换绑＋同 (host,entity,sid) 零重复行（gt-8a3c 幂等）" || fail "sid 行数 $SMR1/$SMR2 或有重复行（幂等失效）"
 
 echo "===== poll 本地保洁 ====="
 # sessions.map TTL：过期本机条目剔除；他机条目与新本机条目保留
 H=$(hostname)
 printf '# <机器名>  <agent名>  <opencode session id>  <登记时间>\n%s tester ses-old 2026-10-12T10:00:00+00:00\nforeign tester ses-f 2026-10-12T10:00:00+00:00\n%s tester ses-new %s\n' \
-  "$H" "$H" "$(date -Iseconds)" > "$AGORA_HOME/scripts/sessions.map"
+  "$H" "$H" "$(date -Iseconds)" > "$AGORA_HOME/sessions.map"
 cd "$AGORA_HOME" && git add -A >/dev/null && AGORA_MECHANICAL=1 git commit -qm "seed sessions" >/dev/null
 # inbox 归档：100 天前的邮件（文件名=纳秒时间戳）移入 archive/
 mkdir -p "$AGORA_HOME/inbox/tester"
 echo "- from:x | ts:y | ref:r | summary:ack none" > "$AGORA_HOME/inbox/tester/$(( $(date +%s) - 100*86400 ))000000000.md"
 git add -A >/dev/null && AGORA_MECHANICAL=1 git commit -qm "seed old mail" >/dev/null
-POLL_OUT4=$(AGORA_RUNTIME=true bash "$AGORA_HOME/scripts/poll.sh")
+POLL_OUT4=$(AGORA_RUNTIME=true bash "$PKG/scripts/poll.sh")
 echo "$POLL_OUT4" | python3 -c "
 import json,sys
 r=json.loads(sys.stdin.read())
 assert r['sessions_reaped']==1, r
 assert r['mails_archived']>=1, r
 " && ok "poll 保洁计数（sessions+归档）" || fail "poll 保洁计数（$POLL_OUT4）"
-! grep -q "ses-old" "$AGORA_HOME/scripts/sessions.map" \
-  && grep -q "ses-new" "$AGORA_HOME/scripts/sessions.map" \
-  && grep -q "ses-f" "$AGORA_HOME/scripts/sessions.map" \
+! grep -q "ses-old" "$AGORA_HOME/sessions.map" \
+  && grep -q "ses-new" "$AGORA_HOME/sessions.map" \
+  && grep -q "ses-f" "$AGORA_HOME/sessions.map" \
   && ok "TTL 只清本机过期条目" || fail "TTL 只清本机过期条目"
 ls "$AGORA_HOME/inbox/archive/tester/" 2>/dev/null | grep -q '\.md' \
   && ok "超期邮件入 archive" || fail "超期邮件入 archive"
 
 # gt-8a3c：TTL 时间戳兼容——存量裸 epoch 条目可回收（此前 fromisoformat 抛→except pass 永生）；ISO 解析不受影响
 printf '%s tester ses-epoch-old %s\n%s tester ses-iso-old 2026-10-12T10:00:00+00:00\n%s tester ses-epoch-new %s\nforeign tester ses-f 2026-10-12T10:00:00+00:00\n' \
-  "$H" "$(( $(date +%s) - 48*3600 ))" "$H" "$H" "$(date +%s)" > "$AGORA_HOME/scripts/sessions.map"
+  "$H" "$(( $(date +%s) - 48*3600 ))" "$H" "$H" "$(date +%s)" > "$AGORA_HOME/sessions.map"
 cd "$AGORA_HOME" && git add -A >/dev/null && AGORA_MECHANICAL=1 git commit -qm "seed epoch sessions" >/dev/null
-POLL_OUT5=$(AGORA_RUNTIME=true bash "$AGORA_HOME/scripts/poll.sh")
+POLL_OUT5=$(AGORA_RUNTIME=true bash "$PKG/scripts/poll.sh")
 echo "$POLL_OUT5" | python3 -c "import json,sys; r=json.loads(sys.stdin.read()); assert r['sessions_reaped']==2, r" \
   && ok "TTL epoch 兼容：epoch 旧＋ISO 旧同回收（gt-8a3c）" || fail "TTL epoch 兼容计数（$POLL_OUT5）"
-! grep -q "ses-epoch-old" "$AGORA_HOME/scripts/sessions.map" \
-  && ! grep -q "ses-iso-old" "$AGORA_HOME/scripts/sessions.map" \
-  && grep -q "ses-epoch-new" "$AGORA_HOME/scripts/sessions.map" \
-  && grep -q "ses-f" "$AGORA_HOME/scripts/sessions.map" \
+! grep -q "ses-epoch-old" "$AGORA_HOME/sessions.map" \
+  && ! grep -q "ses-iso-old" "$AGORA_HOME/sessions.map" \
+  && grep -q "ses-epoch-new" "$AGORA_HOME/sessions.map" \
+  && grep -q "ses-f" "$AGORA_HOME/sessions.map" \
   && ok "TTL epoch 兼容回收明细（旧 epoch/ISO 清、新 epoch/他机留）" || fail "TTL epoch 兼容回收明细不符"
 
 echo "===== poll.sh notify 桥探活（gt-edc4） ====="
@@ -557,7 +557,7 @@ MARK="$T/bridge-mock.log"; : > "$MARK"
 BPAT="probe-bridge-$RANDOM-x"   # 探针模式与本机真桥（notify-opencode.sh）互斥，防生产机真桥在场误判
 BPOLL() { AGORA_NOTIFY_BRIDGE=1 AGORA_NOTIFY_BRIDGE_PAT="$BPAT" \
           AGORA_NOTIFY_BRIDGE_SPAWN="${1:-echo spawn >> \"$MARK\"}" \
-          AGORA_POLL_SPAWN=0 AGORA_RUNTIME=true bash "$AGORA_HOME/scripts/poll.sh" 2>/dev/null; }
+          AGORA_POLL_SPAWN=0 AGORA_RUNTIME=true bash "$PKG/scripts/poll.sh" 2>/dev/null; }
 # ① 桥缺席→一轮 poll 后拉起被调用（mock 断言）
 BOUT1=$(BPOLL)
 [ "$(wc -l < "$MARK")" -eq 1 ] && grep -q '"state": "spawned"' <<<"$BOUT1" \
@@ -614,7 +614,7 @@ PYEOF
 }
 # 首次生成：清页＋清闸 → poll → owner=watchdog ＋ 昨日 section 全量统计
 rm -f "$AGORA_HOME/wiki/topics/supervision.md"; GATE_RESET
-SUP_OUT=$(AGORA_RUNTIME=true bash "$AGORA_HOME/scripts/poll.sh")
+SUP_OUT=$(AGORA_RUNTIME=true bash "$PKG/scripts/poll.sh")
 SUP="$AGORA_HOME/wiki/topics/supervision.md"
 grep -q "\"supervised\": \"$YDAY\"" <<<"$SUP_OUT" && ok "督报跨日闸门首触发" || fail "督报跨日闸门首触发（$SUP_OUT）"
 grep -q "^owner: watchdog" "$SUP" && ok "督报页首建 owner=watchdog" || fail "督报页首建 owner=watchdog"
@@ -626,7 +626,7 @@ grep -q "^## $YDAY" "$SUP" \
   && ok "督报统计（分类/闭环率/复发点名/深度分布）" || fail "督报统计断言（$(head -12 "$SUP")）"
 # 同日不重复：再跑不触发、页字节不变、闸门=今日
 C1=$(md5sum "$SUP" | cut -d' ' -f1)
-SUP2=$(AGORA_RUNTIME=true bash "$AGORA_HOME/scripts/poll.sh")
+SUP2=$(AGORA_RUNTIME=true bash "$PKG/scripts/poll.sh")
 C2=$(md5sum "$SUP" | cut -d' ' -f1)
 python3 - "$AGORA_HOME" <<'PYEOF' && GATE_OK=1 || GATE_OK=0
 import json, sys, datetime
@@ -636,7 +636,7 @@ PYEOF
 [[ "$C1" == "$C2" ]] && ! grep -q "supervised" <<<"$SUP2" && [[ "${GATE_OK:-0}" -eq 1 ]] \
   && ok "同日不重复触发（页字节不变＋闸门翻今日）" || fail "同日幂等（C1=$C1 C2=$C2 GATE_OK=${GATE_OK:-0}）"
 # 他人写被 owner 拒
-bash "$AGORA_HOME/scripts/wiki-write.sh" --actor rival@proj2 --path topics/supervision.md --mode replace </dev/null 2>/dev/null
+bash "$PKG/scripts/wiki-write.sh" --actor rival@proj2 --path topics/supervision.md --mode replace </dev/null 2>/dev/null
 [[ $? -eq 5 ]] && ok "督报页他人写被 owner 拒(rc=5)" || fail "督报页他人写被 owner 拒"
 # 跨日翻新＋7 天有界：预置 7 个旧段 → 回拨闸门 → 触发后恰 7 段、昨日段置顶、最老出局
 OLD=""
@@ -648,9 +648,9 @@ for i in 2 3 4 5 6 7 8; do
 - 旧段 D-$i 标记
 "
 done
-printf -- '---\nowner: watchdog\ncreated: %s\n---\n%s' "$(date +%F)" "$OLD" | bash "$AGORA_HOME/scripts/wiki-write.sh" --actor watchdog@$(hostname) --path topics/supervision.md --mode replace >/dev/null
+printf -- '---\nowner: watchdog\ncreated: %s\n---\n%s' "$(date +%F)" "$OLD" | bash "$PKG/scripts/wiki-write.sh" --actor watchdog@$(hostname) --path topics/supervision.md --mode replace >/dev/null
 GATE_RESET
-AGORA_RUNTIME=true bash "$AGORA_HOME/scripts/poll.sh" >/dev/null
+AGORA_RUNTIME=true bash "$PKG/scripts/poll.sh" >/dev/null
 grep -q "旧段 D-8 标记" "$SUP" && fail "7 天有界：最老段 D-8 未出局" || ok "7 天有界截断：最老段出局"
 grep -q "旧段 D-2 标记" "$SUP" && ok "跨日翻新：次新旧段保留" || fail "跨日翻新：旧段 D-2 丢失"
 [[ $(grep -c '^## ' "$SUP") -eq 7 ]] && ok "督报页恰 7 段" || fail "督报页段数 $(grep -c '^## ' "$SUP")≠7"
@@ -685,8 +685,8 @@ NBSTUB
 chmod +x "$NBDIR/opencode"
 nb_reset() { printf '%s\n' "${1:-none}" > "$NB_HOME/ctrl"; : > "$NB_HOME/calls.log"; }
 nb_calls() { grep -c "PROMPT-OK" "$NB_HOME/calls.log" 2>/dev/null; }
-NB() { PATH="$NBDIR:$PATH" NB_HOME="$NB_HOME" bash "$AGORA_HOME/scripts/notify-opencode.sh" --once; }
-printf '%s tester ses-test %s\n' "$(hostname)" "$(date -Iseconds)" >> "$AGORA_HOME/scripts/sessions.map"
+NB() { PATH="$NBDIR:$PATH" NB_HOME="$NB_HOME" bash "$PKG/scripts/notify-opencode.sh" --once; }
+printf '%s tester ses-test %s\n' "$(hostname)" "$(date -Iseconds)" >> "$AGORA_HOME/sessions.map"
 nb_reset none
 echo "- from:x | ts:y | ref:log/z.md:1 | summary:ack gt-0000" > "$AGORA_HOME/inbox/tester/$(date +%s%N).md"
 NB
@@ -698,14 +698,14 @@ echo "- from:x | ts:y | ref:log/z.md:2 | summary:ack gt-0000" > "$AGORA_HOME/inb
 NB
 [[ $(nb_calls) == 1 ]] && ok "通知桥 60s 去抖" || fail "通知桥 60s 去抖"
 # 回归哨兵：桥零消费 AGORA_OPENCODE_URL（死变量）；若传输回退 HTTP 且读它，死端口必败、断言必红
-printf '%s tester2 ses-t2 %s\n' "$(hostname)" "$(date -Iseconds)" >> "$AGORA_HOME/scripts/sessions.map"
+printf '%s tester2 ses-t2 %s\n' "$(hostname)" "$(date -Iseconds)" >> "$AGORA_HOME/sessions.map"
 mkdir -p "$AGORA_HOME/inbox/tester2"
 echo "- from:x | ts:y | ref:r2 | summary:ack gt-0000" > "$AGORA_HOME/inbox/tester2/$(date +%s%N).md"
 AGORA_OPENCODE_URL="http://127.0.0.1:1" NB
 grep -q "PROMPT-OK /api/session/ses-t2/prompt" "$NB_HOME/calls.log" \
   && ok "无 HTTP 服务时桥仍可注入（传输=opencode api CLI）" || fail "无 HTTP 服务时桥仍可注入"
 # runtime 注入失败：静默跳过，不报错不退出非零
-printf '%s loner ses-x %s\n' "$(hostname)" "$(date -Iseconds)" >> "$AGORA_HOME/scripts/sessions.map"
+printf '%s loner ses-x %s\n' "$(hostname)" "$(date -Iseconds)" >> "$AGORA_HOME/sessions.map"
 mkdir -p "$AGORA_HOME/inbox/loner"
 echo "- from:x | ts:y | ref:r | summary:ack gt-0000" > "$AGORA_HOME/inbox/loner/$(date +%s%N).md"
 nb_reset inject_fail
@@ -758,7 +758,7 @@ PYEOF
 POST tester@proj --event claimed --task "$POLLT2" >/dev/null
 printf -- '- seq:1 | ts:%s | actor:intruder@proj2 | event:claimed | idem:zz | seen:[] | task:%s\n' \
   "$(date --iso-8601=seconds)" "$POLLT2" >> "$AGORA_HOME/log/$(date +%F)/proj2.md"
-bash "$AGORA_HOME/scripts/derive-board.sh"
+bash "$PKG/scripts/derive-board.sh"
 grep -q "$POLLT2" "$AGORA_HOME/board/conflicts.md" \
   && ok "双清 claim 回放兜底入 conflicts" || fail "双清 claim 回放兜底入 conflicts"
 
@@ -766,17 +766,17 @@ echo "===== 增量推导（derive-cache） ====="
 python3 -c "import json;c=json.load(open('$AGORA_HOME/.git/derive-cache.json'));assert c['v']==4 and c['watermark']" \
   && ok "增量缓存已建立" || fail "增量缓存已建立"
 S0=$(python3 -c "import json;print(json.load(open('$AGORA_HOME/.git/derive-cache.json'))['stats']['incr'])")
-bash "$AGORA_HOME/scripts/derive-board.sh"
+bash "$PKG/scripts/derive-board.sh"
 S1=$(python3 -c "import json;print(json.load(open('$AGORA_HOME/.git/derive-cache.json'))['stats']['incr'])")
 [[ $S1 -gt $S0 ]] && ok "无新事件走增量路径" || fail "无新事件走增量路径（$S0→$S1）"
 rm -rf "$T/board.snap"; cp -r "$AGORA_HOME/board" "$T/board.snap"
-rm "$AGORA_HOME/.git/derive-cache.json"; bash "$AGORA_HOME/scripts/derive-board.sh"
+rm "$AGORA_HOME/.git/derive-cache.json"; bash "$PKG/scripts/derive-board.sh"
 diff -r "$T/board.snap" "$AGORA_HOME/board" >/dev/null && ok "增量与全量结果一致" || fail "增量与全量结果一致"
 # 前缀被改（union 合并重排/脏写）→ 自动回退全量重放，结果不变
 SHARD=$(LC_ALL=C ls "$AGORA_HOME"/log/*/*.md | head -1)
 sed -i '1i <!-- tampered -->' "$SHARD" 2>/dev/null
 F0=$(python3 -c "import json;print(json.load(open('$AGORA_HOME/.git/derive-cache.json'))['stats']['full'])")
-bash "$AGORA_HOME/scripts/derive-board.sh"
+bash "$PKG/scripts/derive-board.sh"
 F1=$(python3 -c "import json;print(json.load(open('$AGORA_HOME/.git/derive-cache.json'))['stats']['full'])")
 [[ $F1 -gt $F0 ]] && diff -r "$T/board.snap" "$AGORA_HOME/board" >/dev/null \
   && ok "前缀篡改回退全量且结果一致" || fail "前缀篡改回退全量且结果一致（$F0→$F1）"
@@ -785,14 +785,14 @@ echo "===== doctor ====="
 # 证据引用推送对账：PROJ 已有本地 evidence refs（attach 段产生）；配空远端 → warn 但不破 ALL GREEN
 git init -q --bare "$T/proj-remote.git"
 git -C "$PROJ" remote add origin "$T/proj-remote.git" 2>/dev/null || true
-OUT=$(bash "$AGORA_HOME/scripts/doctor.sh" 2>&1)
+OUT=$(bash "$PKG/scripts/doctor.sh" 2>&1)
 echo "$OUT" | grep -q "warn | 未推送的证据引用" && echo "$OUT" | grep -q "ALL GREEN" \
   && ok "未推送证据 warn 不破 ALL GREEN" || { fail "未推送证据 warn 不破 ALL GREEN"; echo "$OUT"; }
 git -C "$PROJ" push -q origin 'refs/agora/evidence/*' >/dev/null 2>&1
-OUT=$(bash "$AGORA_HOME/scripts/doctor.sh" 2>&1)
+OUT=$(bash "$PKG/scripts/doctor.sh" 2>&1)
 echo "$OUT" | grep -q "ok   | 证据引用推送对账" \
   && ok "推送后证据对账转 ok" || { fail "推送后证据对账转 ok"; echo "$OUT"; }
-OUT=$(bash "$AGORA_HOME/scripts/doctor.sh" 2>&1)
+OUT=$(bash "$PKG/scripts/doctor.sh" 2>&1)
 echo "$OUT" | grep -q "ALL GREEN" && ok "doctor 全绿" || { fail "doctor 全绿"; echo "$OUT"; }
 
 echo "===== 审核修复回归（v1.17） ====="
@@ -818,9 +818,9 @@ echo "$OUT" | grep -q '"dedup":true' && ok "词边界：幂等 LAST_EV 不被 gt
 mkdir -p "$AGORA_HOME/inbox/rival"
 printf -- '- from:a | ts:t | ref:log/2099-01-01/x.md:9 | summary:m9\n'  > "$AGORA_HOME/inbox/rival/1000000000000000001.md"
 printf -- '- from:a | ts:t | ref:log/2099-01-01/x.md:10 | summary:m10\n' > "$AGORA_HOME/inbox/rival/1000000000000000002.md"
-cd "$PROJ" && python3 - "$PKG/server/agora_mcp.py" "$PROJ2" "$AGORA_HOME" <<'PYEOF' && ok "check_mail since 水位语义" || fail "check_mail since 水位语义"
+cd "$PROJ" && python3 - "$PKG/server/agora_mcp.py" "$PROJ2" "$AGORA_HOME" "$PKG" <<'PYEOF' && ok "check_mail since 水位语义" || fail "check_mail since 水位语义"
 import json, subprocess, sys, os
-srv, proj2, home = sys.argv[1], sys.argv[2], sys.argv[3]
+srv, proj2, home, PKG = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
 env = {**os.environ, "AGORA_HOME": home}
 def spawn(cwd):
     p = subprocess.Popen(["python3", srv], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, cwd=cwd, env=env)
@@ -836,13 +836,13 @@ def since(rpc, w):
     return json.loads(rpc("tools/call", {"name":"agora_check_mail","arguments":{"since":w}})["result"]["content"][0]["text"])
 # tester 邮箱：位置匹配
 p1, r1 = spawn(".")
-subprocess.run(["bash", f"{home}/scripts/post.sh", "--actor","tester@proj","--project","proj",
+subprocess.run(["bash", f"{PKG}/scripts/post.sh", "--actor","tester@proj","--project","proj",
                 "--event","progress","--task","gt-wwww","--mention","tester","--body","水位1"],
                env=env, capture_output=True)
 m1 = mail(r1); w1 = m1["watermark"]
 assert m1["count"] >= 1 and w1
 assert since(r1, w1)["count"] == 0, "水位即末尾应无新邮件"
-subprocess.run(["bash", f"{home}/scripts/post.sh", "--actor","tester@proj","--project","proj",
+subprocess.run(["bash", f"{PKG}/scripts/post.sh", "--actor","tester@proj","--project","proj",
                 "--event","progress","--task","gt-wwww","--mention","tester","--body","水位2"],
                env=env, capture_output=True)
 m3 = since(r1, w1)
@@ -859,7 +859,7 @@ PYEOF
 # --- waiting 视图（MCP 枚举 + all 聚合） ---
 OUT=$(TITLE="等依赖" TC); WD1=$(echo "$OUT" | sed -n 's/.*"task":"\(gt-[0-9a-f]*\)".*/\1/p')
 OUT=$(TITLE="等依赖者" DEPS="$WD1" TC); WD2=$(echo "$OUT" | sed -n 's/.*"task":"\(gt-[0-9a-f]*\)".*/\1/p')
-bash "$AGORA_HOME/scripts/derive-board.sh" >/dev/null
+bash "$PKG/scripts/derive-board.sh" >/dev/null
 cd "$PROJ" && python3 - "$PKG/server/agora_mcp.py" "$WD2" <<'PYEOF' && ok "waiting 视图（枚举+all）" || fail "waiting 视图（枚举+all）"
 import json, subprocess, sys
 srv, wd2 = sys.argv[1], sys.argv[2]
@@ -882,7 +882,7 @@ PYEOF
 H2="$T/agora2"
 AGORA_HOME="$H2" bash "$PKG/scripts/init.sh" >/dev/null 2>&1
 test -x "$H2/.git/hooks/pre-commit" && ok "init 自举即装 pre-commit hook" || fail "init 自举即装 pre-commit hook"
-grep -qxF 'scripts/sessions.map merge=union' "$H2/.gitattributes" \
+grep -qxF 'sessions.map merge=union' "$H2/.gitattributes" \
   && grep -qxF 'wiki/allowed_signers merge=union' "$H2/.gitattributes" \
   && ok ".gitattributes 覆盖共享可变文本" || fail ".gitattributes 覆盖共享可变文本"
 echo x >> "$H2/wiki/decisions/doctor-runbook.md"
@@ -894,23 +894,23 @@ AGORA_MECHANICAL=1 git -c user.name=t -c user.email=t@l commit -qm x >/dev/null 
 
 # --- doctor 合并中断检查（MERGE_HEAD 残留） ---
 git -C "$H2" rev-parse HEAD > "$H2/.git/MERGE_HEAD"
-OUT=$(AGORA_HOME="$H2" bash "$H2/scripts/doctor.sh" 2>&1); RC=$?
+OUT=$(AGORA_HOME="$H2" bash "$PKG/scripts/doctor.sh" 2>&1); RC=$?
 [[ $RC -eq 1 ]] && echo "$OUT" | grep -q "合并中断" && ok "doctor 检出 MERGE_HEAD 残留" || fail "doctor 检出 MERGE_HEAD 残留"
-OUT=$(AGORA_HOME="$H2" bash "$H2/scripts/doctor.sh" --fix 2>&1)
+OUT=$(AGORA_HOME="$H2" bash "$PKG/scripts/doctor.sh" --fix 2>&1)
 [[ ! -f "$H2/.git/MERGE_HEAD" ]] && echo "$OUT" | grep -q "ALL GREEN" \
   && ok "doctor --fix 恢复合并中断" || { fail "doctor --fix 恢复合并中断"; echo "$OUT"; }
 
 # --- wiki-write 权限模型 ---
-bash "$AGORA_HOME/scripts/wiki-write.sh" --actor rival@proj2 --path entities/tester.md --mode replace <<< "篡改" \
+bash "$PKG/scripts/wiki-write.sh" --actor rival@proj2 --path entities/tester.md --mode replace <<< "篡改" \
   2>/dev/null; [[ $? -eq 5 ]] && ok "wiki replace owner 不符被拒(rc=5)" || fail "wiki replace owner 不符被拒(rc=5)"
-bash "$AGORA_HOME/scripts/wiki-write.sh" --actor tester@proj --path topics/roadmap.md --mode replace <<< "议题" >/dev/null \
+bash "$PKG/scripts/wiki-write.sh" --actor tester@proj --path topics/roadmap.md --mode replace <<< "议题" >/dev/null \
   && ok "wiki 新建 topics 页" || fail "wiki 新建 topics 页"
-bash "$AGORA_HOME/scripts/wiki-write.sh" --actor rival@proj2 --path topics/roadmap.md --mode append <<< "补充" >/dev/null \
+bash "$PKG/scripts/wiki-write.sh" --actor rival@proj2 --path topics/roadmap.md --mode append <<< "补充" >/dev/null \
   && grep -q '\*\*rival@proj2\*\*' "$AGORA_HOME/wiki/topics/roadmap.md" \
   && ok "topics append 放行（带署名）" || fail "topics append 放行（带署名）"
-bash "$AGORA_HOME/scripts/wiki-write.sh" --actor rival@proj2 --path entities/rival.md --mode append <<< "x" \
+bash "$PKG/scripts/wiki-write.sh" --actor rival@proj2 --path entities/rival.md --mode append <<< "x" \
   2>/dev/null; [[ $? -eq 2 ]] && ok "非 topics append 被拒(rc=2)" || fail "非 topics append 被拒(rc=2)"
-bash "$AGORA_HOME/scripts/wiki-write.sh" --actor tester@proj --path projects/regress --mode replace <<< "desc" >/dev/null \
+bash "$PKG/scripts/wiki-write.sh" --actor tester@proj --path projects/regress --mode replace <<< "desc" >/dev/null \
   && test -f "$AGORA_HOME/wiki/projects/regress.md" \
   && ok "wiki_write 无后缀路径归一落盘 .md（与读侧同口径）" || fail "wiki_write 无后缀路径归一落盘 .md（与读侧同口径）"
 
@@ -934,7 +934,7 @@ p.stdin.close()
 PYEOF
 
 # --- backup.sh ---
-AGORA_BACKUP_DIR="$T/bak" bash "$AGORA_HOME/scripts/backup.sh" >/dev/null 2>&1
+AGORA_BACKUP_DIR="$T/bak" bash "$PKG/scripts/backup.sh" >/dev/null 2>&1
 ls "$T/bak"/agora-*.bundle >/dev/null 2>&1 && ok "backup bundle 生成" || fail "backup bundle 生成"
 
 # --- instructions 长路径预算（spec §5 <600 字） ---
@@ -1012,13 +1012,13 @@ PYEOF
 
 echo "===== 审核回归（v1.26） ====="
 # --- post.sh seq 前缀撞名：actor:pre@a 不得把 actor:pre@ab 计入自己的 seq ---
-bash "$AGORA_HOME/scripts/post.sh" --actor "pre@a" --project pfxshard --event proposal --body "s1" >/dev/null
-bash "$AGORA_HOME/scripts/post.sh" --actor "pre@ab" --project pfxshard --event proposal --body "s2" >/dev/null
-OUT=$(bash "$AGORA_HOME/scripts/post.sh" --actor "pre@a" --project pfxshard --event proposal --body "s3")
+bash "$PKG/scripts/post.sh" --actor "pre@a" --project pfxshard --event proposal --body "s1" >/dev/null
+bash "$PKG/scripts/post.sh" --actor "pre@ab" --project pfxshard --event proposal --body "s2" >/dev/null
+OUT=$(bash "$PKG/scripts/post.sh" --actor "pre@a" --project pfxshard --event proposal --body "s3")
 echo "$OUT" | grep -q '"seq":2' \
   && ok "seq 前缀撞名防御（pre@a 不误数 pre@ab）" || fail "seq 前缀撞名防御（$OUT）"
 # --- mention 越界：../ 逃逸被拒，inbox/ 外无残留 ---
-bash "$AGORA_HOME/scripts/post.sh" --actor tester@proj --project proj --event proposal --body "x" --mention "../evil" 2>/dev/null
+bash "$PKG/scripts/post.sh" --actor tester@proj --project proj --event proposal --body "x" --mention "../evil" 2>/dev/null
 [[ $? -eq 2 ]] && ok "mention 路径逃逸被拒(rc=2)" || fail "mention 路径逃逸被拒"
 [[ ! -e "$AGORA_HOME/evil" ]] && ok "mention 未逃逸出 inbox/" || fail "mention 逃逸出 inbox/"
 # --- 邮件 ref 与 post stdout ref 一致且分片存在（午夜翻牌防线） ---
@@ -1072,33 +1072,33 @@ POST tester@proj --event reopened --task "$CT" --reason "恢复" >/dev/null
 
 echo "===== 审核回归二期（v1.27） ====="
 # --- mention 字段完整性：| 与换行入环被拒（防幻影字段/账本行撕裂） ---
-bash "$AGORA_HOME/scripts/post.sh" --actor probe@p27 --project p27 --event proposal --body pipe --mention 'a| task:gt-fake' 2>/dev/null
+bash "$PKG/scripts/post.sh" --actor probe@p27 --project p27 --event proposal --body pipe --mention 'a| task:gt-fake' 2>/dev/null
 [[ $? -eq 2 ]] && ok "mention 含 | 被拒(rc=2)" || fail "mention 含 | 被拒"
 ! grep -rq "gt-fake" "$AGORA_HOME"/log/ && ok "幻影 task 字段未落账" || fail "幻影 task 字段未落账"
-bash "$AGORA_HOME/scripts/post.sh" --actor probe@p27 --project p27 --event proposal --body nl --mention "$(printf 'x\ny')" 2>/dev/null
+bash "$PKG/scripts/post.sh" --actor probe@p27 --project p27 --event proposal --body nl --mention "$(printf 'x\ny')" 2>/dev/null
 [[ $? -eq 2 ]] && ok "mention 含换行被拒(rc=2)" || fail "mention 含换行被拒"
 # --- fail stderr 恒为合法 JSON（值内引号已转义） ---
-bash "$AGORA_HOME/scripts/post.sh" --actor probe@p27 --project p27 --event proposal --body esc --mention '../q"b\x' 2>"$T/fail27.json"; RC27=$?
+bash "$PKG/scripts/post.sh" --actor probe@p27 --project p27 --event proposal --body esc --mention '../q"b\x' 2>"$T/fail27.json"; RC27=$?
 [[ $RC27 -eq 2 ]] && python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert d["code"]=="VALIDATION_FAILED"' "$T/fail27.json" \
   && ok "fail stderr 为合法 JSON（引号转义）" || fail "fail stderr 为合法 JSON（rc=$RC27）"
 # --- dispatcher 双侧防线：写入侧拒坏名；预置毒页后 done 读取侧兜底拒 ---
 OUT=$(TITLE="派发逃逸任务" VERIFY="true" PROJECT_DIR="$PROJ" TC); DT=$(echo "$OUT" | sed -n 's/.*"task":"\(gt-[0-9a-f]*\)".*/\1/p')
 [[ "$DT" =~ ^gt-[0-9a-f]+$ ]] && ok "派发逃逸任务就绪（DT=$DT）" || fail "派发逃逸任务就绪（$OUT）"
-bash "$AGORA_HOME/scripts/post.sh" --actor '../x@proj' --project proj --event dispatched --task "$DT" --target "$PROJ" 2>/dev/null
+bash "$PKG/scripts/post.sh" --actor '../x@proj' --project proj --event dispatched --task "$DT" --target "$PROJ" 2>/dev/null
 [[ $? -eq 2 ]] && ! grep -q '^dispatcher:' "$AGORA_HOME/wiki/tasks/$DT.md" \
   && ok "坏名 dispatcher 写入侧被拒(rc=2)" || fail "坏名 dispatcher 写入侧被拒"
 sed -i "1a dispatcher: ../evil9" "$AGORA_HOME/wiki/tasks/$DT.md"
-bash "$AGORA_HOME/scripts/post.sh" --actor tester@proj --project proj --event done --task "$DT" --commit HEAD --evidence 指针 2>/dev/null
+bash "$PKG/scripts/post.sh" --actor tester@proj --project proj --event done --task "$DT" --commit HEAD --evidence 指针 2>/dev/null
 [[ $? -eq 2 ]] && [[ ! -e "$AGORA_HOME/evil9" ]] \
   && ok "毒 dispatcher 读取侧兜底拒（无逃逸）" || fail "毒 dispatcher 读取侧兜底"
 # --- SEQ 双侧定界：跨 actor body 注入不再虚高 ---
-OUT=$(bash "$AGORA_HOME/scripts/post.sh" --actor spoof9@q --project p27b --event proposal --body "embed actor:t9@p tail")
+OUT=$(bash "$PKG/scripts/post.sh" --actor spoof9@q --project p27b --event proposal --body "embed actor:t9@p tail")
 echo "$OUT" | grep -q '"seq":1,' && ok "投毒事件落账就绪" || fail "投毒事件落账就绪（$OUT）"
-OUT=$(bash "$AGORA_HOME/scripts/post.sh" --actor t9@p --project p27b --event proposal --body first)
+OUT=$(bash "$PKG/scripts/post.sh" --actor t9@p --project p27b --event proposal --body first)
 echo "$OUT" | grep -q '"seq":1,' \
   && ok "SEQ 双侧定界（跨 actor body 注入不虚高）" || fail "SEQ 双侧定界（$OUT）"
 # --- 相对路径调用：scripts 目录内 bash history.sh 不再 ModuleNotFoundError ---
-OUT=$(cd "$AGORA_HOME/scripts" && TASK=gt-none9 bash history.sh 2>&1)
+OUT=$(cd "$PKG/scripts" && TASK=gt-none9 AGORA_HOME="$AGORA_HOME" bash history.sh 2>&1)
 echo "$OUT" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["count"]==0, d' \
   && ok "scripts 目录内相对调用 history.sh 出合法 JSON" || fail "相对调用 history.sh（$OUT）"
 # --- MCP view 服务端白名单：越枚举 view 被拒（防任意 .md 读） ---
@@ -1130,24 +1130,24 @@ except urllib.error.HTTPError as e:
 PYEOF
 kill $HPID5 2>/dev/null || true
 # --- ACTOR/PROJECT 账本行完整性 ---
-bash "$AGORA_HOME/scripts/post.sh" --actor 'a|b@p' --project p27 --event proposal --body x 2>/dev/null
+bash "$PKG/scripts/post.sh" --actor 'a|b@p' --project p27 --event proposal --body x 2>/dev/null
 [[ $? -eq 2 ]] && ok "actor 含 | 被拒（账本行完整性）" || fail "actor 含 | 被拒"
 # --- idem 注入：换行伪造整行事件（\S+ 槽完整性收口） ---
-bash "$AGORA_HOME/scripts/post.sh" --actor probe@p27 --project p27 --event proposal --body idemnl --idem "$(printf 'x\n- seq:1 | ts:t | actor:victim@evil | event:claimed | idem:y | seen:e@1 | task:gt-fake2')" 2>/dev/null
+bash "$PKG/scripts/post.sh" --actor probe@p27 --project p27 --event proposal --body idemnl --idem "$(printf 'x\n- seq:1 | ts:t | actor:victim@evil | event:claimed | idem:y | seen:e@1 | task:gt-fake2')" 2>/dev/null
 [[ $? -eq 2 ]] && ok "idem 含换行被拒(rc=2)" || fail "idem 含换行被拒"
 ! grep -rq "victim@evil" "$AGORA_HOME"/log/ && ok "伪造事件行未落账" || fail "伪造事件行未落账"
 # --- PROJECT 路径成分：shard 文件名完整性 ---
-bash "$AGORA_HOME/scripts/post.sh" --actor probe@p27 --project '../wiki/tasks/gt-fakep' --event proposal --body pt 2>/dev/null
+bash "$PKG/scripts/post.sh" --actor probe@p27 --project '../wiki/tasks/gt-fakep' --event proposal --body pt 2>/dev/null
 [[ $? -eq 2 ]] && ok "project 含 / 与 .. 被拒(rc=2)" || fail "project 含 / 与 .. 被拒"
 # --- dispatched 坏名：fail=零写入契约（守卫前移后账本零残留） ---
-bash "$AGORA_HOME/scripts/post.sh" --actor '../x@proj' --project p27d --event dispatched --task "$DT" --target "$PROJ" 2>/dev/null
+bash "$PKG/scripts/post.sh" --actor '../x@proj' --project p27d --event dispatched --task "$DT" --target "$PROJ" 2>/dev/null
 [[ $? -eq 2 ]] && [[ ! -f "$AGORA_HOME/log/$(date +%F)/p27d.md" ]] \
   && ok "dispatched 坏名拒且零写入" || fail "dispatched 坏名拒且零写入"
 # --- fail() 统一 python-JSON：错误通道恒合法（含引号嵌值） ---
-bash "$AGORA_HOME/scripts/post.sh" "--bad'q\"x" 2>"$T/fail28.json"
+bash "$PKG/scripts/post.sh" "--bad'q\"x" 2>"$T/fail28.json"
 python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert d["code"]=="VALIDATION_FAILED"' "$T/fail28.json" \
   && ok "post unknown-arg stderr 为合法 JSON" || fail "post unknown-arg stderr 为合法 JSON"
-ACTOR=tester@proj TASK="$A" FILES='q"b.txt' PROJECT_DIR="$PROJ" bash "$AGORA_HOME/scripts/attach.sh" 2>"$T/att28.json"
+ACTOR=tester@proj TASK="$A" FILES='q"b.txt' PROJECT_DIR="$PROJ" bash "$PKG/scripts/attach.sh" 2>"$T/att28.json"
 python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert d["error"]=="FILE_NOT_FOUND"' "$T/att28.json" \
   && ok "attach 缺文件 stderr 为合法 JSON" || fail "attach 缺文件 stderr 为合法 JSON"
 
@@ -1180,18 +1180,18 @@ printf -- '---\nname: orch\ndirs:\n  - %s\ncan_spawn: true\n---\n' "$ORCH" > "$A
 printf -- '---\nname: worker\ndirs:\n  - %s\ncan_spawn: false\n---\n' "$TARGET" > "$AH4/wiki/entities/worker.md"
 (cd "$AH4" && git add -A && AGORA_MECHANICAL=1 git commit -qm entities >/dev/null)
 # task-create 指向目标项目：verify 门将由机械层在该目录真实执行（目标项目已预置 FIXED）
-OUT=$(TITLE="跨仓交付任务" VERIFY="grep -q FIXED app.txt" PROJECT_DIR="$TARGET" AGORA_HOME="$AH4" bash "$AH4/scripts/task-create.sh")
+OUT=$(TITLE="跨仓交付任务" VERIFY="grep -q FIXED app.txt" PROJECT_DIR="$TARGET" AGORA_HOME="$AH4" bash "$PKG/scripts/task-create.sh")
 XT=$(echo "$OUT" | sed -n 's/.*"task":"\(gt-[0-9a-f]*\)".*/\1/p')
 # ① stub 拉起（AGORA_RUNTIME=echo）：mode=spawned，子身份按名册目录前缀解析
-OUT=$(AGORA_RUNTIME=echo AGORA_HOME="$AH4" bash "$AH4/scripts/dispatch.sh" --actor orch@orch --project "$TARGET" --task "$XT" 2>&1)
+OUT=$(AGORA_RUNTIME=echo AGORA_HOME="$AH4" bash "$PKG/scripts/dispatch.sh" --actor orch@orch --project "$TARGET" --task "$XT" 2>&1)
 echo "$OUT" | grep -q '"mode":"spawned"' && ok "dispatch stub 返回 mode:spawned" || fail "dispatch stub 返回 mode:spawned（$OUT）"
 echo "$OUT" | grep -q '"child_actor":"worker@target"' && ok "dispatch 名册解析子身份 worker@target" || fail "dispatch 名册解析子身份 worker@target（$OUT）"
 # ② 子会话照协议回报：claimed → done（verify 门真实执行 grep -q FIXED app.txt）
-AGORA_HOME="$AH4" bash "$AH4/scripts/post.sh" --actor worker@target --project target --event claimed --task "$XT" >/dev/null
-AGORA_HOME="$AH4" bash "$AH4/scripts/post.sh" --actor worker@target --project target --event done --task "$XT" --commit HEAD --evidence "通过" >/dev/null \
+AGORA_HOME="$AH4" bash "$PKG/scripts/post.sh" --actor worker@target --project target --event claimed --task "$XT" >/dev/null
+AGORA_HOME="$AH4" bash "$PKG/scripts/post.sh" --actor worker@target --project target --event done --task "$XT" --commit HEAD --evidence "通过" >/dev/null \
   && ok "子会话 done 通过 verify 门" || fail "子会话 done 通过 verify 门"
 # ③ 账本断言：事件序列 / done 自动 @派单方 / 全链无 verify_failed / 任务页 dispatcher 标注（规格 §4.7 第 7 条）
-H=$(TASK="$XT" AGORA_HOME="$AH4" bash "$AH4/scripts/history.sh")
+H=$(TASK="$XT" AGORA_HOME="$AH4" bash "$PKG/scripts/history.sh")
 echo "$H" | python3 -c "
 import json,sys
 evs=[e['event'] for e in json.load(sys.stdin)['events']]
@@ -1206,24 +1206,24 @@ assert 'orch' in done.get('mention',''), done.get('mention')
 grep -q '^dispatcher: orch' "$AH4/wiki/tasks/$XT.md" && ok "任务页 frontmatter 标注 dispatcher:orch" || fail "任务页 frontmatter 缺 dispatcher:orch"
 # ④ 尾引号标量类 verify 回归：verify 值语义含尾部双引号（旧 s/"$// 剥离致 bash -c 不闭合引号，此验证类永不可过门）
 echo ANS > "$TARGET/f.txt"
-OUT=$(TITLE="尾引号verify任务" VERIFY='test "$(cat f.txt)" = "ANS"' PROJECT_DIR="$TARGET" AGORA_HOME="$AH4" bash "$AH4/scripts/task-create.sh")
+OUT=$(TITLE="尾引号verify任务" VERIFY='test "$(cat f.txt)" = "ANS"' PROJECT_DIR="$TARGET" AGORA_HOME="$AH4" bash "$PKG/scripts/task-create.sh")
 XT2=$(echo "$OUT" | sed -n 's/.*"task":"\(gt-[0-9a-f]*\)".*/\1/p')
-AGORA_HOME="$AH4" bash "$AH4/scripts/post.sh" --actor worker@target --project target --event claimed --task "$XT2" >/dev/null
-AGORA_HOME="$AH4" bash "$AH4/scripts/post.sh" --actor worker@target --project target --event done --task "$XT2" --commit HEAD --evidence "通过" >/dev/null
-TASK="$XT2" AGORA_HOME="$AH4" bash "$AH4/scripts/history.sh" | python3 -c "
+AGORA_HOME="$AH4" bash "$PKG/scripts/post.sh" --actor worker@target --project target --event claimed --task "$XT2" >/dev/null
+AGORA_HOME="$AH4" bash "$PKG/scripts/post.sh" --actor worker@target --project target --event done --task "$XT2" --commit HEAD --evidence "通过" >/dev/null
+TASK="$XT2" AGORA_HOME="$AH4" bash "$PKG/scripts/history.sh" | python3 -c "
 import json,sys
 evs=[e['event'] for e in json.load(sys.stdin)['events']]
 assert evs==['claimed','done'], evs
 " && ok "尾引号标量 verify 类 done 过门（成对剥离后原样透传）" || fail "尾引号标量 verify 类 done 未过门（verify_failed）"
 # ⑤ history.sh 免导出 AGORA_HOME：shell 直调方（无 server env）不再 KeyError
-env -u AGORA_HOME HOME="$H4" TASK="$XT" bash "$AH4/scripts/history.sh" | python3 -c "import json,sys; d=json.load(sys.stdin); assert d['count']>0, d" \
+env -u AGORA_HOME HOME="$H4" TASK="$XT" bash "$PKG/scripts/history.sh" | python3 -c "import json,sys; d=json.load(sys.stdin); assert d['count']>0, d" \
   && ok "history.sh 未导出 AGORA_HOME 仍出合法 JSON（默认导出）" || fail "history.sh 未导出 AGORA_HOME 时 KeyError"
 # ⑥ 同任务双派生双审计行：dispatch_id 纳秒哈希天然唯一 → run 不同 → dispatched idem 不同（重派/reopened 链路审计行不被连续窗口吞）
-AGORA_RUNTIME=echo AGORA_HOME="$AH4" bash "$AH4/scripts/dispatch.sh" --actor orch@orch --project "$TARGET" --task "$XT" >/dev/null 2>&1
+AGORA_RUNTIME=echo AGORA_HOME="$AH4" bash "$PKG/scripts/dispatch.sh" --actor orch@orch --project "$TARGET" --task "$XT" >/dev/null 2>&1
 N=$(cat "$AH4"/log/*/*.md 2>/dev/null | grep -F "task:$XT" | grep -c "event:dispatched")
 [ "$N" -eq 2 ] && ok "同任务二次派生 dispatched 审计行落账（基线 1 + 新增 1）" || fail "同任务二次派生 dispatched 行被吞（共 $N 条，期望 2）"
 # ⑦ dedup 旗标透传：dispatch 响应 JSON 含裸布尔 dedup 键（正常落账路径 = false）
-OUT=$(AGORA_RUNTIME=echo AGORA_HOME="$AH4" bash "$AH4/scripts/dispatch.sh" --actor orch@orch --project "$TARGET" --task "$XT")
+OUT=$(AGORA_RUNTIME=echo AGORA_HOME="$AH4" bash "$PKG/scripts/dispatch.sh" --actor orch@orch --project "$TARGET" --task "$XT")
 echo "$OUT" | python3 -c "
 import json,sys
 d=json.loads(sys.stdin.read())
@@ -1233,9 +1233,9 @@ assert d.get('dedup') is False, d
 # ⑧ gt-eefd 子会话身份兜底：server cwd=派单方目录（模拟共享 MCP 进程 env 继承），
 #   仅 env 携带 dispatch 上下文 → post 不带 actor 落账 child_actor（账本 dispatched 记录的 child,
 #   权威于派发时点）；显式 actor 恒优先；无 env 对照组照旧进程级 ACTOR（兜底不越权）
-OUT=$(TITLE="身份兜底任务" VERIFY="true" PROJECT_DIR="$TARGET" AGORA_HOME="$AH4" bash "$AH4/scripts/task-create.sh")
+OUT=$(TITLE="身份兜底任务" VERIFY="true" PROJECT_DIR="$TARGET" AGORA_HOME="$AH4" bash "$PKG/scripts/task-create.sh")
 XG=$(echo "$OUT" | sed -n 's/.*"task":"\(gt-[0-9a-f]*\)".*/\1/p')
-AGORA_HOME="$AH4" bash "$AH4/scripts/post.sh" --actor orch@orch --project target --event dispatched --task "$XG" \
+AGORA_HOME="$AH4" bash "$PKG/scripts/post.sh" --actor orch@orch --project target --event dispatched --task "$XG" \
   --target "$TARGET" --child legacy --run "raw/dispatches/d-eefdregress.log" >/dev/null
 touch "$AH4/raw/dispatches/d-eefdregress.log.live"   # dispatch.sh 真实形状：$LOG.live（B1 回归）
 # child=legacy ≠ 名册现裁决(worker@target)：断言只认账本反查路径——现裁决兜底(旧代码 B1 退化形态)在此必红
@@ -1290,13 +1290,13 @@ W5="$H5/repo__wt-test__10212359"; git -C "$R5" worktree add -q "$W5" 2>/dev/null
 mkdir -p "$AH5/wiki/entities"
 printf -- '---\nname: tester\ndirs:\n  - %s\ncan_spawn: true\n---\n' "$R5" > "$AH5/wiki/entities/tester.md"
 (cd "$AH5" && git add -A && AGORA_MECHANICAL=1 git commit -qm entities >/dev/null)
-OUT=$(TITLE="worktree 任务" VERIFY="true" PROJECT_DIR="$W5" AGORA_HOME="$AH5" bash "$AH5/scripts/task-create.sh")
+OUT=$(TITLE="worktree 任务" VERIFY="true" PROJECT_DIR="$W5" AGORA_HOME="$AH5" bash "$PKG/scripts/task-create.sh")
 XW=$(echo "$OUT" | sed -n 's/.*"task":"\(gt-[0-9a-f]*\)".*/\1/p')
 rm -f "$AH5"/raw/dispatches/*.live
-OUT=$(AGORA_RUNTIME=true AGORA_HOME="$AH5" bash "$AH5/scripts/dispatch.sh" --actor tester@repo --project "$W5" --task "$XW" 2>&1)
+OUT=$(AGORA_RUNTIME=true AGORA_HOME="$AH5" bash "$PKG/scripts/dispatch.sh" --actor tester@repo --project "$W5" --task "$XW" 2>&1)
 echo "$OUT" | grep -q '"child_actor":"tester@repo"' && ok "worktree 路径派发归属主 repo 实体（project=repo）" || fail "worktree 路径派发（$OUT）"
 rm -f "$AH5"/raw/dispatches/*.live
-OUT=$(AGORA_RUNTIME=true AGORA_HOME="$AH5" bash "$AH5/scripts/dispatch.sh" --actor tester@repo --project "$H5/no-such-repo" --task "$XW" 2>&1)
+OUT=$(AGORA_RUNTIME=true AGORA_HOME="$AH5" bash "$PKG/scripts/dispatch.sh" --actor tester@repo --project "$H5/no-such-repo" --task "$XW" 2>&1)
 echo "$OUT" | grep -q NOT_REGISTERED && ok "陌生目录（非 worktree）仍拒派发" || fail "陌生目录应拒（$OUT）"
 # server 侧：worktree cwd 身份裁决归属主实体、写路径可用、不误注册 worktree 实体页（gt-ac14）
 cd "$W5" && python3 - "$PKG/server/agora_mcp.py" "$AH5" <<'PYEOF' && ok "worktree cwd 身份裁决归属主实体（who.you=tester@repo）" || fail "worktree cwd 身份裁决异常"
@@ -1318,7 +1318,7 @@ PYEOF
 # worktree 子目录：归一向上爬到主 repo（终闸 HIGH 回归，gt-ac14）
 mkdir -p "$W5/src"
 rm -f "$AH5"/raw/dispatches/*.live
-OUT=$(AGORA_RUNTIME=true AGORA_HOME="$AH5" bash "$AH5/scripts/dispatch.sh" --actor tester@repo --project "$W5/src" --task "$XW" 2>&1)
+OUT=$(AGORA_RUNTIME=true AGORA_HOME="$AH5" bash "$PKG/scripts/dispatch.sh" --actor tester@repo --project "$W5/src" --task "$XW" 2>&1)
 echo "$OUT" | grep -q '"child_actor":"tester@repo"' && ok "worktree 子目录派发归属主 repo 实体" || fail "worktree 子目录派发（$OUT）"
 cd "$W5/src" && python3 - "$PKG/server/agora_mcp.py" "$AH5" "$XW" <<'PYEOF' && ok "worktree 子目录身份裁决归属主实体" || fail "worktree 子目录身份裁决异常"
 import json, subprocess, sys, os
@@ -1356,7 +1356,7 @@ rm -rf "$H5"
 # 坏名（含反斜杠）dispatcher 拒 done + fail 零写入（全新 project 无 shard 残留）
 TF=$(TITLE="毒dispatcher任务" VERIFY="true" PROJECT_DIR="$PROJ" TC | sed -n 's/.*"task":"\(gt-[0-9a-f]*\)".*/\1/p')
 printf 'dispatcher: bo\\ss\n' >> "$AGORA_HOME/wiki/tasks/$TF.md"
-OUT=$(bash "$AGORA_HOME/scripts/post.sh" --actor tester@projx --project projx --event done --task "$TF" --commit HEAD --evidence x 2>&1)
+OUT=$(bash "$PKG/scripts/post.sh" --actor tester@projx --project projx --event done --task "$TF" --commit HEAD --evidence x 2>&1)
 echo "$OUT" | grep -q VALIDATION_FAILED && ok "读取侧 dispatcher 坏名（含反斜杠）拒 done" || fail "读取侧坏名未拒（$OUT）"
 [[ ! -f "$AGORA_HOME/log/$(date +%F)/projx.md" ]] && ok "读取侧 fail 零写入（无 shard 头残留）" || fail "fail 后 shard 头残留"
 # MENTION 精确匹配：mention=bossy 不误吞 dispatcher=boss 的自动提及
@@ -1368,7 +1368,7 @@ grep -E 'task:'"$T3"'( \||$)' "$AGORA_HOME"/log/*/proj.md | tail -1 | grep -q "m
 T5=$(TITLE="心跳任务" VERIFY="grep -q FIXED app.txt" PROJECT_DIR="$PROJ" TC | sed -n 's/.*"task":"\(gt-[0-9a-f]*\)".*/\1/p')
 POST tester@proj --event claimed --task "$T5" >/dev/null
 POST tester@proj --event progress --task "$T5" --body "心跳测试" >/dev/null
-bash "$AGORA_HOME/scripts/derive-board.sh" >/dev/null 2>&1
+bash "$PKG/scripts/derive-board.sh" >/dev/null 2>&1
 grep -qE "进展（[0-9]+min前）: 心跳测试" "$AGORA_HOME/board/in-progress.md" && ok "board 显示心跳 age" || fail "board 无心跳 age"
 
 echo "===== 身份裁决不冻结（2026-10-20 gt-9f24 事故回归） ====="
@@ -1442,7 +1442,7 @@ OUT=$(TITLE="wt任务重试" VERIFY="true" PROJECT_DIR="$PROJ" WT=1 IDEM=wt-a TC
 TITLE="坏wt" WT=1 TC 2>/dev/null; [[ $? -eq 2 ]] && ok "WT 缺 project_dir 被拒(rc=2)" || fail "WT 缺 project_dir 被拒(rc=2)"
 
 echo "===== dispatch 深度默认5＋账本推导＋配额账本化（gt-2845 K3 复审） ====="
-rm -f "$AGORA_HOME/scripts/sessions.map"   # 前序桥段残留清场（交互注册已不算在场，仅保持净场）
+rm -f "$AGORA_HOME/sessions.map"   # 前序桥段残留清场（交互注册已不算在场，仅保持净场）
 # 清场：前序段落的活 dispatched（账本口径）全部 cancelled 出集——本段配额计数需净场
 for _t in $(python3 - "$AGORA_HOME" <<'PYEOF'
 import glob, re, sys
@@ -1459,8 +1459,8 @@ for f in sorted(glob.glob(f"{home}/log/*/*.md") + glob.glob(f"{home}/log/*/.*.md
 print(" ".join(t for t in disp if t not in terminal))
 PYEOF
 ); do POST tester@proj --event cancelled --task "$_t" >/dev/null 2>&1; done
-DSP()  { AGORA_RUNTIME=echo AGORA_MAX_SPAWN=9 bash "$AGORA_HOME/scripts/dispatch.sh" --actor tester@proj --project "$PROJ" "$@"; }
-DSPQ() { AGORA_RUNTIME=echo AGORA_MAX_SPAWN=3 bash "$AGORA_HOME/scripts/dispatch.sh" --actor tester@proj --project "$PROJ" "$@"; }   # gt-8c5b：默认改 30 后显式钉 3 保语义
+DSP()  { AGORA_RUNTIME=echo AGORA_MAX_SPAWN=9 bash "$PKG/scripts/dispatch.sh" --actor tester@proj --project "$PROJ" "$@"; }
+DSPQ() { AGORA_RUNTIME=echo AGORA_MAX_SPAWN=3 bash "$PKG/scripts/dispatch.sh" --actor tester@proj --project "$PROJ" "$@"; }   # gt-8c5b：默认改 30 后显式钉 3 保语义
 TID() { echo "$1" | sed -n 's/.*"task":"\(gt-[0-9a-f]*\)".*/\1/p'; }
 D1=$(TID "$(TITLE="深度a" VERIFY=true PROJECT_DIR="$PROJ" TC)"); D2=$(TID "$(TITLE="深度b" VERIFY=true PROJECT_DIR="$PROJ" TC)")
 D3=$(TID "$(TITLE="深度c" VERIFY=true PROJECT_DIR="$PROJ" TC)")
@@ -1506,8 +1506,8 @@ Q1=$(TID "$(TITLE="分域a1" VERIFY=true PROJECT_DIR="$PROJ" TC)"); Q2=$(TID "$(
 Q3=$(TID "$(TITLE="分域a3" VERIFY=true PROJECT_DIR="$PROJ" TC)"); Q4=$(TID "$(TITLE="分域a4" VERIFY=true PROJECT_DIR="$PROJ" TC)")
 Q5=$(TID "$(TITLE="分域a5" VERIFY=true PROJECT_DIR="$PROJ" TC)"); Q6=$(TID "$(TITLE="分域a6" VERIFY=true PROJECT_DIR="$PROJ" TC)")
 QB1=$(TID "$(TITLE="分域b1" VERIFY=true PROJECT_DIR="$T/proj-t2" TC)"); QB2=$(TID "$(TITLE="分域b2" VERIFY=true PROJECT_DIR="$T/proj-t2" TC)")
-DSP5() { AGORA_RUNTIME=echo AGORA_MAX_SPAWN=5 bash "$AGORA_HOME/scripts/dispatch.sh" --actor tester@proj --project "$PROJ" "$@"; }
-DSPB() { AGORA_RUNTIME=echo bash "$AGORA_HOME/scripts/dispatch.sh" --actor tester2@proj --project "$T/proj-t2" "$@"; }
+DSP5() { AGORA_RUNTIME=echo AGORA_MAX_SPAWN=5 bash "$PKG/scripts/dispatch.sh" --actor tester@proj --project "$PROJ" "$@"; }
+DSPB() { AGORA_RUNTIME=echo bash "$PKG/scripts/dispatch.sh" --actor tester2@proj --project "$T/proj-t2" "$@"; }
 for _t in "$Q1" "$Q2" "$Q3" "$Q4" "$Q5"; do DSP5 --task "$_t" >/dev/null 2>&1; done
 DSP5 --task "$Q6" 2>&1 | grep -q "分域满" && ok "分域：A 域 5/5 满拒 A 第 6（分域措辞）" || fail "分域：A 域满应拒第 6"
 DSPB --task "$QB1" 2>/dev/null | grep -q '"mode":"spawned"' && ok "分域：A 域满不挡 B（B 域 0/30 放行）" || fail "分域：A 域满不应挡 B"
@@ -1519,12 +1519,12 @@ LV="raw/dispatches/d-11fea001.log"
 POST tester@proj --event dispatched --task "$Q6" --target "$PROJ" --child tester --run "$LV" >/dev/null 2>&1
 POST tester@proj --event diagnosed --task "$Q6" --conclusion stub >/dev/null 2>&1   # 出账本活跃集，仅余 .live
 touch "$AGORA_HOME/$LV.live"
-AGORA_RUNTIME=echo AGORA_MAX_SPAWN=1 bash "$AGORA_HOME/scripts/dispatch.sh" --actor tester@proj --project "$PROJ" --task "$Q6" 2>&1 | grep -q "分域满" \
+AGORA_RUNTIME=echo AGORA_MAX_SPAWN=1 bash "$PKG/scripts/dispatch.sh" --actor tester@proj --project "$PROJ" --task "$Q6" 2>&1 | grep -q "分域满" \
   && ok ".live 分域归属：仅名下 .live 也计域值" || fail ".live 分域归属未计入域值"
 rm -f "$AGORA_HOME/$LV.live"
 
 echo "===== dispatch 发射加固＋凭据预写＋wt 免在场优先（全量委托 L1 Task4） ====="
-rm -f "$AGORA_HOME/scripts/sessions.map"
+rm -f "$AGORA_HOME/sessions.map"
 for _t in $(python3 - "$AGORA_HOME" <<'PYEOF'
 import glob, re, sys
 home = sys.argv[1]; disp, terminal = {}, set()
@@ -1541,7 +1541,7 @@ print(" ".join(t for t in disp if t not in terminal))
 PYEOF
 ); do POST tester@proj --event cancelled --task "$_t" >/dev/null 2>&1; done
 FAKE="$T/fakert"; printf '#!/bin/bash\n[ "$1" = "--version" ] && exit 0\nexit 1\n' > "$FAKE"; chmod +x "$FAKE"
-DSPRAW() { AGORA_RUNTIME="${RT:-echo}" AGORA_VERIFY_WIN="${VW:-2}" bash "$AGORA_HOME/scripts/dispatch.sh" --actor tester@proj --project "${P:-$PROJ}" "$@"; }
+DSPRAW() { AGORA_RUNTIME="${RT:-echo}" AGORA_VERIFY_WIN="${VW:-2}" bash "$PKG/scripts/dispatch.sh" --actor tester@proj --project "${P:-$PROJ}" "$@"; }
 # ① 假 runtime 秒死：SPAWN_DIED＋diagnosed（日志尾）＋恰一次重试＋凭据重写
 G1=$(TID "$(TITLE="加固" VERIFY=true PROJECT_DIR="$PROJ" WT=1 IDEM=t4a TC)")
 WTD1=$(ls -d "$T"/proj__wt-${G1}__* | head -1)
@@ -1555,7 +1555,7 @@ grep -q "wrong-content" "$WTD1/.omo/agora-delegation/${G1}.md" && fail "凭据�
 grep -q "^gt: $G1$" "$WTD1/.omo/agora-delegation/${G1}.md" && grep -q "^worktree: $WTD1$" "$WTD1/.omo/agora-delegation/${G1}.md" && ok "凭据内容含 gt-id＋树路径" || fail "凭据内容含 gt-id＋树路径"
 POST tester@proj --event cancelled --task "$G1" >/dev/null 2>&1
 # ② wt 免在场优先：sessions.map 交互注册在场 → 任务一律 spawned（在场仅认委托子会话 gt-0ed3）
-printf '%s tester sess-fake %s\n' "$(hostname)" "$(date +%s)" >> "$AGORA_HOME/scripts/sessions.map"
+printf '%s tester sess-fake %s\n' "$(hostname)" "$(date +%s)" >> "$AGORA_HOME/sessions.map"
 G2=$(TID "$(TITLE="在场豁免" VERIFY=true PROJECT_DIR="$PROJ" WT=1 IDEM=t4b TC)")
 DSPRAW --task "$G2" 2>/dev/null | grep -q '"mode":"spawned"' && ok "wt 任务免在场优先（spawned）" || fail "wt 任务免在场优先"
 N1=$(TID "$(TITLE="在场对照" VERIFY=true PROJECT_DIR="$PROJ" TC)")
@@ -1597,7 +1597,7 @@ POST tester@proj --event merged --task "$V1" --commit "$H" >/dev/null \
 untick "$V1"
 
 echo "===== merge.sh 合并闭环（全量委托 L1 Task6） ====="
-rm -f "$AGORA_HOME/scripts/sessions.map"
+rm -f "$AGORA_HOME/sessions.map"
 for _t in $(python3 - "$AGORA_HOME" <<'PYEOF'
 import glob, re, sys
 home = sys.argv[1]; disp, terminal = {}, set()
@@ -1613,7 +1613,7 @@ for f in sorted(glob.glob(f"{home}/log/*/*.md") + glob.glob(f"{home}/log/*/.*.md
 print(" ".join(t for t in disp if t not in terminal))
 PYEOF
 ); do POST tester@proj --event cancelled --task "$_t" >/dev/null 2>&1; done
-MERGE() { bash "$AGORA_HOME/scripts/merge.sh" --actor tester@proj --task "$1"; }
+MERGE() { bash "$PKG/scripts/merge.sh" --actor tester@proj --task "$1"; }
 LEDEV() { cat "$AGORA_HOME"/log/*/*.md 2>/dev/null | grep -F "task:$1" | grep "event:$2"; }
 MKWT() { TID "$(TITLE="$1" VERIFY="$2" PROJECT_DIR="$PROJ" WT=1 IDEM="$3" TC)"; }
 WTCOMMIT() { echo "$2" > "$1/marker-$3"; git -C "$1" add -A >/dev/null; git -C "$1" -c user.name=t -c user.email=t@l commit -qm "$3"; }
@@ -1649,7 +1649,7 @@ MERGE "$M5" 2>/dev/null | grep -q merged && ok "⑤ 幂等补账 JSON" || fail "
 # ⑥ 同仓链：MC(dispatcher_task=MB) 合并目标=上游 wt 分支（下游先 rebase 到上游分支——链式协议形态）
 MB=$(MKWT "上游" "true" t6f); WB=$(ls -d "$T"/proj__wt-${MB}__*)
 MC=$(MKWT "下游" "true" t6g); WC=$(ls -d "$T"/proj__wt-${MC}__*)
-AGORA_RUNTIME=echo bash "$AGORA_HOME/scripts/dispatch.sh" --actor tester@proj --project "$PROJ" --task "$MC" --dispatcher-task "$MB" >/dev/null 2>&1
+AGORA_RUNTIME=echo bash "$PKG/scripts/dispatch.sh" --actor tester@proj --project "$PROJ" --task "$MC" --dispatcher-task "$MB" >/dev/null 2>&1
 WTCOMMIT "$WB" up upstream; WTCOMMIT "$WC" down downstream
 git -C "$WC" rebase -q "wt/$MB"   # 下游基到上游分支（否则两独立分支分叉必非快进）
 DC=$(git -C "$WC" rev-parse HEAD); PREMAIN=$(git -C "$PROJ" rev-parse HEAD)
@@ -1711,7 +1711,7 @@ POST tester@proj --event done --task "$N8I" --commit HEAD --evidence 重跑 >/de
 MERGE "$N8I" 2>&1 | grep -q VALIDATION_FAILED && ok "⑧e 末条垃圾 commit 不回退旧锚" || fail "⑧e 末条垃圾 commit 不回退旧锚"
 
 echo "===== poll 补档：重派/孤儿/豁免/GC/host（全量委托 L1 Task7） ====="
-rm -f "$AGORA_HOME/scripts/sessions.map"
+rm -f "$AGORA_HOME/sessions.map"
 for _t in $(python3 - "$AGORA_HOME" <<'PYEOF'
 import glob, re, sys
 home = sys.argv[1]; disp, terminal = {}, set()
@@ -1728,12 +1728,12 @@ print(" ".join(t for t in disp if t not in terminal))
 PYEOF
 ); do POST tester@proj --event cancelled --task "$_t" >/dev/null 2>&1; done
 POLLT() { AGORA_MERGE_WAIT_MIN=0 AGORA_ORPHAN_MIN=0 AGORA_WT_GRACE_MIN=0 AGORA_DISPATCH_TIMEOUT=0 \
-           AGORA_MAX_SPAWN=9 AGORA_RUNTIME=echo bash "$AGORA_HOME/scripts/poll.sh" 2>/dev/null; }
+           AGORA_MAX_SPAWN=9 AGORA_RUNTIME=echo bash "$PKG/scripts/poll.sh" 2>/dev/null; }
 LEV() { cat "$AGORA_HOME"/log/*/*.md "$AGORA_HOME"/log/*/.*.md 2>/dev/null | grep -E "(^|[|] )task:$1( |$)" | grep "event:$2"; }   # gt-40cc：点分片伴生（跨分片核验禁裸 glob，终闸 ocr）
 MKWT2() { TID "$(TITLE="$1" VERIFY="true" PROJECT_DIR="$PROJ" WT=1 IDEM="$2" TC)"; }
 # ① done-unmerged：poll → diagnosed（未合并）＋恢复性重派上游
 PU=$(MKWT2 "上游u" t7a); PD_=$(MKWT2 "下游d" t7b)
-AGORA_RUNTIME=echo bash "$AGORA_HOME/scripts/dispatch.sh" --actor tester@proj --project "$PROJ" --task "$PD_" --dispatcher-task "$PU" >/dev/null 2>&1
+AGORA_RUNTIME=echo bash "$PKG/scripts/dispatch.sh" --actor tester@proj --project "$PROJ" --task "$PD_" --dispatcher-task "$PU" >/dev/null 2>&1
 WU=$(ls -d "$T"/proj__wt-${PD_}__*); echo w > "$WU/wfile"; git -C "$WU" add -A; git -C "$WU" -c user.name=t -c user.email=t@l commit -qm d
 POST tester@proj --event claimed --task "$PD_" >/dev/null
 POST tester@proj --event done --task "$PD_" --commit HEAD --evidence ok >/dev/null
@@ -1749,7 +1749,7 @@ POLLT >/dev/null
 # ①b git 层已合并短路：wt/<t> 引用存在且为 project_dir HEAD 祖先＋账本无 merged → 簿记滞后，梯子安静（gt-99af 修复二）；
 # 无引用/未并 → 照常诊断/重派不静默（由段①与 S4a-d 真未合并夹具守）
 GU=$(MKWT2 "短路u" i8a); GD=$(MKWT2 "短路d" i8b)
-AGORA_RUNTIME=echo bash "$AGORA_HOME/scripts/dispatch.sh" --actor tester@proj --project "$PROJ" --task "$GD" --dispatcher-task "$GU" >/dev/null 2>&1
+AGORA_RUNTIME=echo bash "$PKG/scripts/dispatch.sh" --actor tester@proj --project "$PROJ" --task "$GD" --dispatcher-task "$GU" >/dev/null 2>&1
 WG=$(ls -d "$T"/proj__wt-${GD}__*); echo s > "$WG/sfile"; git -C "$WG" add -A; git -C "$WG" -c user.name=t -c user.email=t@l commit -qm s
 POST tester@proj --event claimed --task "$GD" >/dev/null
 POST tester@proj --event done --task "$GD" --commit HEAD --evidence ok >/dev/null
@@ -1759,7 +1759,7 @@ POLLT >/dev/null
   && ok "①b git 已并＋账本无 merged → 梯子安静（不诊断不重派）" || fail "①b 簿记滞后误诊/误重派（diag=$(LEV "$GD" diagnosed | head -1)）"
 # ② 重派上限：3 次后第 4 次 escalated、不再派
 QU=$(MKWT2 "上限u" t7c); QD=$(MKWT2 "上限d" t7d)
-AGORA_RUNTIME=echo bash "$AGORA_HOME/scripts/dispatch.sh" --actor tester@proj --project "$PROJ" --task "$QD" --dispatcher-task "$QU" >/dev/null 2>&1
+AGORA_RUNTIME=echo bash "$PKG/scripts/dispatch.sh" --actor tester@proj --project "$PROJ" --task "$QD" --dispatcher-task "$QU" >/dev/null 2>&1
 WQ=$(ls -d "$T"/proj__wt-${QD}__*); echo q > "$WQ/qfile"; git -C "$WQ" add -A; git -C "$WQ" -c user.name=t -c user.email=t@l commit -qm q
 POST tester@proj --event claimed --task "$QD" >/dev/null
 POST tester@proj --event done --task "$QD" --commit HEAD --evidence ok >/dev/null
@@ -1799,7 +1799,7 @@ git -C "$PROJ" merge -q --ff-only "wt/$GR" 2>/dev/null
 tick "$GR"; POST tester@proj --event merged --task "$GR" --commit "$(git -C "$PROJ" rev-parse HEAD)" --branch "$(git -C "$PROJ" symbolic-ref --short HEAD)" >/dev/null
 untick "$GR"
 AGORA_MERGE_WAIT_MIN=0 AGORA_ORPHAN_MIN=0 AGORA_WT_GRACE_MIN=9999 AGORA_DISPATCH_TIMEOUT=0 AGORA_MAX_SPAWN=9 AGORA_RUNTIME=echo \
-  bash "$AGORA_HOME/scripts/poll.sh" >/dev/null 2>&1   # 宽限大：全留
+  bash "$PKG/scripts/poll.sh" >/dev/null 2>&1   # 宽限大：全留
 [ -d "$WR" ] && ok "④ 宽限内不删" || fail "④ 宽限内不删"
 POLLT >/dev/null   # 宽限 0：净树删、脏树留
 [ ! -d "$WG" ] && ok "④ 终态＋宽限尽＋clean→删" || fail "④ 净树未删"
@@ -1807,13 +1807,13 @@ POLLT >/dev/null   # 宽限 0：净树删、脏树留
 rm -f "$WD/dirty-file"
 OR=$(MKWT2 "缺页树" t7j); WO=$(ls -d "$T"/proj__wt-${OR}__*)
 rm -f "$AGORA_HOME/wiki/tasks/$OR.md"
-bash "$AGORA_HOME/scripts/doctor.sh" 2>/dev/null | grep -q "__wt-" && ok "④ 缺任务页树 doctor 报告" || fail "④ doctor 未报告缺页树"
+bash "$PKG/scripts/doctor.sh" 2>/dev/null | grep -q "__wt-" && ok "④ 缺任务页树 doctor 报告" || fail "④ doctor 未报告缺页树"
 [ -d "$WO" ] && ok "④ 缺页树不删" || fail "④ 缺页树被误删"
 # ⑤ parent 链 watchdog ×4 豁免：改写观察时钟模拟 45min 无事件
 PT_=$(TID "$(TITLE="豁免母" TC)"); CN=$(TID "$(TITLE="豁免子" PARENT="$PT_" TC)")
 POST tester@proj --event claimed --task "$PT_" >/dev/null; POST tester@proj --event claimed --task "$CN" >/dev/null
 AGORA_MERGE_WAIT_MIN=9999 AGORA_ORPHAN_MIN=9999 AGORA_WT_GRACE_MIN=9999 AGORA_DISPATCH_TIMEOUT=9999 \
-  bash "$AGORA_HOME/scripts/poll.sh" >/dev/null 2>&1   # 只为武装观察时钟
+  bash "$PKG/scripts/poll.sh" >/dev/null 2>&1   # 只为武装观察时钟
 python3 - "$AGORA_HOME" <<'PYEOF'
 import json, os, sys, time
 f = f"{sys.argv[1]}/.git/poll-state.json"
@@ -1823,7 +1823,7 @@ for t, e in s.get("_activity", {}).items():
 json.dump(s, open(f, "w"))
 PYEOF
 AGORA_MERGE_WAIT_MIN=9999 AGORA_ORPHAN_MIN=9999 AGORA_WT_GRACE_MIN=9999 AGORA_DISPATCH_TIMEOUT=9999 \
-  bash "$AGORA_HOME/scripts/poll.sh" >/dev/null 2>&1
+  bash "$PKG/scripts/poll.sh" >/dev/null 2>&1
 [ -z "$(LEV "$PT_" diagnosed)" ] && [ -n "$(LEV "$CN" diagnosed)" ] \
   && ok "⑤ parent 链挂活子任务→母任务 ×4 豁免（子正常诊断）" || fail "⑤ 豁免口径"
 # ⑥ wt_host 异机→mention 拾取跳过
@@ -1838,7 +1838,7 @@ open(f"{home}/inbox/{name}/{int(time.time()*1e9):019d}.md", "w").write(
     f"- from:x@y | ts:0 | ref:x | summary:todo {task}\n")
 PYEOF
 R=$(AGORA_MERGE_WAIT_MIN=9999 AGORA_ORPHAN_MIN=9999 AGORA_WT_GRACE_MIN=9999 AGORA_DISPATCH_TIMEOUT=9999 \
-  bash "$AGORA_HOME/scripts/poll.sh" 2>/dev/null)
+  bash "$PKG/scripts/poll.sh" 2>/dev/null)
 echo "$R" | grep -q "$HO" && echo "$R" | grep -q "wt_host" && [ -z "$(LEV "$HO" dispatched)" ] \
   && ok "⑥ wt_host 异机任务拾取跳过（held）" || fail "⑥ host 限定"
 # ⑥b 终态核查棒：merged 已由 derive 消费（gt-5a59）→ merged 落账即离板（post.sh 同锁重推导），
@@ -1865,7 +1865,7 @@ POST tester@proj --event claimed --task "$SL" >/dev/null
 POST tester@proj --event dispatched --task "$SL" --target "$PROJ" --child tester --run "raw/dispatches/d-stale.log" >/dev/null
 touch "$AGORA_HOME/raw/dispatches/d-stale.log.live"; touch -d '2 hours ago' "$AGORA_HOME/raw/dispatches/d-stale.log.live"
 AGORA_MERGE_WAIT_MIN=9999 AGORA_ORPHAN_MIN=9999 AGORA_WT_GRACE_MIN=9999 AGORA_DISPATCH_TIMEOUT=0 \
-  bash "$AGORA_HOME/scripts/poll.sh" >/dev/null 2>&1
+  bash "$PKG/scripts/poll.sh" >/dev/null 2>&1
 LEV "$SL" diagnosed | grep -q "滞留" && ok "⑦ .live 滞留→diagnosed（既有档回归）" || fail "⑦ stale-live"
 rm -f "$AGORA_HOME/raw/dispatches/d-stale.log.live"   # gt-2153：清 stale 标记——teardown 轮询须零等待
 
@@ -1927,7 +1927,7 @@ git -C "$PROJ" branch -q -D "wt/$GT3" 2>/dev/null; rm -rf "$WG3"   # 清场：�
 # ⑩ 未尝试重派记 null：SPAWN=0 孤儿档 → redispatched:null（区别尝试失败 false）（gt-caf3 ③）
 ON=$(MKWT2 "未尝试" t9c)
 POST tester@proj --event dispatched --task "$ON" --target "$PROJ" --child tester --run "raw/dispatches/d-none9.log" >/dev/null
-PO=$(AGORA_POLL_SPAWN=0 AGORA_MERGE_WAIT_MIN=0 AGORA_ORPHAN_MIN=0 AGORA_WT_GRACE_MIN=0 AGORA_DISPATCH_TIMEOUT=0 AGORA_MAX_SPAWN=9 AGORA_RUNTIME=echo bash "$AGORA_HOME/scripts/poll.sh" 2>/dev/null)
+PO=$(AGORA_POLL_SPAWN=0 AGORA_MERGE_WAIT_MIN=0 AGORA_ORPHAN_MIN=0 AGORA_WT_GRACE_MIN=0 AGORA_DISPATCH_TIMEOUT=0 AGORA_MAX_SPAWN=9 AGORA_RUNTIME=echo bash "$PKG/scripts/poll.sh" 2>/dev/null)
 echo "$PO" | python3 -c "
 import json, sys
 r = json.loads(sys.stdin.read())
@@ -1960,20 +1960,20 @@ PYEOF
 # 项目页 setup: 钩子——spawn 前在树内执行
 printf 'setup: touch %s/setup-marker\n' "$T" >> "$AGORA_HOME/wiki/projects/proj.md"
 B1=$(TID "$(TITLE="setup钩子" VERIFY="true" PROJECT_DIR="$PROJ" WT=1 IDEM=t8a TC)")
-AGORA_RUNTIME=echo AGORA_VERIFY_WIN=2 bash "$AGORA_HOME/scripts/dispatch.sh" --actor tester@proj --project "$PROJ" --task "$B1" 2>/dev/null | grep -q '"mode":"spawned"' \
+AGORA_RUNTIME=echo AGORA_VERIFY_WIN=2 bash "$PKG/scripts/dispatch.sh" --actor tester@proj --project "$PROJ" --task "$B1" 2>/dev/null | grep -q '"mode":"spawned"' \
   && ok "setup 任务派发 spawned" || fail "setup 任务派发"
 [ -f "$T/setup-marker" ] && ok "setup: 在树内（spawn 前）执行（侧效文件）" || fail "setup 执行"
-BOOTJSON=$(AGORA_RUNTIME=echo AGORA_VERIFY_WIN=2 bash "$AGORA_HOME/scripts/dispatch.sh" --actor tester@proj --project "$PROJ" --task "$B1" 2>/dev/null)
+BOOTJSON=$(AGORA_RUNTIME=echo AGORA_VERIFY_WIN=2 bash "$PKG/scripts/dispatch.sh" --actor tester@proj --project "$PROJ" --task "$B1" 2>/dev/null)
 # setup 失败→零落账零 spawn
 sed -i 's|^setup: .*|setup: exit 1|' "$AGORA_HOME/wiki/projects/proj.md"
 B2=$(TID "$(TITLE="setup失败" VERIFY="true" PROJECT_DIR="$PROJ" WT=1 IDEM=t8b TC)")
-OUT=$(AGORA_RUNTIME=echo AGORA_VERIFY_WIN=2 bash "$AGORA_HOME/scripts/dispatch.sh" --actor tester@proj --project "$PROJ" --task "$B2" 2>&1)
+OUT=$(AGORA_RUNTIME=echo AGORA_VERIFY_WIN=2 bash "$PKG/scripts/dispatch.sh" --actor tester@proj --project "$PROJ" --task "$B2" 2>&1)
 echo "$OUT" | grep -q SETUP_FAILED && ok "setup 失败→SETUP_FAILED" || fail "setup 失败 JSON"
 cat "$AGORA_HOME"/log/*/*.md | grep -E "(^|[|] )task:$B2( |$)" | grep -q "event:dispatched" && fail "setup 失败零落账" || ok "setup 失败零落账"
 sed -i 's|^setup: .*|setup: true|' "$AGORA_HOME/wiki/projects/proj.md"
 # BOOT 关键词（从账本 dispatched 的 BOOT 不可见——直接源码断言＋行为断言走 grep 源文件）
 for kw in "装环境" "不自己合并" "恢复性重派" "rebase"; do
-  grep -q "$kw" "$AGORA_HOME/scripts/dispatch.sh" && ok "BOOT 含「$kw」" || fail "BOOT 含「$kw」"
+  grep -q "$kw" "$PKG/scripts/dispatch.sh" && ok "BOOT 含「$kw」" || fail "BOOT 含「$kw」"
 done
 
 echo "===== 终审修复批（三分册 B-C1/W1-5 + A-W1/W2 + C-W1/W2 + S1/S3/M2/M5） ====="
@@ -1984,7 +1984,7 @@ echo f > "$WF1/ff"; git -C "$WF1" add -A; git -C "$WF1" -c user.name=t -c user.e
 POST tester@proj --event claimed --task "$F1" >/dev/null
 POST tester@proj --event done --task "$F1" --commit HEAD --evidence ok >/dev/null
 AGORA_MERGE_WAIT_MIN=9999 AGORA_ORPHAN_MIN=9999 AGORA_WT_GRACE_MIN=0 AGORA_DISPATCH_TIMEOUT=9999 AGORA_MAX_SPAWN=9 AGORA_RUNTIME=echo \
-  bash "$AGORA_HOME/scripts/poll.sh" >/dev/null 2>&1
+  bash "$PKG/scripts/poll.sh" >/dev/null 2>&1
 [ -d "$WF1" ] && ok "F1 done(未 merged)净树 GC 不删" || fail "F1 done 未合并树被删（数据丢失）"
 # F2 (B-W1): task-create 锁超时不得假成功
 ( exec 9>"$AGORA_HOME/.git/post.lock"; flock -n 9 && sleep 6 ) &
@@ -1994,12 +1994,12 @@ sleep 6
 # F3 (B-W2): merge 目标分支漂移守卫（上游树检出非目标分支→拒）
 F3U=$(TID "$(TITLE="漂移u" VERIFY=true PROJECT_DIR="$PROJ" WT=1 IDEM=f3u TC)"); W3U=$(ls -d "$T"/proj__wt-${F3U}__*)
 F3D=$(TID "$(TITLE="漂移d" VERIFY=true PROJECT_DIR="$PROJ" WT=1 IDEM=f3d TC)"); W3D=$(ls -d "$T"/proj__wt-${F3D}__*)
-AGORA_RUNTIME=echo AGORA_MAX_SPAWN=9 bash "$AGORA_HOME/scripts/dispatch.sh" --actor tester@proj --project "$PROJ" --task "$F3D" --dispatcher-task "$F3U" >/dev/null 2>&1
+AGORA_RUNTIME=echo AGORA_MAX_SPAWN=9 bash "$PKG/scripts/dispatch.sh" --actor tester@proj --project "$PROJ" --task "$F3D" --dispatcher-task "$F3U" >/dev/null 2>&1
 echo x > "$W3D/xf"; git -C "$W3D" add -A; git -C "$W3D" -c user.name=t -c user.email=t@l commit -qm x
 git -C "$W3D" rebase -q "wt/$F3U" 2>/dev/null; DC3=$(git -C "$W3D" rev-parse HEAD)
 echo u > "$W3U/uf"; git -C "$W3U" add -A; git -C "$W3U" -c user.name=t -c user.email=t@l commit -qm uf   # gt-7ca0：上游须有真实提交（零提交分支 tip==main 会按祖先检查回落 main，漂移守卫路径够不着）
 git -C "$W3U" checkout -qb side-branch 2>/dev/null   # 上游树检出他支
-OUT=$(bash "$AGORA_HOME/scripts/merge.sh" --actor tester@proj --task "$F3D" 2>&1)
+OUT=$(bash "$PKG/scripts/merge.sh" --actor tester@proj --task "$F3D" 2>&1)
 echo "$OUT" | grep -q TARGET_DETACHED && ok "F3 目标分支漂移被拒" || fail "F3 漂移未拒（$OUT）"
 git -C "$W3U" checkout -q "wt/$F3U" 2>/dev/null; git -C "$W3U" branch -qD side-branch 2>/dev/null
 # F4 (B-W5): 配额僵尸出集——last=diagnosed 的 dispatched 不占额
@@ -2009,18 +2009,18 @@ for z in Z1 Z2 Z3; do
   POST tester@proj --event dispatched --task "${!z}" --target "$PROJ" --child tester --run "raw/dispatches/d-z$z.log" >/dev/null
   POST tester@proj --event diagnosed --task "${!z}" --conclusion "秒死占位测试" >/dev/null
 done
-AGORA_RUNTIME=echo AGORA_MAX_SPAWN=3 bash "$AGORA_HOME/scripts/dispatch.sh" --actor tester@proj --project "$PROJ" --task "$Z4" 2>/dev/null | grep -q '"mode":"spawned"' \
+AGORA_RUNTIME=echo AGORA_MAX_SPAWN=3 bash "$PKG/scripts/dispatch.sh" --actor tester@proj --project "$PROJ" --task "$Z4" 2>/dev/null | grep -q '"mode":"spawned"' \
   && ok "F4 last=diagnosed 出集（3 僵尸后第 4 派放行）" || fail "F4 配额僵尸 wedge"
 # F5 (A-W1): dispatcher_task 机械推导（未传时取 actor 最近 claimed 无终态任务）
 C5=$(TID "$(TITLE="推导源" VERIFY=true PROJECT_DIR="$PROJ" TC)")
 POST tester@proj --event claimed --task "$C5" >/dev/null
 D5=$(TID "$(TITLE="推导目标" VERIFY=true PROJECT_DIR="$PROJ" TC)")
-AGORA_RUNTIME=echo AGORA_MAX_SPAWN=9 bash "$AGORA_HOME/scripts/dispatch.sh" --actor tester@proj --project "$PROJ" --task "$D5" >/dev/null 2>&1
+AGORA_RUNTIME=echo AGORA_MAX_SPAWN=9 bash "$PKG/scripts/dispatch.sh" --actor tester@proj --project "$PROJ" --task "$D5" >/dev/null 2>&1
 cat "$AGORA_HOME"/log/*/*.md | grep -E "(^|[|] )task:$D5( |$)" | grep event:dispatched | grep -q "dispatcher_task:$C5" \
   && ok "F5 dispatcher_task 机械推导落账" || fail "F5 推导缺失"
 # F6 (A-W2): done-unmerged diagnosed 必 mention 派单方（跑一轮 MERGE_WAIT=0 产生诊断）
 AGORA_MERGE_WAIT_MIN=0 AGORA_ORPHAN_MIN=9999 AGORA_WT_GRACE_MIN=9999 AGORA_DISPATCH_TIMEOUT=9999 AGORA_MAX_SPAWN=9 AGORA_RUNTIME=echo \
-  bash "$AGORA_HOME/scripts/poll.sh" >/dev/null 2>&1
+  bash "$PKG/scripts/poll.sh" >/dev/null 2>&1
 LEV "$F1" diagnosed | grep "未合并" | tail -1 | grep -q "mention:tester" \
   && ok "F6 done-unmerged diagnosed 带派单方 mention" || fail "F6 diagnosed 无 mention"
 # F7 (C-W2): merged 机械票——非 merge.sh 直 post 拒
@@ -2031,34 +2031,34 @@ POST tester@proj --event merged --task "$P7" --commit "$(git -C "$PROJ" rev-pars
 F8T=$(TID "$(TITLE="branch落账" VERIFY=true PROJECT_DIR="$PROJ" WT=1 IDEM=f8 TC)")
 W8=$(ls -d "$T"/proj__wt-${F8T}__*)
 echo b > "$W8/bf"; git -C "$W8" add -A; git -C "$W8" -c user.name=t -c user.email=t@l commit -qm b
-bash "$AGORA_HOME/scripts/merge.sh" --actor tester@proj --task "$F8T" >/dev/null 2>&1
+bash "$PKG/scripts/merge.sh" --actor tester@proj --task "$F8T" >/dev/null 2>&1
 cat "$AGORA_HOME"/log/*/*.md | grep -E "(^|[|] )task:$F8T( |$)" | grep event:merged | grep -q "branch:" \
   && ok "F8 merged 落账含 branch" || fail "F8 merged 无 branch 字段"
 # F9 (S3): merge.sh wt_host 异机守卫
 F9T=$(TID "$(TITLE="异机合并" VERIFY=true PROJECT_DIR="$PROJ" WT=1 IDEM=f9 TC)"); W9=$(ls -d "$T"/proj__wt-${F9T}__*)
 echo y > "$W9/yf"; git -C "$W9" add -A; git -C "$W9" -c user.name=t -c user.email=t@l commit -qm y
 sed -i "s/^wt_host: .*/wt_host: other-99/" "$AGORA_HOME/wiki/tasks/$F9T.md"
-bash "$AGORA_HOME/scripts/merge.sh" --actor tester@proj --task "$F9T" 2>&1 | grep -q WT_HOST_MISMATCH && ok "F9 wt_host 异机合并被拒" || fail "F9 异机合并未拒"
+bash "$PKG/scripts/merge.sh" --actor tester@proj --task "$F9T" 2>&1 | grep -q WT_HOST_MISMATCH && ok "F9 wt_host 异机合并被拒" || fail "F9 异机合并未拒"
 # F10 (B-W3): reset 并发守卫——verify 期间目标推进则不回滚
 F10=$(TID "$(TITLE="并发守卫" VERIFY='git commit --allow-empty -qm adv; false' PROJECT_DIR="$PROJ" WT=1 IDEM=f10 TC)")
 WA=$(ls -d "$T"/proj__wt-${F10}__*)
 echo c > "$WA/cf"; git -C "$WA" add -A; git -C "$WA" -c user.name=t -c user.email=t@l commit -qm c
 PRE10=$(git -C "$PROJ" rev-parse HEAD)
-OUT=$(bash "$AGORA_HOME/scripts/merge.sh" --actor tester@proj --task "$F10" 2>&1)
+OUT=$(bash "$PKG/scripts/merge.sh" --actor tester@proj --task "$F10" 2>&1)
 [ "$(git -C "$PROJ" rev-parse HEAD)" != "$PRE10" ] && ok "F10 verify 窗口并发推进不被 reset 吞" || fail "F10 并发提交被 reset 吞"
 git -C "$PROJ" reset -q --hard "$PRE10"   # 测试现场复位
 # F11 (M5): poll 重派上游时透传其原链 dispatcher_task
 F11U=$(TID "$(TITLE="透传u" VERIFY=true PROJECT_DIR="$PROJ" WT=1 IDEM=f11u TC)")
 F11P=$(TID "$(TITLE="透传p" VERIFY=true PROJECT_DIR="$PROJ" TC)")   # u 的上游（pp）
-AGORA_RUNTIME=echo AGORA_MAX_SPAWN=9 bash "$AGORA_HOME/scripts/dispatch.sh" --actor tester@proj --project "$PROJ" --task "$F11U" --dispatcher-task "$F11P" >/dev/null 2>&1
+AGORA_RUNTIME=echo AGORA_MAX_SPAWN=9 bash "$PKG/scripts/dispatch.sh" --actor tester@proj --project "$PROJ" --task "$F11U" --dispatcher-task "$F11P" >/dev/null 2>&1
 POST tester@proj --event claimed --task "$F11U" >/dev/null
 F11D=$(TID "$(TITLE="透传d" VERIFY=true PROJECT_DIR="$PROJ" WT=1 IDEM=f11d TC)")
-AGORA_RUNTIME=echo AGORA_MAX_SPAWN=9 bash "$AGORA_HOME/scripts/dispatch.sh" --actor tester@proj --project "$PROJ" --task "$F11D" --dispatcher-task "$F11U" >/dev/null 2>&1
+AGORA_RUNTIME=echo AGORA_MAX_SPAWN=9 bash "$PKG/scripts/dispatch.sh" --actor tester@proj --project "$PROJ" --task "$F11D" --dispatcher-task "$F11U" >/dev/null 2>&1
 WD11=$(ls -d "$T"/proj__wt-${F11D}__*); echo t > "$WD11/tf"; git -C "$WD11" add -A; git -C "$WD11" -c user.name=t -c user.email=t@l commit -qm t
 POST tester@proj --event claimed --task "$F11D" >/dev/null
 POST tester@proj --event done --task "$F11D" --commit HEAD --evidence ok >/dev/null
 AGORA_MERGE_WAIT_MIN=0 AGORA_ORPHAN_MIN=9999 AGORA_WT_GRACE_MIN=9999 AGORA_DISPATCH_TIMEOUT=9999 AGORA_MAX_SPAWN=9 AGORA_RUNTIME=echo \
-  bash "$AGORA_HOME/scripts/poll.sh" >/dev/null 2>&1
+  bash "$PKG/scripts/poll.sh" >/dev/null 2>&1
 cat "$AGORA_HOME"/log/*/*.md | grep -E "(^|[|] )task:$F11U( |$)" | grep event:dispatched | tail -1 | grep -q "dispatcher_task:$F11P" \
   && ok "F11 poll 重派透传原链 dispatcher_task" || fail "F11 重派链断裂"
 
@@ -2093,7 +2093,7 @@ POLLT >/dev/null   # B-M3：最后事件==dispatched 无 run log → 必须再�
 R4=$(MKWT2 "重派失败" r2m4)
 POST tester@proj --event dispatched --task "$R4" --target "$PROJ" --child tester --run "raw/dispatches/d-r2.log" >/dev/null
 OUT=$(AGORA_MERGE_WAIT_MIN=9999 AGORA_ORPHAN_MIN=0 AGORA_WT_GRACE_MIN=9999 AGORA_DISPATCH_TIMEOUT=9999 AGORA_MAX_SPAWN=9 AGORA_RUNTIME=bogus-runtime-xyz \
-  bash "$AGORA_HOME/scripts/poll.sh" 2>/dev/null)
+  bash "$PKG/scripts/poll.sh" 2>/dev/null)
 echo "$OUT" | python3 -c 'import json,sys
 d = json.load(sys.stdin); tid = sys.argv[1]
 sys.exit(0 if any(e.get("task") == tid and e.get("redispatched") is False for e in d.get("orphan_diag", [])) else 1)' "$R4" \
@@ -2101,7 +2101,7 @@ sys.exit(0 if any(e.get("task") == tid and e.get("redispatched") is False for e 
 R5=$(MKWT2 "重派成功" r3m5)
 POST tester@proj --event dispatched --task "$R5" --target "$PROJ" --child tester --run "raw/dispatches/d-r3.log" >/dev/null
 OUT=$(AGORA_MERGE_WAIT_MIN=9999 AGORA_ORPHAN_MIN=0 AGORA_WT_GRACE_MIN=9999 AGORA_DISPATCH_TIMEOUT=9999 AGORA_MAX_SPAWN=99 AGORA_RUNTIME=echo \
-  bash "$AGORA_HOME/scripts/poll.sh" 2>/dev/null)
+  bash "$PKG/scripts/poll.sh" 2>/dev/null)
 echo "$OUT" | python3 -c 'import json,sys
 d = json.load(sys.stdin); tid = sys.argv[1]
 sys.exit(0 if any(e.get("task") == tid and e.get("redispatched") is True for e in d.get("orphan_diag", [])) else 1)' "$R5" \
@@ -2116,7 +2116,7 @@ tick "$R7"; POST tester@proj --event merged --task "$R7" --commit "$(git -C "$PR
 untick "$R7"
 chmod 500 "$T"
 OUT=$(AGORA_MERGE_WAIT_MIN=9999 AGORA_ORPHAN_MIN=9999 AGORA_WT_GRACE_MIN=0 AGORA_DISPATCH_TIMEOUT=9999 AGORA_MAX_SPAWN=9 AGORA_RUNTIME=echo \
-  bash "$AGORA_HOME/scripts/poll.sh" 2>/dev/null)
+  bash "$PKG/scripts/poll.sh" 2>/dev/null)
 chmod 755 "$T"   # 复原（rm -rf 清场依赖）
 [ -d "$WR7" ] && ok "R3 删失败树保留" || fail "R3 删失败树被删"
 echo "$OUT" | python3 -c 'import json,sys
@@ -2132,15 +2132,15 @@ BAD_OPEN=$(grep 'encoding="utf-8"' "$PKG/scripts/doctor.sh" | grep -cv 'errors="
 echo "===== 隐藏分片可见性——点开头项目名（生产行政 hotfix，gt-3ea2 波次根因） ====="
 PX="$T/.projx"; mkdir -p "$PX"; (cd "$PX" && git init -q . && echo x>p && git add -A && git -c user.name=t -c user.email=t@l commit -qm i)
 H1=$(TID "$(TITLE="点仓任务" VERIFY=true PROJECT_DIR="$PX" WT=1 IDEM=dot1 TC)")
-bash "$AGORA_HOME/scripts/post.sh" --actor tester@projx --project .projx --event claimed --task "$H1" >/dev/null
+bash "$PKG/scripts/post.sh" --actor tester@projx --project .projx --event claimed --task "$H1" >/dev/null
 grep -q "^- $H1" "$AGORA_HOME/board/in-progress.md" 2>/dev/null && ok "点仓 claimed 上板（derive 可见）" || fail "点仓 claimed 上板（derive 盲）"
-bash "$AGORA_HOME/scripts/post.sh" --actor tester@projx --project .projx --event done --task "$H1" --commit HEAD --evidence ok >/dev/null
+bash "$PKG/scripts/post.sh" --actor tester@projx --project .projx --event done --task "$H1" --commit HEAD --evidence ok >/dev/null
 grep -q "^- $H1" "$AGORA_HOME/board/in-progress.md" 2>/dev/null && fail "点仓 done 后离板" || ok "点仓 done 后离板"
 git -C "$PX" merge -q --ff-only "wt/$H1" 2>/dev/null
 tick "$H1"
-bash "$AGORA_HOME/scripts/post.sh" --actor tester@projx --project .projx --event merged --task "$H1" --commit "$(git -C "$PX" rev-parse HEAD)" --branch "$(git -C "$PX" symbolic-ref --short HEAD)" >/dev/null
+bash "$PKG/scripts/post.sh" --actor tester@projx --project .projx --event merged --task "$H1" --commit "$(git -C "$PX" rev-parse HEAD)" --branch "$(git -C "$PX" symbolic-ref --short HEAD)" >/dev/null
 untick "$H1"
-OUT=$(AGORA_MERGE_WAIT_MIN=0 AGORA_ORPHAN_MIN=9999 AGORA_WT_GRACE_MIN=9999 AGORA_DISPATCH_TIMEOUT=9999 bash "$AGORA_HOME/scripts/poll.sh" 2>/dev/null)
+OUT=$(AGORA_MERGE_WAIT_MIN=0 AGORA_ORPHAN_MIN=9999 AGORA_WT_GRACE_MIN=9999 AGORA_DISPATCH_TIMEOUT=9999 bash "$PKG/scripts/poll.sh" 2>/dev/null)
 echo "$OUT" | python3 -c 'import json,sys
 d = json.load(sys.stdin); tid = sys.argv[1]
 sys.exit(1 if any(e.get("task") == tid for e in d.get("merge_wait_diag", [])) else 0)' "$H1" \
@@ -2251,7 +2251,7 @@ grep -q "api POST /api/session/ses_fake9/interrupt" "$FAKE_HOME/calls.log" \
   && ok "S1g abort 契约 POST /session/{id}/interrupt" || fail "S1g abort（$(tail -1 "$FAKE_HOME/calls.log" 2>/dev/null)）"
 
 # ---- T2: dispatch API 通道（sid 落账 / 回落零残留 / 凭据预写不变 / inject 败兜底） ----
-POSTD() { PATH="$FAKEDIR:$PATH" FAKE_HOME="$FAKE_HOME" AGORA_MAX_SPAWN=99 AGORA_RUNTIME_API=1 bash "$AGORA_HOME/scripts/dispatch.sh" --actor tester@proj --project "$PROJ" "$@"; }
+POSTD() { PATH="$FAKEDIR:$PATH" FAKE_HOME="$FAKE_HOME" AGORA_MAX_SPAWN=99 AGORA_RUNTIME_API=1 bash "$PKG/scripts/dispatch.sh" --actor tester@proj --project "$PROJ" "$@"; }
 T2A=$(TID "$(TITLE="API派生" VERIFY="true" PROJECT_DIR="$PROJ" TC)")
 fake_reset none
 OUT=$(POSTD --task "$T2A")
@@ -2285,9 +2285,9 @@ echo "$OUT" | grep -q '"mode":"spawned"' && RUN2D=$(echo "$OUT" | sed -n 's/.*"r
   && grep -q "^EXIT:1=0" "$AGORA_HOME/$RUN2D" 2>/dev/null && ok "S2d run 兜底成功" || fail "S2d run 兜底（got: $OUT）"
 
 # ---- T3: ack→注入（session: 任务 ack 即 inject，best-effort＋sid 幂等） ----
-POSTI() { PATH="$FAKEDIR:$PATH" FAKE_HOME="$FAKE_HOME" bash "$AGORA_HOME/scripts/post.sh" --actor "$1" --project "${1#*@}" "${@:2}"; }
+POSTI() { PATH="$FAKEDIR:$PATH" FAKE_HOME="$FAKE_HOME" bash "$PKG/scripts/post.sh" --actor "$1" --project "${1#*@}" "${@:2}"; }
 T3A=$(TID "$(TITLE="ack注入" VERIFY="true" PROJECT_DIR="$PROJ" TC)")
-bash "$AGORA_HOME/scripts/post.sh" --actor tester@proj --project proj --event dispatched --task "$T3A" \
+bash "$PKG/scripts/post.sh" --actor tester@proj --project proj --event dispatched --task "$T3A" \
   --target "$PROJ" --child tester --run "raw/dispatches/d-t3a.log" --session ses_t3a >/dev/null
 fake_reset none
 POSTI tester@proj --event ack --task "$T3A" --body "plan ack 放行" >/dev/null
@@ -2296,7 +2296,7 @@ grep -q "PROMPT-OK" "$FAKE_HOME/calls.log" 2>/dev/null \
   && ok "S3a ack 触发 inject（ack 已落账，继续 / queue）" || fail "S3a ack 未触发 inject"
 # S3b: inject 失败 best-effort 不阻塞
 T3B=$(TID "$(TITLE="ack注入败" VERIFY="true" PROJECT_DIR="$PROJ" TC)")
-bash "$AGORA_HOME/scripts/post.sh" --actor tester@proj --project proj --event dispatched --task "$T3B" \
+bash "$PKG/scripts/post.sh" --actor tester@proj --project proj --event dispatched --task "$T3B" \
   --target "$PROJ" --child tester --run "raw/dispatches/d-t3b.log" --session ses_t3b >/dev/null
 fake_reset inject_fail
 OUT=$(POSTI tester@proj --event ack --task "$T3B" --body "ack b")
@@ -2308,7 +2308,7 @@ echo "$OUT" | grep -q "inject_dedup" && [ "$(grep -c "PROMPT-OK" "$FAKE_HOME/cal
   && ok "S3c 同 sid 幂等去重（inject_dedup＋零重注）" || fail "S3c 幂等失效（got: $OUT）"
 # S3d: 开关关→零 inject
 T3D=$(TID "$(TITLE="ack注入关" VERIFY="true" PROJECT_DIR="$PROJ" TC)")
-bash "$AGORA_HOME/scripts/post.sh" --actor tester@proj --project proj --event dispatched --task "$T3D" \
+bash "$PKG/scripts/post.sh" --actor tester@proj --project proj --event dispatched --task "$T3D" \
   --target "$PROJ" --child tester --run "raw/dispatches/d-t3d.log" --session ses_t3d >/dev/null
 fake_reset none
 AGORA_RUNTIME_API=0 POSTI tester@proj --event ack --task "$T3D" --body "开关关" >/dev/null
@@ -2334,13 +2334,13 @@ PYEOF
 ); do POST tester@proj --event cancelled --task "$_t" >/dev/null 2>&1; done
 T4U=$(MKWT2 "续跑上游" t4u); T4D=$(MKWT2 "续跑下游" t4d)
 W4D=$(ls -d "$T"/proj__wt-${T4D}__*); echo t > "$W4D/tfile"; git -C "$W4D" add -A; git -C "$W4D" -c user.name=t -c user.email=t@l commit -qm t4d   # gt-99af：真未合并态（夹具此前借分支==HEAD 已并形态，会被 git 层短路吞掉）
-bash "$AGORA_HOME/scripts/post.sh" --actor tester@proj --project proj --event dispatched --task "$T4U" \
+bash "$PKG/scripts/post.sh" --actor tester@proj --project proj --event dispatched --task "$T4U" \
   --target "$PROJ" --child tester --run "raw/dispatches/d-t4u.log" --session ses_up1 >/dev/null
-bash "$AGORA_HOME/scripts/post.sh" --actor tester@proj --project proj --event dispatched --task "$T4D" \
+bash "$PKG/scripts/post.sh" --actor tester@proj --project proj --event dispatched --task "$T4D" \
   --target "$PROJ" --child tester --run "raw/dispatches/d-t4d.log" --dispatcher-task "$T4U" >/dev/null
 POST tester@proj --event done --task "$T4D" --commit HEAD --evidence ok >/dev/null
 POLL4() { PATH="$FAKEDIR:$PATH" FAKE_HOME="$FAKE_HOME" AGORA_MERGE_WAIT_MIN=0 AGORA_ORPHAN_MIN=9999 AGORA_WT_GRACE_MIN=9999 \
-  AGORA_DISPATCH_TIMEOUT=9999 AGORA_MAX_SPAWN=99 AGORA_REDISPATCH_MAX=99 AGORA_RUNTIME=opencode AGORA_RUNTIME_API=1 bash "$AGORA_HOME/scripts/poll.sh" 2>/dev/null; }
+  AGORA_DISPATCH_TIMEOUT=9999 AGORA_MAX_SPAWN=99 AGORA_REDISPATCH_MAX=99 AGORA_RUNTIME=opencode AGORA_RUNTIME_API=1 bash "$PKG/scripts/poll.sh" 2>/dev/null; }
 fake_reset none
 OUT=$(POLL4)
 echo "$OUT" | python3 -c 'import json,sys
@@ -2360,14 +2360,14 @@ sys.exit(0 if any(e.get("upstream")==tid and e.get("mode")=="spawned" for e in d
 # S4c: 上游无 session → 直接重派（既有行为）
 T4U2=$(MKWT2 "无session上游" t4c); T4D2=$(MKWT2 "无session下游" t4c2)
 W4D2=$(ls -d "$T"/proj__wt-${T4D2}__*); echo u > "$W4D2/ufile"; git -C "$W4D2" add -A; git -C "$W4D2" -c user.name=t -c user.email=t@l commit -qm t4d2   # 真未合并态（gt-99af）
-bash "$AGORA_HOME/scripts/post.sh" --actor tester@proj --project proj --event dispatched --task "$T4U2" \
+bash "$PKG/scripts/post.sh" --actor tester@proj --project proj --event dispatched --task "$T4U2" \
   --target "$PROJ" --child tester --run "raw/dispatches/d-t4u2.log" >/dev/null
-bash "$AGORA_HOME/scripts/post.sh" --actor tester@proj --project proj --event dispatched --task "$T4D2" \
+bash "$PKG/scripts/post.sh" --actor tester@proj --project proj --event dispatched --task "$T4D2" \
   --target "$PROJ" --child tester --run "raw/dispatches/d-t4d2.log" --dispatcher-task "$T4U2" >/dev/null
 POST tester@proj --event done --task "$T4D2" --commit HEAD --evidence ok >/dev/null
 fake_reset none
 OUT=$(PATH="$FAKEDIR:$PATH" FAKE_HOME="$FAKE_HOME" AGORA_MERGE_WAIT_MIN=0 AGORA_ORPHAN_MIN=9999 AGORA_WT_GRACE_MIN=9999 \
-  AGORA_DISPATCH_TIMEOUT=9999 AGORA_MAX_SPAWN=99 AGORA_REDISPATCH_MAX=99 AGORA_RUNTIME=echo bash "$AGORA_HOME/scripts/poll.sh" 2>/dev/null)
+  AGORA_DISPATCH_TIMEOUT=9999 AGORA_MAX_SPAWN=99 AGORA_REDISPATCH_MAX=99 AGORA_RUNTIME=echo bash "$PKG/scripts/poll.sh" 2>/dev/null)
 echo "$OUT" | python3 -c 'import json,sys
 d=json.load(sys.stdin); tid=sys.argv[1]
 sys.exit(0 if any(e.get("upstream")==tid and e.get("mode")=="spawned" for e in d.get("redispatched",[])) else 1)' "$T4U2" \
@@ -2375,9 +2375,9 @@ sys.exit(0 if any(e.get("upstream")==tid and e.get("mode")=="spawned" for e in d
 # S4d: 上游 wt_host≠本机 → 不注入（跨机判则）回落重派（独立对子——mw 状态按任务共享，勿复用 S4a/b 的）
 T4U3=$(MKWT2 "跨机上游" t4x); T4D3=$(MKWT2 "跨机下游" t4y)
 W4D3=$(ls -d "$T"/proj__wt-${T4D3}__*); echo v > "$W4D3/vfile"; git -C "$W4D3" add -A; git -C "$W4D3" -c user.name=t -c user.email=t@l commit -qm t4d3   # 真未合并态（gt-99af）
-bash "$AGORA_HOME/scripts/post.sh" --actor tester@proj --project proj --event dispatched --task "$T4U3" \
+bash "$PKG/scripts/post.sh" --actor tester@proj --project proj --event dispatched --task "$T4U3" \
   --target "$PROJ" --child tester --run "raw/dispatches/d-t4u3.log" --session ses_up3 >/dev/null
-bash "$AGORA_HOME/scripts/post.sh" --actor tester@proj --project proj --event dispatched --task "$T4D3" \
+bash "$PKG/scripts/post.sh" --actor tester@proj --project proj --event dispatched --task "$T4D3" \
   --target "$PROJ" --child tester --run "raw/dispatches/d-t4d3.log" --dispatcher-task "$T4U3" >/dev/null
 POST tester@proj --event done --task "$T4D3" --commit HEAD --evidence ok >/dev/null
 sed -i "s/^wt_host: .*/wt_host: other-host/" "$AGORA_HOME/wiki/tasks/$T4U3.md"
@@ -2409,10 +2409,10 @@ OUT=$(POSTD --task "$T5C")
 echo "$OUT" | grep -q '"mode":"spawned"' && [ -f "$WR5C/.omo/agora-delegation/$T5C.md" ] \
   && ok "S5c wt 任务 alive 命中仍无条件 spawn" || fail "S5c wt 在场豁免失效（got: $OUT）"
 T5D=$(TID "$(TITLE="API关占坑" VERIFY="true" PROJECT_DIR="$PROJ" TC)")
-printf '%s tester ses_legacy %s\n' "$(hostname)" "$(date +%s)" >> "$AGORA_HOME/scripts/sessions.map"
-OUT=$(PATH="$FAKEDIR:$PATH" FAKE_HOME="$FAKE_HOME" AGORA_MAX_SPAWN=99 AGORA_RUNTIME_API=0 AGORA_RUNTIME=opencode bash "$AGORA_HOME/scripts/dispatch.sh" --actor tester@proj --project "$PROJ" --task "$T5D")
+printf '%s tester ses_legacy %s\n' "$(hostname)" "$(date +%s)" >> "$AGORA_HOME/sessions.map"
+OUT=$(PATH="$FAKEDIR:$PATH" FAKE_HOME="$FAKE_HOME" AGORA_MAX_SPAWN=99 AGORA_RUNTIME_API=0 AGORA_RUNTIME=opencode bash "$PKG/scripts/dispatch.sh" --actor tester@proj --project "$PROJ" --task "$T5D")
 echo "$OUT" | grep -q '"mode":"spawned"' && ok "S5d API 关（桥同不可达）sessions.map 不算在场→直接 spawn" || fail "S5d 应直接 spawn（got: $OUT）"
-sed -i "\|$(hostname) tester ses_legacy|d" "$AGORA_HOME/scripts/sessions.map"   # 清场：勿污染后续
+sed -i "\|$(hostname) tester ses_legacy|d" "$AGORA_HOME/sessions.map"   # 清场：勿污染后续
 
 # ---- T6: done_open 状态机同日跨分片乱序——按 ts 序重放（gt-db15，gt-caf3 last 同源收口） ----
 # 构造：字典序前分片放「晚」闭合事件(T2)、字典序后分片放「早」done(T1)——文件序重放把 done_open 误置 True
@@ -2444,7 +2444,7 @@ cat >> "$DOTSHARD" <<EOF
 - seq:99103 | ts:2026-10-23T19:02:00+08:00 | actor:me@.dotfiles | event:done | idem:dotf1d | seen:.dotfiles@0 | task:gt-dotf1 | commit:abc1234 | evidence:点分片交付
 EOF
 # ① iter_events 直读面：点分片内事件可产出
-PYTHONPATH="$AGORA_HOME/scripts" AGORA_HOME="$AGORA_HOME" python3 -c "
+PYTHONPATH="$PKG/scripts" AGORA_HOME="$AGORA_HOME" python3 -c "
 import os
 import agora_lib as lib
 evs = [e.get('event') for _, _, e in lib.iter_events(os.environ['AGORA_HOME'])
@@ -2452,7 +2452,7 @@ evs = [e.get('event') for _, _, e in lib.iter_events(os.environ['AGORA_HOME'])
 assert evs == ['plan', 'claimed', 'done'], evs
 " && ok "T7 iter_events 产出点分片事件" || fail "T7 iter_events 产出点分片事件"
 # ② history.sh 端到端：点分片项目任务返回全链（plan/claimed/done），非空断链
-TASK=gt-dotf1 bash "$AGORA_HOME/scripts/history.sh" | python3 -c "
+TASK=gt-dotf1 bash "$PKG/scripts/history.sh" | python3 -c "
 import json, sys
 d = json.load(sys.stdin)
 evs = [e['event'] for e in d['events']]
@@ -2487,14 +2487,14 @@ OUT=$(TITLE="足够长的正常标题" VERIFY="true" PROJECT_DIR="$T/fk" TC)
 echo "$OUT" | grep -q 'warnings' && fail "task_create 防呆误触发（$OUT）" || ok "task_create 干净输入零 warnings"
 # ⑥ BOOT 文案：删「等 dispatcher ack 30min」，改「post(plan) 后即开工不等 ack；commit 前重读账本」
 B1=$(TID "$(TITLE="BOOT文案任务标题够长" VERIFY=true PROJECT_DIR="$PROJ" TC)")
-BOUT=$(AGORA_RUNTIME=echo AGORA_MAX_SPAWN=99 bash "$AGORA_HOME/scripts/dispatch.sh" --actor tester@proj --project "$PROJ" --task "$B1")
+BOUT=$(AGORA_RUNTIME=echo AGORA_MAX_SPAWN=99 bash "$PKG/scripts/dispatch.sh" --actor tester@proj --project "$PROJ" --task "$B1")
 RLOG="$AGORA_HOME/$(echo "$BOUT" | sed -n 's/.*"run":"\([^"]*\)".*/\1/p')"
 grep -q "post(plan) 后即开工不等 ack" "$RLOG" && grep -q "commit 前重读账本" "$RLOG" && ! grep -q "等 dispatcher ack" "$RLOG" \
   && ok "BOOT 文案对齐 delegation §七（删等 ack 30min）" || fail "BOOT 文案未对齐（$RLOG, out=$BOUT）"
 # ⑧ 截断触达＋无 title 行回退（评审 ocr-8：[:60] 此前从未被超长输入触达）
 T70=$(printf '甲%.0s' $(seq 1 70))
 L1=$(TID "$(TITLE="$T70" VERIFY=true PROJECT_DIR="$PROJ" TC)")
-LOUT=$(AGORA_RUNTIME=echo AGORA_MAX_SPAWN=99 bash "$AGORA_HOME/scripts/dispatch.sh" --actor tester@proj --project "$PROJ" --task "$L1")
+LOUT=$(AGORA_RUNTIME=echo AGORA_MAX_SPAWN=99 bash "$PKG/scripts/dispatch.sh" --actor tester@proj --project "$PROJ" --task "$L1")
 LLOG="$AGORA_HOME/$(echo "$LOUT" | sed -n 's/.*"run":"\([^"]*\)".*/\1/p')"
 python3 -c 'import re,sys
 line=[l for l in open(sys.argv[1],encoding="utf-8") if l.startswith("run --auto")][0]
@@ -2503,7 +2503,7 @@ sys.exit(0 if len(t)==60 and set(t)=={"甲"} else 1)' "$LLOG" \
   && ok "create/run title 截 60 码点（70 字输入→恰 60）" || fail "title 截断断言（$LLOG）"
 NT=$(TID "$(TITLE="无title行回退任务" VERIFY=true PROJECT_DIR="$PROJ" TC)")
 sed -i '/^title:/d' "$AGORA_HOME/wiki/tasks/$NT.md"
-NOUT=$(AGORA_RUNTIME=echo AGORA_MAX_SPAWN=99 bash "$AGORA_HOME/scripts/dispatch.sh" --actor tester@proj --project "$PROJ" --task "$NT")
+NOUT=$(AGORA_RUNTIME=echo AGORA_MAX_SPAWN=99 bash "$PKG/scripts/dispatch.sh" --actor tester@proj --project "$PROJ" --task "$NT")
 NLOG="$AGORA_HOME/$(echo "$NOUT" | sed -n 's/.*"run":"\([^"]*\)".*/\1/p')"
 grep -q -- "--title agora: $NT " "$NLOG" \
   && ok "无 title 行→CTITLE 回退 agora: <task>（--title 恒非空）" || fail "无 title 行回退（$NLOG, out=$NOUT）"
@@ -2517,7 +2517,7 @@ grep -q 'AGORA_MAX_DEPTH:-5' "$PKG/scripts/dispatch.sh" && ! grep -q 'AGORA_MAX_
 
 echo "===== 守卫v2批（gt-ae6f）：mention 拾取环断路＋BOOT 心跳 ====="
 POLLV2() { AGORA_MERGE_WAIT_MIN=0 AGORA_ORPHAN_MIN=0 AGORA_WT_GRACE_MIN=0 AGORA_DISPATCH_TIMEOUT=0 \
-           AGORA_VERIFY_WIN=2 AGORA_MAX_SPAWN=99 AGORA_RUNTIME=true bash "$AGORA_HOME/scripts/poll.sh" 2>/dev/null; }
+           AGORA_VERIFY_WIN=2 AGORA_MAX_SPAWN=99 AGORA_RUNTIME=true bash "$PKG/scripts/poll.sh" 2>/dev/null; }
 # ① 拾取守卫：done_open（done 未合并）任务 mention 邮件 → 零派发＋held，水位照常推进
 G1=$(TID "$(TITLE="守卫一done未合并任务标题够长" VERIFY=true PROJECT_DIR="$PROJ" TC)")
 POST tester@proj --event claimed --task "$G1" >/dev/null
@@ -2555,7 +2555,7 @@ G4=$(TID "$(TITLE="守卫四done不入todo任务标题够长" VERIFY=true PROJEC
 POST tester@proj --event claimed --task "$G4" >/dev/null
 POST tester@proj --event done --task "$G4" --commit HEAD --evidence ok >/dev/null
 POST tester@proj --event retired --task "$G4" --reason "收工" >/dev/null
-bash "$AGORA_HOME/scripts/derive-board.sh"
+bash "$PKG/scripts/derive-board.sh"
 ! grep -q "^- $G4" "$AGORA_HOME/board/todo.md" \
   && ok "守卫四：owner retired 后 done 任务不入 todo（视图与守卫一致）" || fail "守卫四 done 被 retired 踢回 todo"
 # ③ retired 降敏：RECHECK 派发会话 retired → 回声邮件下轮零新派＋held
@@ -2581,7 +2581,7 @@ grep -q "认领即 agora_post(event=claimed" "$PKG/scripts/dispatch.sh" \
 # 夹具序（wave-1 R2 教训同源）：reopened 须由 owner（rival@proj2）发出——done/reopened 跨分片同秒
 # 无因果序（derive 按分片文件序、scan 按 ts 平局文件序，双双会把 reopened 重放在 done 前）
 G6=$(TID "$(TITLE="守卫六reopened返工再拾取任务标题够长" VERIFY=true PROJECT_DIR="$PROJ" TC)")
-AGORA_RUNTIME=true AGORA_VERIFY_WIN=2 AGORA_MAX_SPAWN=99 bash "$AGORA_HOME/scripts/dispatch.sh" --actor tester@proj --project "$PROJ" --task "$G6" >/dev/null 2>&1
+AGORA_RUNTIME=true AGORA_VERIFY_WIN=2 AGORA_MAX_SPAWN=99 bash "$PKG/scripts/dispatch.sh" --actor tester@proj --project "$PROJ" --task "$G6" >/dev/null 2>&1
 POST rival@proj2 --event claimed --task "$G6" >/dev/null
 POST rival@proj2 --event done --task "$G6" --commit HEAD --evidence ok >/dev/null
 POST rival@proj2 --event reopened --task "$G6" --reason "返工重开" >/dev/null
@@ -2595,7 +2595,7 @@ assert any(s['task']=='$G6' for s in r['spawned']), r['spawned']
 # ⑦ 心跳在飞回归（第四波口径判别断言）：dispatched→progress 心跳期间回声邮件 → held 在飞去重——
 # 尾部口径（last==dispatched）对此漏放（重派在飞任务），累计口径与本口径均 held
 G7=$(TID "$(TITLE="守卫七心跳在飞去重任务标题够长" VERIFY=true PROJECT_DIR="$PROJ" TC)")
-AGORA_RUNTIME=true AGORA_VERIFY_WIN=2 AGORA_MAX_SPAWN=99 bash "$AGORA_HOME/scripts/dispatch.sh" --actor tester@proj --project "$PROJ" --task "$G7" >/dev/null 2>&1
+AGORA_RUNTIME=true AGORA_VERIFY_WIN=2 AGORA_MAX_SPAWN=99 bash "$PKG/scripts/dispatch.sh" --actor tester@proj --project "$PROJ" --task "$G7" >/dev/null 2>&1
 POST rival@proj2 --event progress --task "$G7" --mention tester --body "心跳回声" >/dev/null
 GOUT=$(POLLV2)
 echo "$GOUT" | python3 -c "
@@ -2621,11 +2621,11 @@ POST tester@proj --event claimed --task "$MB3" >/dev/null
 POST tester@proj --event done --task "$MB3" --commit HEAD --evidence ok >/dev/null
 # ocr-R1#4：reopened 必须与 done/merged 同分片（POST 助手按 actor 后缀路由分片，watchdog@$(hostname)
 # 会落他片破坏因果序）——显式 --project proj 同片落账
-bash "$AGORA_HOME/scripts/post.sh" --actor watchdog@proj --project proj --event reopened --task "$MB3" --reason "done-unmerged 阶梯拖回 todo（gt-35b5 形态）" >/dev/null
+bash "$PKG/scripts/post.sh" --actor watchdog@proj --project proj --event reopened --task "$MB3" --reason "done-unmerged 阶梯拖回 todo（gt-35b5 形态）" >/dev/null
 tick "$MB1"; POST tester@proj --event merged --task "$MB1" --commit "$(git -C "$PROJ" rev-parse HEAD)" --branch "$(git -C "$PROJ" symbolic-ref --short HEAD)" >/dev/null; untick "$MB1"
 POST tester@proj --event blocked --task "$MB2" --reason "合并冲突" >/dev/null
 tick "$MB3"; POST tester@proj --event merged --task "$MB3" --commit "$(git -C "$PROJ" rev-parse HEAD)" --branch "$(git -C "$PROJ" symbolic-ref --short HEAD)" >/dev/null; untick "$MB3"
-bash "$AGORA_HOME/scripts/derive-board.sh"
+bash "$PKG/scripts/derive-board.sh"
 ! grep -q "$MB1" "$AGORA_HOME/board/in-progress.md" 2>/dev/null \
   && python3 -c "import json;c=json.load(open('$AGORA_HOME/.git/derive-cache.json'));assert c['tasks']['$MB1']['state']=='done'" \
   && ok "① claimed→merged 落终态（state==done，离 in-progress）" || fail "① merged 未落终态（$MB1）"
@@ -2640,7 +2640,7 @@ f = '$AGORA_HOME/.git/derive-cache.json'
 c = json.load(open(f))
 c['v'] = 3; c['tasks']['$MB3']['state'] = 'todo'
 json.dump(c, open(f, 'w'))"
-bash "$AGORA_HOME/scripts/derive-board.sh"
+bash "$PKG/scripts/derive-board.sh"
 ! grep -q "$MB3" "$AGORA_HOME/board/todo.md" \
   && python3 -c "import json;c=json.load(open('$AGORA_HOME/.git/derive-cache.json'));assert c['v']==4" \
   && ok "⑤ 毒化 v3 缓存被作废：全量重放自愈＋v4" || fail "⑤ 旧缓存未自愈（$MB3 滞留或版本未翻新）"
@@ -2653,9 +2653,9 @@ echo "$OUT4" | grep -q '"seq"' || fail "④ 前置：retired 落账失败（$OUT
 MB4=$(TID "$(TITLE="g5a59丁退休actor补merged" VERIFY=true PROJECT_DIR="$PROJ" TC)")
 POST tester@proj --event claimed --task "$MB4" >/dev/null
 POST tester@proj --event done --task "$MB4" --commit HEAD --evidence ok >/dev/null
-bash "$AGORA_HOME/scripts/post.sh" --actor watchdog@proj --project proj --event reopened --task "$MB4" --reason "阶梯拖回 todo" >/dev/null
+bash "$PKG/scripts/post.sh" --actor watchdog@proj --project proj --event reopened --task "$MB4" --reason "阶梯拖回 todo" >/dev/null
 tick "$MB4"; POST agora-mcp@proj --event merged --task "$MB4" --commit "$(git -C "$PROJ" rev-parse HEAD)" --branch "$(git -C "$PROJ" symbolic-ref --short HEAD)" >/dev/null; untick "$MB4"
-bash "$AGORA_HOME/scripts/derive-board.sh"
+bash "$PKG/scripts/derive-board.sh"
 ! grep -q "$MB4" "$AGORA_HOME/board/todo.md" \
   && ok "④ retired 后机械 merged 仍闭环离场（不过滤）" || fail "④ retired 盲化机械终态（$MB4）"
 
@@ -2680,7 +2680,7 @@ BRANCH=$(git -C "$AGORA_HOME" symbolic-ref --short HEAD)
 OUT=$(AGORA_REMOTE="https://agora.example/acme/agora.git" bash "$PKG/scripts/init.sh" 2>&1); RC=$?
 [[ $RC -eq 1 ]] && echo "$OUT" | grep -q "拒绝非 SSH 远端" && [ "$(git -C "$AGORA_HOME" remote get-url origin)" = "file://$BREMOTE" ] \
   && ok "装饰 https URL 被 init.sh 拒绝（rc=1，origin 不动，不实际推送）" || fail "装饰 https URL 处理（rc=$RC out=$OUT）"
-BDSP() { AGORA_RUNTIME=echo AGORA_MAX_SPAWN=99 bash "$AGORA_HOME/scripts/dispatch.sh" "$@"; }
+BDSP() { AGORA_RUNTIME=echo AGORA_MAX_SPAWN=99 bash "$PKG/scripts/dispatch.sh" "$@"; }
 
 # ① 同仓链 a→b→c→…（dtask 显式链）：MAX_DEPTH=5 下 depth1..4 全放行，NEXT=5 DEPTH_EXCEEDED；env 显式收紧提前拒
 SA=$(TID "$(TITLE="同仓链根a标题够长" VERIFY=true PROJECT_DIR="$REPA" TC)")
@@ -2721,7 +2721,7 @@ LEV "$TB" dispatched | head -1 | grep -q "dispatcher_task:$TA" && LEV "$TB" disp
   && ok "账本：TB dispatched 含 dispatcher_task:$TA＋target:repb" || fail "TB 账本链缺失"
 LEV "$TC" dispatched | grep -q "dispatcher_task:$TB" && LEV "$TC" dispatched | grep -qF "target:$REPC" \
   && ok "账本：TC dispatched 含 dispatcher_task:$TB＋target:repc" || fail "TC 账本链缺失"
-PYTHONPATH="$AGORA_HOME/scripts" python3 - "$AGORA_HOME" "$TC" <<'PYEOF' && ok "dispatcher_task 链可重放：账本复算 depth(TC)=2" || fail "链重放 depth≠2"
+PYTHONPATH="$PKG/scripts" python3 - "$AGORA_HOME" "$TC" <<'PYEOF' && ok "dispatcher_task 链可重放：账本复算 depth(TC)=2" || fail "链重放 depth≠2"
 import glob, re, sys
 home, tc = sys.argv[1], sys.argv[2]
 disp = {}
@@ -2752,14 +2752,14 @@ POST borch@repa --event cancelled --task "$TB" --reason "链中途取消演练" 
 POST borch@repa --event reopened --task "$TB" --reason "上游改判收口" >/dev/null
 POST bmid@repb --event claimed --task "$TB" >/dev/null
 POST bmid@repb --event done --task "$TB" --commit HEAD --evidence "取消后收口" >/dev/null
-TASK="$TB" bash "$AGORA_HOME/scripts/history.sh" | python3 -c "
+TASK="$TB" bash "$PKG/scripts/history.sh" | python3 -c "
 import json,sys
 done=[e for e in json.load(sys.stdin)['events'] if e['event']=='done'][-1]
 assert 'borch' in (done.get('mention') or ''), done.get('mention')
 " && ok "D4：链中途 cancelled→done 自动 @ 上行 borch" || fail "D4 上行 mention 缺 borch"
 POST bleaf@repc --event claimed --task "$TC" >/dev/null
 POST bleaf@repc --event done --task "$TC" --commit HEAD --evidence "下游交付" >/dev/null
-TASK="$TC" bash "$AGORA_HOME/scripts/history.sh" | python3 -c "
+TASK="$TC" bash "$PKG/scripts/history.sh" | python3 -c "
 import json,sys
 done=[e for e in json.load(sys.stdin)['events'] if e['event']=='done'][-1]
 assert 'bmid' in (done.get('mention') or ''), done.get('mention')
@@ -2768,7 +2768,7 @@ assert 'bmid' in (done.get('mention') or ''), done.get('mention')
 # ⑤ 假 runtime EXIT≠0 秒死 → diagnosed＋恰好一次重试（try1 败→try2 成）
 BRT="$T/bretrt"; printf '#!/usr/bin/env bash\n[ "$1" = "--version" ] && exit 0\n[ "${AGORA_TRY:-}" = "1" ] && exit 9\nexit 0\n' > "$BRT"; chmod +x "$BRT"
 R5=$(TID "$(TITLE="秒死重试成功任务" VERIFY=true PROJECT_DIR="$REPA" TC)")
-OUT=$(AGORA_RUNTIME="$BRT" AGORA_MAX_SPAWN=99 bash "$AGORA_HOME/scripts/dispatch.sh" --actor borch@repa --project "$REPA" --task "$R5" 2>&1)
+OUT=$(AGORA_RUNTIME="$BRT" AGORA_MAX_SPAWN=99 bash "$PKG/scripts/dispatch.sh" --actor borch@repa --project "$REPA" --task "$R5" 2>&1)
 echo "$OUT" | grep -q '"mode":"spawned"' && ok "假 runtime EXIT≠0 秒死→恰好一次重试后 spawned" || fail "重试成功路径（$OUT）"
 R5LOG="$AGORA_HOME/$(echo "$OUT" | sed -n 's/.*"run":"\([^"]*\)".*/\1/p')"
 grep -q '^EXIT:1=9' "$R5LOG" && grep -q '^EXIT:2=0' "$R5LOG" && [ "$(grep -c '^EXIT:' "$R5LOG")" -eq 2 ] \
@@ -2796,7 +2796,7 @@ wait_live_clear() {
   return 1
 }
 O7=$(TID "$(TITLE="teardown竞态用例任务" VERIFY=true PROJECT_DIR="$REPA" TC)")
-OUT=$(AGORA_RUNTIME="$SSTUB" AGORA_VERIFY_WIN=1 AGORA_MAX_SPAWN=99 bash "$AGORA_HOME/scripts/dispatch.sh" --actor borch@repa --project "$REPA" --task "$O7")
+OUT=$(AGORA_RUNTIME="$SSTUB" AGORA_VERIFY_WIN=1 AGORA_MAX_SPAWN=99 bash "$PKG/scripts/dispatch.sh" --actor borch@repa --project "$REPA" --task "$O7")
 echo "$OUT" | grep -q '"mode":"spawned"' && ok "验证窗尽仍活=过：1s 窗口派发返回 spawned" || fail "竞态用例派发（$OUT）"
 O7LOG="$AGORA_HOME/$(echo "$OUT" | sed -n 's/.*"run":"\([^"]*\)".*/\1/p')"
 # 孤儿探针用本实例独有 stub 路径匹配（mktemp 唯一）——按 task id 全机 pgrep 会与并发 smoke 实例撞名假红（C册 gt-2153）
@@ -2806,8 +2806,8 @@ wait_live_clear && [ ! -f "$O7LOG.live" ] && ! pgrep -f "$SSTUB" >/dev/null \
   && ok "teardown 有界轮询：.live 清空＋零孤儿进程" || fail "teardown 轮询后仍有活会话/标记"
 
 echo "===== C一期（gt-b5e9）：cancel 自动推导 / redispatch 合一 / GC 窄域清理 ====="
-CANCEL() { bash "$AGORA_HOME/scripts/cancel.sh" "$@"; }
-RDISP()  { AGORA_RUNTIME=echo AGORA_MAX_SPAWN=99 bash "$AGORA_HOME/scripts/redispatch.sh" "$@"; }
+CANCEL() { bash "$PKG/scripts/cancel.sh" "$@"; }
+RDISP()  { AGORA_RUNTIME=echo AGORA_MAX_SPAWN=99 bash "$PKG/scripts/redispatch.sh" "$@"; }
 # ① cancel 省略 task：自动取当前 actor 最近无终态已派任务（dispatched∩无终态口径）＋事件附树状态
 CA1=$(TID "$(TITLE="cancel自动推导用例一" VERIFY=true PROJECT_DIR="$REPA" TC)")
 POST borch@repa --event claimed --task "$CA1" >/dev/null
@@ -2949,7 +2949,7 @@ echo
 echo "===== C 二期（gt-0a34）：kill 能力——pgid 落盘 / 进程组 kill / pid 复用防线 / abort 契约 ====="
 # K1 run 通道 pgid 落盘：阻塞 stub 派发后 .live=数字 pgid 且组长 cmdline 含任务标识（AGORA_TASK 锚点）
 K1=$(TID "$(TITLE="kill能力pgid落盘用例" VERIFY=true PROJECT_DIR="$REPA" TC)")
-OUT=$(AGORA_RUNTIME="$SSTUB" AGORA_VERIFY_WIN=1 AGORA_MAX_SPAWN=99 bash "$AGORA_HOME/scripts/dispatch.sh" --actor borch@repa --project "$REPA" --task "$K1")
+OUT=$(AGORA_RUNTIME="$SSTUB" AGORA_VERIFY_WIN=1 AGORA_MAX_SPAWN=99 bash "$PKG/scripts/dispatch.sh" --actor borch@repa --project "$REPA" --task "$K1")
 echo "$OUT" | grep -q '"mode":"spawned"' || fail "K1 派发失败（$OUT）"
 K1LOG="$AGORA_HOME/$(echo "$OUT" | sed -n 's/.*"run":"\([^"]*\)".*/\1/p')"
 K1PGID=$(cat "$K1LOG.live" 2>/dev/null)
@@ -3016,7 +3016,7 @@ storm_fixture() {  # storm_fixture <home>：init＋entity＋9 任务页（verify
   local _i
   for _i in 1 2 3 4 5 6 7 8 9; do
     local _out _tid
-    _out=$(AGORA_HOME="$_h" TITLE="并发九派夹具任务$_i 号" VERIFY=true PROJECT_DIR="$SREPO" bash "$_h/scripts/task-create.sh" 2>&1)
+    _out=$(AGORA_HOME="$_h" TITLE="并发九派夹具任务$_i 号" VERIFY=true PROJECT_DIR="$SREPO" bash "$PKG/scripts/task-create.sh" 2>&1)
     _tid=$(echo "$_out" | sed -n 's/.*"task":"\(gt-[0-9a-f]*\)".*/\1/p')
     [ -n "$_tid" ] || { fail "并发九派夹具任务页 $_i（$_out）"; return 1; }
     echo "$_tid" >> "$_h.tasks"
@@ -3027,7 +3027,7 @@ SDSP() {  # SDSP <home> <max_spawn> <task> <out 前缀>：后台发射一路 dis
   local _h="$1" _m="$2" _t="$3" _o="$4"
   (
     export AGORA_HOME="$_h" AGORA_RUNTIME=true AGORA_MAX_SPAWN="$_m"
-    bash "$_h/scripts/dispatch.sh" --actor storm@stormrepo --project "$SREPO" --task "$_t" \
+    bash "$PKG/scripts/dispatch.sh" --actor storm@stormrepo --project "$SREPO" --task "$_t" \
       > "$_o.out" 2> "$_o.err"
     echo $? > "$_o.rc"
   ) &
@@ -3047,9 +3047,9 @@ N=$(grep -h 'event:dispatched' "$SHOME_A"/log/*/*.md 2>/dev/null | wc -l)
 [ "$N" -eq 9 ] && ok "并发九派A：9 条 dispatched 全落账（零丢行）" || fail "并发九派A dispatched=$N want 9"
 N=$(grep -h 'event:dispatched' "$SHOME_A"/log/*/*.md | sed -n 's/.*run:raw\/dispatches\/\(d-[0-9a-f]*\)\.log.*/\1/p' | sort -u | wc -l)
 [ "$N" -eq 9 ] && ok "并发九派A：dispatch_id（run path）互异" || fail "并发九派A dispatch_id 去重=$N want 9"
-python3 - "$SHOME_A" <<'PYEOF' && ok "并发九派A：账本分片全量可解析（iter_events 无残缺、seq 连续、idem 无重）" || fail "并发九派A 账本完整性"
+python3 - "$SHOME_A" "$PKG" <<'PYEOF' && ok "并发九派A：账本分片全量可解析（iter_events 无残缺、seq 连续、idem 无重）" || fail "并发九派A 账本完整性"
 import sys, glob
-sys.path.insert(0, sys.argv[1] + "/scripts")
+sys.path.insert(0, sys.argv[2] + "/scripts")
 import agora_lib
 home = sys.argv[1]
 raw = 0
@@ -3125,20 +3125,20 @@ while read -r _t; do
   _i=$((_i+1))
   if [ -z "$_SPA" ] && grep -q '"mode":"spawned"' "$T/storm-b/b$_i.out" 2>/dev/null; then _SPA="$_t"; fi
 done < "$SHOME_B.tasks"
-SPOST() { AGORA_HOME="$SHOME_B" bash "$SHOME_B/scripts/post.sh" --actor storm@stormrepo --project "$(basename "$SREPO")" "$@"; }
+SPOST() { AGORA_HOME="$SHOME_B" bash "$PKG/scripts/post.sh" --actor storm@stormrepo --project "$(basename "$SREPO")" "$@"; }
 OUT=$(AGORA_HOME="$SHOME_B" AGORA_RUNTIME=true AGORA_MAX_SPAWN=3 \
-  bash "$SHOME_B/scripts/dispatch.sh" --actor storm@stormrepo --project "$SREPO" --task "$_REJ" 2>&1)
+  bash "$PKG/scripts/dispatch.sh" --actor storm@stormrepo --project "$SREPO" --task "$_REJ" 2>&1)
 echo "$OUT" | grep -q QUOTA_EXCEEDED \
   && ok "并发九派B：槽位未释放时重派第 7 个拒（账本口径占额，零 .live 也计数）" || fail "并发九派B 重派第7未拒（$OUT）"
 SPOST --event claimed --task "$_SPA" >/dev/null
 SPOST --event done --task "$_SPA" --commit HEAD --evidence "并发九派槽位释放" >/dev/null \
   || fail "并发九派B 夹具 done 失败"
 OUT=$(AGORA_HOME="$SHOME_B" AGORA_RUNTIME=true AGORA_MAX_SPAWN=3 \
-  bash "$SHOME_B/scripts/dispatch.sh" --actor storm@stormrepo --project "$SREPO" --task "$_REJ" 2>&1)
+  bash "$PKG/scripts/dispatch.sh" --actor storm@stormrepo --project "$SREPO" --task "$_REJ" 2>&1)
 echo "$OUT" | grep -q '"mode":"spawned"' \
   && ok "并发九派B：done 出集后重派第 7 个成功（槽位释放语义）" || fail "并发九派B 重派第7未放行（$OUT）"
 # 锁超时契约（ocr-R0）：外部占住 dispatch.lock → AGORA_LOCK_WAIT=1 快速失败 rc3＋JSON QUOTA_LOCK＋零落账零 spawn
-_TL=$(AGORA_HOME="$SHOME_B" TITLE="并发九派锁超时夹具任务" VERIFY=true PROJECT_DIR="$SREPO" bash "$SHOME_B/scripts/task-create.sh" \
+_TL=$(AGORA_HOME="$SHOME_B" TITLE="并发九派锁超时夹具任务" VERIFY=true PROJECT_DIR="$SREPO" bash "$PKG/scripts/task-create.sh" \
   | sed -n 's/.*"task":"\(gt-[0-9a-f]*\)".*/\1/p')
 (
   flock -w 30 7 && sleep 5      # 模拟在飞 dispatch 持有 dispatch.lock
@@ -3146,7 +3146,7 @@ _TL=$(AGORA_HOME="$SHOME_B" TITLE="并发九派锁超时夹具任务" VERIFY=tru
 _LOCKPID=$!
 sleep 0.5                        # 保证持锁方先赢
 OUT=$(AGORA_HOME="$SHOME_B" AGORA_RUNTIME=true AGORA_MAX_SPAWN=99 AGORA_LOCK_WAIT=1 \
-  bash "$SHOME_B/scripts/dispatch.sh" --actor storm@stormrepo --project "$SREPO" --task "$_TL" 2>&1); _RC=$?
+  bash "$PKG/scripts/dispatch.sh" --actor storm@stormrepo --project "$SREPO" --task "$_TL" 2>&1); _RC=$?
 wait "$_LOCKPID"
 echo "$OUT" | grep -q QUOTA_LOCK && [ "$_RC" -eq 3 ] \
   && [ -z "$(grep -h "task:$_TL" "$SHOME_B"/log/*/*.md 2>/dev/null)" ] \
@@ -3154,9 +3154,9 @@ echo "$OUT" | grep -q QUOTA_LOCK && [ "$_RC" -eq 3 ] \
   && ok "并发九派B：锁超时 fail-fast（rc3＋QUOTA_LOCK＋零落账零 spawn）" || fail "并发九派B 锁超时（rc=$_RC out=$OUT）"
 
 # 风暴后账本健康：两夹具 AGORA_HOME 各跑 doctor——seq 连续、idem 无重复、flock 正常（ALL GREEN 即内检全过）
-OUT=$(AGORA_HOME="$SHOME_A" bash "$SHOME_A/scripts/doctor.sh" 2>&1)
+OUT=$(AGORA_HOME="$SHOME_A" bash "$PKG/scripts/doctor.sh" 2>&1)
 echo "$OUT" | grep -q "ALL GREEN" && ok "并发九派doctor：场景A 夹具 ALL GREEN" || { fail "并发九派doctor A"; echo "$OUT"; }
-OUT=$(AGORA_HOME="$SHOME_B" bash "$SHOME_B/scripts/doctor.sh" 2>&1)
+OUT=$(AGORA_HOME="$SHOME_B" bash "$PKG/scripts/doctor.sh" 2>&1)
 echo "$OUT" | grep -q "ALL GREEN" && ok "并发九派doctor：场景B 夹具（含 done 终态）ALL GREEN" || { fail "并发九派doctor B"; echo "$OUT"; }
 
 echo
@@ -3197,7 +3197,7 @@ grep -q "^dispatcher: tester$" "$AGORA_HOME/wiki/tasks/$AM.md" \
   && ok "② 前置：dispatched 落 dispatcher 标注" || fail "② dispatcher 未标注（amend 权限锚点缺失）"
 printf '正文引用旧合同：verify: body-note-keep\n' >> "$AGORA_HOME/wiki/tasks/$AM.md"   # F1 回归夹具：正文同前缀行不得被 amend 连带改写
 NEWWT="$T/proj__wt-${AM}__moved"
-OUT=$(bash "$AGORA_HOME/scripts/post.sh" --actor tester@proj --project proj --event amended --task "$AM" --set "wt_dir=$NEWWT" 2>&1)
+OUT=$(bash "$PKG/scripts/post.sh" --actor tester@proj --project proj --event amended --task "$AM" --set "wt_dir=$NEWWT" 2>&1)
 grep -q "^wt_dir: $NEWWT$" "$AGORA_HOME/wiki/tasks/$AM.md" \
   && ok "② dispatcher 修正 wt_dir（页 frontmatter 原位改写）" || fail "② amend 改写（$OUT）"
 grep -q "verify: body-note-keep" "$AGORA_HOME/wiki/tasks/$AM.md" \
@@ -3212,47 +3212,54 @@ echo "$OUT" | grep -q '"result":"merged"' && grep -q a "$PROJ/amend-file" && [ !
 AM2=$(MKWT "amend权限对照任务" "true" b9b); WAM2=$(ls -d "$T"/proj__wt-${AM2}__*)
 BDSP --actor tester@proj --project "$PROJ" --task "$AM2" --dispatcher-task "$AMUP" >/dev/null 2>&1
 FM_BEFORE=$(grep '^wt_dir:' "$AGORA_HOME/wiki/tasks/$AM2.md")
-OUT=$(bash "$AGORA_HOME/scripts/post.sh" --actor rival@proj2 --project proj2 --event amended --task "$AM2" --set "wt_dir=$T/hijack" 2>&1); RC=$?
+OUT=$(bash "$PKG/scripts/post.sh" --actor rival@proj2 --project proj2 --event amended --task "$AM2" --set "wt_dir=$T/hijack" 2>&1); RC=$?
 [[ $RC -ne 0 ]] && echo "$OUT" | grep -q AMEND_FORBIDDEN \
   && [[ "$(grep '^wt_dir:' "$AGORA_HOME/wiki/tasks/$AM2.md")" == "$FM_BEFORE" ]] \
   && [ -z "$(LEV "$AM2" amended)" ] \
   && ok "② 非 dispatcher 被拒（AMEND_FORBIDDEN，页与账本零写入）" || fail "② 非 dispatcher 未拒（rc=$RC $OUT）"
-bash "$AGORA_HOME/scripts/post.sh" --actor tester@proj --project proj --event amended --task "$AM2" 2>/dev/null
+bash "$PKG/scripts/post.sh" --actor tester@proj --project proj --event amended --task "$AM2" 2>/dev/null
 [[ $? -eq 2 ]] && ok "② amended 缺 --set 被拒(rc=2)" || fail "② 缺 --set 未拒"
-bash "$AGORA_HOME/scripts/post.sh" --actor tester@proj --project proj --event amended --task "$AM2" --set "title=hijack" 2>/dev/null
+bash "$PKG/scripts/post.sh" --actor tester@proj --project proj --event amended --task "$AM2" --set "title=hijack" 2>/dev/null
 [[ $? -eq 2 ]] && ok "② 非机械字段（title）被拒" || fail "② 非机械字段未拒"
-bash "$AGORA_HOME/scripts/post.sh" --actor tester@proj --project proj --event proposal --body x --set "wt_dir=/x" 2>/dev/null
+bash "$PKG/scripts/post.sh" --actor tester@proj --project proj --event proposal --body x --set "wt_dir=/x" 2>/dev/null
 [[ $? -eq 2 ]] && ok "② F3 回归：非 amended 事件带 --set 显式拒" || fail "② F3 非 amended 带 set 未拒"
-OUT=$(bash "$AGORA_HOME/scripts/post.sh" --actor tester@proj --project proj --event amended --task "$AM2" --set "wt_dir=$T/elsewhere/steal" 2>&1); RC=$?
+OUT=$(bash "$PKG/scripts/post.sh" --actor tester@proj --project proj --event amended --task "$AM2" --set "wt_dir=$T/elsewhere/steal" 2>&1); RC=$?
 [[ $RC -ne 0 ]] && echo "$OUT" | grep -q "主仓同级" && [[ "$(grep '^wt_dir:' "$AGORA_HOME/wiki/tasks/$AM2.md")" == "$FM_BEFORE" ]] \
   && ok "② C-F3 回归：wt_dir 越主仓同级命名域被拒（页零写入）" || fail "② C-F3 未拒（rc=$RC $OUT）"
 # C-F2 回归：amend verify 换约后 done 的 derived 显式标注（评审者可见，不阻断）
 AM3=$(TID "$(TITLE="amend换约标注任务标题够长" VERIFY=true PROJECT_DIR="$PROJ" TC)")
-bash "$AGORA_HOME/scripts/post.sh" --actor tester@proj --project proj --event dispatched --task "$AM3" --target "$PROJ" --child tester --run "raw/dispatches/d-b9am3.log" >/dev/null
-OUT=$(bash "$AGORA_HOME/scripts/post.sh" --actor tester@proj --project proj --event amended --task "$AM3" --set "verify=true" 2>&1)
+bash "$PKG/scripts/post.sh" --actor tester@proj --project proj --event dispatched --task "$AM3" --target "$PROJ" --child tester --run "raw/dispatches/d-b9am3.log" >/dev/null
+OUT=$(bash "$PKG/scripts/post.sh" --actor tester@proj --project proj --event amended --task "$AM3" --set "verify=true" 2>&1)
 grep -q "^verify: true$" "$AGORA_HOME/wiki/tasks/$AM3.md" \
   && ok "② C-F2 前置：amend verify 换约落页" || fail "② C-F2 前置（$OUT）"
-OUT=$(bash "$AGORA_HOME/scripts/post.sh" --actor tester@proj --project proj --event done --task "$AM3" --commit HEAD --evidence x)
+OUT=$(bash "$PKG/scripts/post.sh" --actor tester@proj --project proj --event done --task "$AM3" --commit HEAD --evidence x)
 echo "$OUT" | grep -q "verify_amended" \
   && ok "② C-F2 回归：done derived 显式标注 verify_amended" || fail "② C-F2 标注缺失（$OUT）"
 # ocr-E 回归：值级边界（转义往返 / | 拒 / 空值拒）——落 AM2（无 merge 夹具耦合）
-OUT=$(bash "$AGORA_HOME/scripts/post.sh" --actor tester@proj --project proj --event amended --task "$AM2" --set 'verify=bash a&b\c.sh' 2>&1)
+OUT=$(bash "$PKG/scripts/post.sh" --actor tester@proj --project proj --event amended --task "$AM2" --set 'verify=bash a&b\c.sh' 2>&1)
 grep -Fq 'verify: bash a&b\c.sh' "$AGORA_HOME/wiki/tasks/$AM2.md" \
   && ok "② ocr-E：set 值 & 与反斜杠 sed 转义往返无损" || fail "② ocr-E 转义（$OUT）"
-bash "$AGORA_HOME/scripts/post.sh" --actor tester@proj --project proj --event amended --task "$AM2" --set 'wt_dir=/a|b' 2>/dev/null
-[[ $? -eq 2 ]] && ok "② ocr-E：set 值含 | 被拒(rc=2)" || fail "② ocr-E | 未拒"
-bash "$AGORA_HOME/scripts/post.sh" --actor tester@proj --project proj --event amended --task "$AM2" --set 'wt_dir=' 2>/dev/null
+# gt-064b 回移：set 竖线放行（非前导指示符）——含管道 verify 的 amend 受理链
+OUT=$(bash "$PKG/scripts/post.sh" --actor tester@proj --project proj --event amended --task "$AM2" --set 'verify=true | true' 2>&1); RC=$?
+[[ $RC -eq 0 ]] && grep -Fq 'verify: true | true' "$AGORA_HOME/wiki/tasks/$AM2.md" \
+  && ok "② gt-064b：set 值含 | 放行且页 frontmatter 原值落页" || fail "② gt-064b 竖线放行链失败(rc=$RC $OUT)"
+B64=$(printf '%s' 'true | true' | base64 | tr -d '\n')
+LEV "$AM2" amended | grep -qF "set:verify=$B64" \
+  && ok "② gt-064b：账本留痕 key 明文＋值 b64（事件行零裸管道）" || fail "② gt-064b 留痕形态不符"
+bash "$PKG/scripts/post.sh" --actor tester@proj --project proj --event amended --task "$AM2" --set 'wt_dir=/a|b' 2>/dev/null
+[[ $? -eq 2 ]] && ok "② ocr-E：set 值 wt_dir 含 | 仍被拒(rc=2，命名域闸)" || fail "② ocr-E wt_dir | 未拒"
+bash "$PKG/scripts/post.sh" --actor tester@proj --project proj --event amended --task "$AM2" --set 'wt_dir=' 2>/dev/null
 [[ $? -eq 2 ]] && ok "② ocr-E：set 空值被拒(rc=2)" || fail "② ocr-E 空值未拒"
 # ocr2-H1/H2 回归：本任务专属命名＋project_dir 名册域＋混改窗
-OUT=$(bash "$AGORA_HOME/scripts/post.sh" --actor tester@proj --project proj --event amended --task "$AM2" --set "wt_dir=$T/proj__wt-gt-9999__0000" 2>&1); RC=$?
+OUT=$(bash "$PKG/scripts/post.sh" --actor tester@proj --project proj --event amended --task "$AM2" --set "wt_dir=$T/proj__wt-gt-9999__0000" 2>&1); RC=$?
 [[ $RC -ne 0 ]] && echo "$OUT" | grep -q "本任务专属" \
   && ok "② ocr2-H1：wt_dir 指他任务树名被拒（basename 钉死）" || fail "② ocr2-H1 未拒（rc=$RC $OUT）"
 UNREG_B9="/tmp/opencode/gt-b9fb-unreg-probe"; mkdir -p "$UNREG_B9"   # gt-583b 后 /tmp 族 server 侧拒注册；此处更双保险断言 post.sh 侧名册外 project_dir 被拒
-OUT=$(bash "$AGORA_HOME/scripts/post.sh" --actor tester@proj --project proj --event amended --task "$AM2" --set "project_dir=$UNREG_B9" 2>&1); RC=$?
+OUT=$(bash "$PKG/scripts/post.sh" --actor tester@proj --project proj --event amended --task "$AM2" --set "project_dir=$UNREG_B9" 2>&1); RC=$?
 rm -rf "$UNREG_B9"
 [[ $RC -ne 0 ]] && echo "$OUT" | grep -q "名册已注册" \
   && ok "② ocr2-H2：project_dir 改名册外目录被拒（锚点不可迁）" || fail "② ocr2-H2 未拒（rc=$RC $OUT）"
-OUT=$(bash "$AGORA_HOME/scripts/post.sh" --actor tester@proj --project proj --event amended --task "$AM2" --set "project_dir=$PROJ" --set "wt_dir=$NEWWT" 2>&1); RC=$?
+OUT=$(bash "$PKG/scripts/post.sh" --actor tester@proj --project proj --event amended --task "$AM2" --set "project_dir=$PROJ" --set "wt_dir=$NEWWT" 2>&1); RC=$?
 [[ $RC -ne 0 ]] && echo "$OUT" | grep -q "混改" \
   && ok "② ocr2：project_dir×wt_dir 同次混改被拒（漂移窗）" || fail "② ocr2 混改未拒（rc=$RC $OUT）"
 # MCP 面：amended 经 agora_post 工具（枚举＋set 透传）——dispatcher 修正 verify 合同
@@ -3276,7 +3283,7 @@ SH9="$AGORA_HOME/log/$(date +%F)/proj.md"
 mkdir -p "$(dirname "$SH9")"
 printf -- '- seq:1 | ts:%s | actor:idemdup@p9 | event:proposal | idem:dupb9 | seen:p9@0\n' "$(date --iso-8601=seconds)" >> "$SH9"
 printf -- '- seq:2 | ts:%s | actor:idemdup@p9 | event:proposal | idem:dupb9 | seen:p9@0\n' "$(date --iso-8601=seconds)" >> "$SH9"
-OUT=$(bash "$AGORA_HOME/scripts/doctor.sh" 2>&1)
+OUT=$(bash "$PKG/scripts/doctor.sh" 2>&1)
 echo "$OUT" | grep -q "发 diagnosed 标注无效行 ref" && echo "$OUT" | grep -q "doctor-runbook §idem" \
   && ! echo "$OUT" | grep -q "删除后续行" \
   && ok "③ doctor idem 文案与 runbook 一致（标注不删行）" || fail "③ doctor idem 文案（$(echo "$OUT" | grep "idem" | head -2)）"
@@ -3294,9 +3301,9 @@ QBREPO="$T/qa-repo2"; mkdir -p "$QBREPO" && (cd "$QBREPO" && git init -q .)
 mkdir -p "$QA_HOME/wiki/entities"
 printf -- '---\nname: qa\ndirs:\n  - %s\n  - %s\ncan_spawn: true\n---\n' "$QAREPO" "$QBREPO" > "$QA_HOME/wiki/entities/qa.md"
 (cd "$QA_HOME" && git add -A && AGORA_MECHANICAL=1 git commit -qm entities >/dev/null)
-QAPOST() { AGORA_HOME="$QA_HOME" bash "$QA_HOME/scripts/post.sh" --actor "$1" --project "$2" "${@:3}"; }
-QATC() { TID "$(AGORA_HOME="$QA_HOME" TITLE="$1" VERIFY=true PROJECT_DIR="$QAREPO" bash "$QA_HOME/scripts/task-create.sh")"; }
-QADSP() { AGORA_RUNTIME=echo AGORA_HOME="$QA_HOME" bash "$QA_HOME/scripts/dispatch.sh" --actor qa@qa-repo --project "$QAREPO" --task "$1"; }
+QAPOST() { AGORA_HOME="$QA_HOME" bash "$PKG/scripts/post.sh" --actor "$1" --project "$2" "${@:3}"; }
+QATC() { TID "$(AGORA_HOME="$QA_HOME" TITLE="$1" VERIFY=true PROJECT_DIR="$QAREPO" bash "$PKG/scripts/task-create.sh")"; }
+QADSP() { AGORA_RUNTIME=echo AGORA_HOME="$QA_HOME" bash "$PKG/scripts/dispatch.sh" --actor qa@qa-repo --project "$QAREPO" --task "$1"; }
 # 主断言：A 在飞（同项目、无链证据）→ 派 B 不得挂 dispatcher_task:A
 QA_A=$(QATC "qa碰撞在飞任务A")
 QAPOST qa@qa-repo qa-repo --event dispatched --task "$QA_A" --target "$QAREPO" --child qa --run "raw/dispatches/d-qa-a.log" >/dev/null
@@ -3308,7 +3315,7 @@ echo "$QOUT_B" | grep -q '"mode":"spawned"' && ok "场景a：B 派发放行" || 
   && ok "场景a：同 actor 同项目 claimed 不推导为链（B 不挂 dispatcher_task:A）" \
   || fail "场景a：B 被误挂 dispatcher_task:A（actor 碰撞推导未排除同项目 claimed）"
 # 对照1：跨项目 claimed 仍推导为链（真链保留）。C 事件落 qa-repo 分片（扫描序早于后文的 E）
-QA_C=$(TID "$(AGORA_HOME="$QA_HOME" TITLE="qa跨仓在飞C" VERIFY=true PROJECT_DIR="$QBREPO" bash "$QA_HOME/scripts/task-create.sh")")
+QA_C=$(TID "$(AGORA_HOME="$QA_HOME" TITLE="qa跨仓在飞C" VERIFY=true PROJECT_DIR="$QBREPO" bash "$PKG/scripts/task-create.sh")")
 QAPOST qa@qa-repo qa-repo --event dispatched --task "$QA_C" --target "$QBREPO" --child qa --run "raw/dispatches/d-qa-c.log" >/dev/null
 QAPOST qa@qa-repo qa-repo --event claimed --task "$QA_C" >/dev/null
 QA_D=$(QATC "qa跨仓新派D")
@@ -3337,8 +3344,8 @@ QGREPO="$T/qb-repo"; mkdir -p "$QGREPO"
 mkdir -p "$QB_HOME/wiki/entities"
 printf -- '---\nname: mer\ndirs:\n  - %s\ncan_spawn: true\n---\n' "$QGREPO" > "$QB_HOME/wiki/entities/mer.md"
 (cd "$QB_HOME" && git add -A && AGORA_MECHANICAL=1 git commit -qm entities >/dev/null)
-QBPOST() { AGORA_HOME="$QB_HOME" bash "$QB_HOME/scripts/post.sh" --actor mer@qb-repo --project qb-repo "$@"; }
-QBTC() { TID "$(AGORA_HOME="$QB_HOME" TITLE="$1" VERIFY=true PROJECT_DIR="$QGREPO" WT=1 bash "$QB_HOME/scripts/task-create.sh")"; }
+QBPOST() { AGORA_HOME="$QB_HOME" bash "$PKG/scripts/post.sh" --actor mer@qb-repo --project qb-repo "$@"; }
+QBTC() { TID "$(AGORA_HOME="$QB_HOME" TITLE="$1" VERIFY=true PROJECT_DIR="$QGREPO" WT=1 bash "$PKG/scripts/task-create.sh")"; }
 QBCM() { echo "$2" > "$1/$3"; git -C "$1" add -A >/dev/null; git -C "$1" -c user.name=t -c user.email=t@l commit -qm "$3"; }
 # b1：上游分支在场且 tip 已是 main 祖先（手动 ff 并主、分支保留）→ 下游合并目标回落 main
 QBU1=$(QBTC "qb上游U1"); QWU1=$(ls -d "$T"/qb-repo__wt-${QBU1}__*)
@@ -3349,7 +3356,7 @@ QBPOST --event dispatched --task "$QBD1" --target "$QGREPO" --child mer --run "r
 git -C "$QGREPO" merge -q --ff-only "wt/$QBU1"   # 上游并入 main（绕过 merge.sh，分支 wt/U1 保留在场）
 UTIP1=$(git -C "$QGREPO" rev-parse "wt/$QBU1")
 DC1=$(git -C "$QGREPO" rev-parse "wt/$QBD1")
-QOUT_B1=$(AGORA_HOME="$QB_HOME" bash "$QB_HOME/scripts/merge.sh" --actor mer@qb-repo --task "$QBD1" 2>&1)
+QOUT_B1=$(AGORA_HOME="$QB_HOME" bash "$PKG/scripts/merge.sh" --actor mer@qb-repo --task "$QBD1" 2>&1)
 echo "$QOUT_B1" | grep -q '"result":"merged"' && ok "场景b1：下游合并闭环" || fail "场景b1：下游合并失败（$QOUT_B1）"
 QLEDEV "$QB_HOME" "$QBD1" merged | grep -q "branch:main" \
   && ok "场景b1：合并目标回落 main（上游 tip 已是 main 祖先不锚上游分支）" \
@@ -3364,13 +3371,13 @@ QBD2=$(QBTC "qb下游D2"); QWD2=$(ls -d "$T"/qb-repo__wt-${QBD2}__*)
 QBCM "$QWU2" up up2; QBCM "$QWD2" down down2
 git -C "$QWD2" rebase -q "wt/$QBU2"
 QBPOST --event dispatched --task "$QBD2" --target "$QGREPO" --child mer --run "raw/dispatches/d-qb-d2.log" --dispatcher-task "$QBU2" >/dev/null
-AGORA_HOME="$QB_HOME" bash "$QB_HOME/scripts/merge.sh" --actor mer@qb-repo --task "$QBU2" >/dev/null 2>&1   # 上游正常并主（分支/树清理）
+AGORA_HOME="$QB_HOME" bash "$PKG/scripts/merge.sh" --actor mer@qb-repo --task "$QBU2" >/dev/null 2>&1   # 上游正常并主（分支/树清理）
 if [ -z "$(git -C "$QGREPO" branch --list "wt/$QBU2")" ] && [ ! -d "$QWU2" ]; then
   ok "场景b2前置：上游合并后分支树已清"
 else
   fail "场景b2前置：上游清理未生效（branch=$(git -C "$QGREPO" branch --list "wt/$QBU2") dir=$QWU2）"
 fi
-QOUT_B2=$(AGORA_HOME="$QB_HOME" bash "$QB_HOME/scripts/merge.sh" --actor mer@qb-repo --task "$QBD2" 2>&1)
+QOUT_B2=$(AGORA_HOME="$QB_HOME" bash "$PKG/scripts/merge.sh" --actor mer@qb-repo --task "$QBD2" 2>&1)
 echo "$QOUT_B2" | grep -q '"result":"merged"' && ok "场景b2：done 未合并下游补票闭环" || fail "场景b2：下游合并失败（$QOUT_B2）"
 QLEDEV "$QB_HOME" "$QBD2" merged | grep -q "branch:main" \
   && ok "场景b2：上游已并（分支已清）时目标回落 main（幂等票落账）" \
@@ -3388,16 +3395,16 @@ QCREPO="$T/qc-repo"; mkdir -p "$QCREPO"
 mkdir -p "$QC_HOME/wiki/entities"
 printf -- '---\nname: rec\ndirs:\n  - %s\ncan_spawn: true\n---\n' "$QCREPO" > "$QC_HOME/wiki/entities/rec.md"
 (cd "$QC_HOME" && git add -A && AGORA_MECHANICAL=1 git commit -qm entities >/dev/null)
-QCX=$(TID "$(AGORA_HOME="$QC_HOME" TITLE="qc自锁任务X" VERIFY=true PROJECT_DIR="$QCREPO" bash "$QC_HOME/scripts/task-create.sh")")
-QCY=$(TID "$(AGORA_HOME="$QC_HOME" TITLE="qc他任务Y" VERIFY=true PROJECT_DIR="$QCREPO" bash "$QC_HOME/scripts/task-create.sh")")
-AGORA_HOME="$QC_HOME" bash "$QC_HOME/scripts/post.sh" --actor rec@qc-repo --project qc-repo --event dispatched --task "$QCX" --target "$QCREPO" --child rec --run "raw/dispatches/d-qc-x.log" >/dev/null
+QCX=$(TID "$(AGORA_HOME="$QC_HOME" TITLE="qc自锁任务X" VERIFY=true PROJECT_DIR="$QCREPO" bash "$PKG/scripts/task-create.sh")")
+QCY=$(TID "$(AGORA_HOME="$QC_HOME" TITLE="qc他任务Y" VERIFY=true PROJECT_DIR="$QCREPO" bash "$PKG/scripts/task-create.sh")")
+AGORA_HOME="$QC_HOME" bash "$PKG/scripts/post.sh" --actor rec@qc-repo --project qc-repo --event dispatched --task "$QCX" --target "$QCREPO" --child rec --run "raw/dispatches/d-qc-x.log" >/dev/null
 OUT=$(AGORA_HOME="$QC_HOME" AGORA_RUNTIME=true AGORA_MAX_SPAWN=1 \
-  bash "$QC_HOME/scripts/dispatch.sh" --actor rec@qc-repo --project "$QCREPO" --task "$QCX" 2>&1)
+  bash "$PKG/scripts/dispatch.sh" --actor rec@qc-repo --project "$QCREPO" --task "$QCX" 2>&1)
 echo "$OUT" | grep -q '"mode":"spawned"' \
   && ok "场景c：X 自身活跃占槽时重派 X 放行（恢复路径豁免自身槽位）" \
   || fail "场景c：X 重派被自身旧槽锁死 QUOTA（$OUT）"
 OUT=$(AGORA_HOME="$QC_HOME" AGORA_RUNTIME=true AGORA_MAX_SPAWN=1 \
-  bash "$QC_HOME/scripts/dispatch.sh" --actor rec@qc-repo --project "$QCREPO" --task "$QCY" 2>&1)
+  bash "$PKG/scripts/dispatch.sh" --actor rec@qc-repo --project "$QCREPO" --task "$QCY" 2>&1)
 echo "$OUT" | grep -q QUOTA_EXCEEDED \
   && ok "场景c：他任务 Y 仍被拒（豁免仅及自身，闸门不虚开）" \
   || fail "场景c：Y 未被拒——豁免越界（$OUT）"
@@ -3441,9 +3448,9 @@ esac
 echo "not found" >&2; exit 1
 STUB
 chmod +x "$QDBIN/opencode"
-QDPOLL() { PATH="$QDBIN:$PATH" QD_FAKE="$QDFAKE" AGORA_HOME="$QD_HOME" bash "$QD_HOME/scripts/poll.sh" 2>/dev/null; }
-QDID=$(TID "$(AGORA_HOME="$QD_HOME" TITLE="qd idle停转任务" VERIFY=true PROJECT_DIR="$QDREPO" WT=1 bash "$QD_HOME/scripts/task-create.sh")")
-AGORA_HOME="$QD_HOME" bash "$QD_HOME/scripts/post.sh" --actor idler@qd-repo --project qd-repo --event dispatched --task "$QDID" --target "$QDREPO" --child idler --run "raw/dispatches/d-qd-idle.log" --session ses_qdidle1 >/dev/null
+QDPOLL() { PATH="$QDBIN:$PATH" QD_FAKE="$QDFAKE" AGORA_HOME="$QD_HOME" bash "$PKG/scripts/poll.sh" 2>/dev/null; }
+QDID=$(TID "$(AGORA_HOME="$QD_HOME" TITLE="qd idle停转任务" VERIFY=true PROJECT_DIR="$QDREPO" WT=1 bash "$PKG/scripts/task-create.sh")")
+AGORA_HOME="$QD_HOME" bash "$PKG/scripts/post.sh" --actor idler@qd-repo --project qd-repo --event dispatched --task "$QDID" --target "$QDREPO" --child idler --run "raw/dispatches/d-qd-idle.log" --session ses_qdidle1 >/dev/null
 touch "$QD_HOME/raw/dispatches/d-qd-idle.log"   # run log 在场（不撞孤儿档）
 : > "$QDFAKE/prompts.log"
 QDPOLL >/dev/null   # 首轮：建立 idle 跟踪基线（不 kick）
@@ -3486,8 +3493,8 @@ N4=$(wc -l < "$QDFAKE/prompts.log")
 [ "$N3" = "$N4" ] && ok "场景d对照：status=running 不 kick" || fail "场景d对照：running 误 kick（$N3→$N4）"
 # 超限升级：已 kick 超过 REDISPATCH_MAX 次 → escalated 而不再 inject
 printf 'idle' > "$QDFAKE/ctrl"
-QDID2=$(TID "$(AGORA_HOME="$QD_HOME" TITLE="qd idle超限任务" VERIFY=true PROJECT_DIR="$QDREPO" WT=1 bash "$QD_HOME/scripts/task-create.sh")")
-AGORA_HOME="$QD_HOME" bash "$QD_HOME/scripts/post.sh" --actor idler@qd-repo --project qd-repo --event dispatched --task "$QDID2" --target "$QDREPO" --child idler --run "raw/dispatches/d-qd-idle2.log" --session ses_qdidle2 >/dev/null
+QDID2=$(TID "$(AGORA_HOME="$QD_HOME" TITLE="qd idle超限任务" VERIFY=true PROJECT_DIR="$QDREPO" WT=1 bash "$PKG/scripts/task-create.sh")")
+AGORA_HOME="$QD_HOME" bash "$PKG/scripts/post.sh" --actor idler@qd-repo --project qd-repo --event dispatched --task "$QDID2" --target "$QDREPO" --child idler --run "raw/dispatches/d-qd-idle2.log" --session ses_qdidle2 >/dev/null
 touch "$QD_HOME/raw/dispatches/d-qd-idle2.log"
 python3 - "$QD_HOME" "$QDID2" <<'PYEOF'
 import json, sys, time
@@ -3599,9 +3606,9 @@ PYEOF
 }
 DDRILL --scenario bogus >/dev/null 2>&1; [[ $? -eq 2 ]] && ok "drill 非法场景 rc2" || fail "drill 非法场景 rc 非 2"
 # ① 忙碌让行：在飞波次在场 → rc2 零扰动（不建仓不举实体，报告 skipped）
-DBT=$(TITLE="drill busy 种子" VERIFY="true" PROJECT_DIR="$PROJ" AGORA_HOME="$DAH" bash "$DAH/scripts/task-create.sh")
+DBT=$(TITLE="drill busy 种子" VERIFY="true" PROJECT_DIR="$PROJ" AGORA_HOME="$DAH" bash "$PKG/scripts/task-create.sh")
 DBT=$(echo "$DBT" | sed -n 's/.*"task":"\(gt-[0-9a-f]*\)".*/\1/p')
-AGORA_HOME="$DAH" bash "$DAH/scripts/post.sh" --actor seed@proj --project proj --event dispatched \
+AGORA_HOME="$DAH" bash "$PKG/scripts/post.sh" --actor seed@proj --project proj --event dispatched \
   --task "$DBT" --target "$PROJ" --child seed --run "raw/dispatches/d-drillbusy.log" >/dev/null
 DOUT=$(DDRILL --scenario quota 2>&1); DRC=$?
 [[ $DRC -eq 2 ]] && ok "drill 忙碌让行 rc2" || fail "drill 忙碌让行 rc2（got $DRC）"
@@ -3613,7 +3620,7 @@ import json, sys
 r = json.load(open(sys.argv[1]))
 assert r.get("skipped", "").startswith("busy"), r
 PYEOF
-AGORA_HOME="$DAH" bash "$DAH/scripts/post.sh" --actor seed@proj --project proj --event cancelled \
+AGORA_HOME="$DAH" bash "$PKG/scripts/post.sh" --actor seed@proj --project proj --event cancelled \
   --task "$DBT" --reason "drill 清场" >/dev/null
 # ② quota：打满 fail-closed 零残留 → 复通（报告 schema 顺带首验）
 DDRILL --scenario quota >/dev/null 2>&1; [[ $? -eq 0 ]] && ok "quota 场景 rc0" || fail "quota 场景 rc 非 0"
@@ -3658,9 +3665,9 @@ WMISS=0; WRUNS=$(DLEV "$DWID" dispatched | sed -n 's/.*| run:\([^ |]*\).*/\1/p' 
 for WR in $WRUNS; do [ -f "$DAH/$WR" ] || WMISS=1; done
 [ "$WMISS" -eq 0 ] && ok "wave run log 齐全（无孤儿）" || fail "wave 孤儿/缺 log（$WRUNS）"
 [ "$(DLEV "$DWID" claimed | grep -c event:claimed)" -eq 0 ] && ok "wave 桩子会话零认领（无双认领基线）" || fail "wave 意外认领"
-DC1=$(AGORA_HOME="$DAH" bash "$DAH/scripts/post.sh" --actor wchild1@agora-drill --project agora-drill --event claimed --task "$DWID" 2>&1)
+DC1=$(AGORA_HOME="$DAH" bash "$PKG/scripts/post.sh" --actor wchild1@agora-drill --project agora-drill --event claimed --task "$DWID" 2>&1)
 echo "$DC1" | grep -q claim_conflict && fail "wave 首认领误报冲突" || ok "wave 首认领无冲突"
-DC2=$(AGORA_HOME="$DAH" bash "$DAH/scripts/post.sh" --actor wchild2@agora-drill --project agora-drill --event claimed --task "$DWID" 2>&1)
+DC2=$(AGORA_HOME="$DAH" bash "$PKG/scripts/post.sh" --actor wchild2@agora-drill --project agora-drill --event claimed --task "$DWID" 2>&1)
 echo "$DC2" | grep -q "claim_conflict:wchild1@agora-drill" && ok "wave 双认领冲突派生" || fail "wave 双认领未派生冲突（$DC2）"
 # ⑥ --scenario all 退出码合同＋全报告 schema
 DDRILL --scenario all >/dev/null 2>&1; [[ $? -eq 0 ]] && ok "all 场景 rc0" || fail "all 场景 rc 非 0"

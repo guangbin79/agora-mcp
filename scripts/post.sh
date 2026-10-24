@@ -3,6 +3,7 @@
 # 用法: post.sh --actor NAME@PROJ --project PROJ --event TYPE [条件字段...]
 # 输出: stdout 为 JSON；失败时 stderr 为 {"code":...,"message":...} 且退出码非零
 set -euo pipefail
+SCRIPTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"   # 单源自定位：兄弟脚本/库一律本仓 scripts（gt-f6e4）
 
 AGORA_HOME="${AGORA_HOME:-$HOME/agora}"
 LOCK_WAIT="${AGORA_LOCK_WAIT:-5}"
@@ -81,7 +82,7 @@ fi
 _wt_dir_guard() {   # $1=value $2=page —— ocr2-H1/H2：主仓同级＋<REPO>__wt-<TASK>__* 本任务专属命名；锚点 project_dir 需名册注册域
   local _v="$1" _pg="$2" _pd _mr _vd
   _pd=$(sed -n "2,/^---\$/p" "$_pg" | grep -m1 '^project_dir:' | sed 's/^project_dir:[[:space:]]*//; s/[[:space:]]*$//; s/^"\(.*\)"$/\1/')
-  _mr=$(PYTHONPATH="$AGORA_HOME/scripts" python3 -c 'import sys, agora_lib
+  _mr=$(PYTHONPATH="$SCRIPTS_DIR" python3 -c 'import sys, agora_lib
 p = sys.argv[1]; m = agora_lib.main_repo_of(p); print(m or p)' "${_pd:-/nonexistent}" 2>/dev/null || true)
   [[ -n "$_mr" && -d "$_mr" ]] || fail VALIDATION_FAILED "wt_dir 修正需任务页 project_dir 可解析主仓"
   _vd=$(realpath "$(dirname "$_v")" 2>/dev/null) || _vd=$(dirname "$_v")
@@ -112,21 +113,28 @@ if [[ "$EVENT" == amended ]]; then
       _wt_dir_guard "$_V" "$PAGE_A"
     fi
     if [[ "$_K" == project_dir ]]; then   # ocr2-H2：project_dir 是命名域锚点，改它须落名册注册域（防两跳迁锚绕过 C-F3）
-      _ER=$(PYTHONPATH="$AGORA_HOME/scripts" python3 - "$AGORA_HOME" "$_V" <<'PYEOF'
+      _ER=$(PYTHONPATH="$SCRIPTS_DIR" python3 - "$AGORA_HOME" "$_V" <<'PYEOF'
 import sys
-sys.path.insert(0, sys.argv[1] + "/scripts")
-import agora_lib
+import agora_lib   # 经 PYTHONPATH=本仓 scripts 导入（单源，gt-f6e4）
 r = agora_lib.resolve_entity(sys.argv[1], sys.argv[2])
 print(r[0] if r else "")
 PYEOF
 )
       [[ -n "$_ER" ]] || fail VALIDATION_FAILED "project_dir 修正须指向名册已注册目录（防迁锚绕过命名域）: $_V"
     fi
-    [[ "$_V" == *"|"* || "$_V" == *$'\n'* ]] && fail VALIDATION_FAILED "set 值含 | 或换行"
+    # gt-064b：| 放行（页 YAML 域合法）——账本留痕走 b64 转义（见 SETS_ENC）；换行/回车仍拒（页单行＋账本 ABNF，对齐 task-create 不变量）
+    [[ "$_V" == *$'\n'* || "$_V" == *$'\r'* ]] && fail VALIDATION_FAILED "set 值含换行/回车"
+    _VT="${_V#"${_V%%[![:space:]]*}"}"   # R2 评审：先去前导空白再判——YAML 分隔空格不改变首标量字符
+    [[ "$_VT" == [\|\>\&\*#\%\@\`]* ]] && fail VALIDATION_FAILED "set 值不得以 YAML 指示符开头（| > & * # % @ 反引号，含前导空白变体）: $_K"   # R1/R2 评审：块标量/锚/注释指示符致严格解析器下契约失真；[ { ! 等合法命令起始符为记录在案残留（根治=落页加引号，涉他脚本读者，另立任务）
     [[ -n "$_V" ]] || fail VALIDATION_FAILED "set 值不得为空: $_K"   # ocr-B：空值静默造不一致契约态（wt_dir=空→wt:true 残留）
     [[ "$_K" == verify || "$_V" != *".."* ]] || fail VALIDATION_FAILED "$_K 路径不得含 ..: $_V"
   done
-  [[ -z "$BODY" ]] && BODY=$(printf '%s' "${SETS[*]}")   # 留痕行缺省携带修正对
+  # gt-064b 留痕转义：值落事件行一律 key=base64(值)——| 受事件行域禁令，b64 后零 |；key 明文保 C-F2 set:verify= 锚
+  SETS_ENC=()
+  for _s in "${SETS[@]}"; do
+    SETS_ENC+=("$(printf '%s=' "${_s%%=*}")$(printf '%s' "${_s#*=}" | base64 | tr -d '\n')")
+  done
+  [[ -z "$BODY" ]] && BODY=$(printf '%s' "${SETS_ENC[*]}")   # 留痕行缺省携带修正对（b64 形态）
   _SETS_IN_IDEM=1   # 标记：idem 段与 LINE 段消费（sets 必须进 idem 材料，防同 body 异 set 撞 dedup 吞修正）
 fi
 
@@ -148,7 +156,7 @@ if [[ "$EVENT" == done ]]; then
   # 重建段与 dispatch.sh 预检重建同锁互斥（评审 B-1/ocr-6：prune/add 毫秒级并发窗收敛）
   if [[ -n "$WTDIR" && ! -d "$WTDIR" ]]; then
     RB_IN=$(realpath "${PROJDIR:-$WTDIR}" 2>/dev/null) || RB_IN="${PROJDIR:-$WTDIR}"   # 父链删净时保底裸路径（评审 R2-F1：stderr JSON 契约＋cwd 污染）
-    WT_MAIN=$(PYTHONPATH="$AGORA_HOME/scripts" python3 -c 'import sys, agora_lib
+    WT_MAIN=$(PYTHONPATH="$SCRIPTS_DIR" python3 -c 'import sys, agora_lib
 p = sys.argv[1]; m = agora_lib.main_repo_of(p); print(m or p)' "$RB_IN")
     [[ -e "$WT_MAIN/.git" ]] || fail VERIFY_FAILED "verify 锚点重建失败：主仓不可用: $WT_MAIN" 4
     RB_RC=0
@@ -207,7 +215,7 @@ exec 9>"$AGORA_HOME/.git/post.lock"
 flock -w "$LOCK_WAIT" 9 || fail LOCK_TIMEOUT "flock timeout after ${LOCK_WAIT}s；可安全重试，反复失败先 agora_doctor" 3
 
 # 同步纪律：写前必见全网最新（sync.sh 在无远端时零开销返回 off）
-SYNC_PRE=$(bash "$AGORA_HOME/scripts/sync.sh" pre 2>/dev/null || true)
+SYNC_PRE=$(bash "$SCRIPTS_DIR/sync.sh" pre 2>/dev/null || true)
 SW=$(echo "$SYNC_PRE" | sed -n 's/.*"warn:\([a-z_]*\)".*/\1/p')
 [[ -n "$SW" ]] && DERIVED+=("sync_warn:$SW")
 
@@ -285,12 +293,12 @@ LINE="- seq:$SEQ | ts:$TS | actor:$ACTOR | event:$EVENT | idem:$IDEM | seen:$PRO
 [[ -n "${VERIFY_NOTE:-}" ]] && LINE="$LINE | verify_output:$VERIFY_NOTE"
 [[ -n "$BODY" ]] && LINE="$LINE | body:$BODY"
 [[ -n "$MENTION" ]] && LINE="$LINE | mention:$MENTION"
-[[ -n "${_SETS_IN_IDEM:-}" ]] && LINE="$LINE | set:$(printf '%s' "${SETS[*]}")"   # ocr2：修正对专用留痕字段（C-F2 判读锚点，不赖 body 缺省）
+[[ -n "${_SETS_IN_IDEM:-}" ]] && LINE="$LINE | set:$(printf '%s' "${SETS_ENC[*]}")"   # ocr2：修正对专用留痕字段（C-F2 判读锚点；值 b64 转义 gt-064b）
 
 # amended：页 frontmatter 原位改写——F2（B 册）：置于账本 append 之前，中断（append 前 sed 后）时
 # 页领先账本、同参重试无 dedup 挡路幂等收敛；反序则 dedup 静默吞修复致账本↔页永久分歧。
 # F1（B 册）：sed 锚定 2,/^---$/（frontmatter 区）——正文引用旧合同的 `verify:` 行不被连带改写。
-# 校验已前移；| 定界防值注入——set 值已拒 | 与换行，& 与反斜杠 sed 转义
+# 校验已前移；| 定界防值注入——set 值拒换行（| 自 gt-064b 放行），& | \ sed 转义后原值落页
 if [[ "$EVENT" == amended ]]; then
   # ocr-A：锁内复核——sync pre 可拉远端页变更，授权与字段存在性以写前一刻为准（反例：远端改派后旧授权改写）
   DISP_B=$(sed -n "2,/^---\$/p" "$PAGE_A" | grep -m1 '^dispatcher:' | sed 's/^dispatcher:[[:space:]]*//; s/[[:space:]]*$//' || true)
@@ -302,7 +310,7 @@ if [[ "$EVENT" == amended ]]; then
   done
   for _s in "${SETS[@]}"; do
     _K="${_s%%=*}"; _V="${_s#*=}"
-    _E="${_V//\\/\\\\}"; _E="${_E//&/\\&}"
+    _E="${_V//\\/\\\\}"; _E="${_E//&/\\&}"; _E="${_E//|/\\|}"   # gt-064b：竖线为 sed 分隔符，replacement 内转义为字面
     sed -i "2,/^---\$/s|^${_K}:.*|${_K}: ${_E}|" "$PAGE_A"
   done
 fi
@@ -340,20 +348,20 @@ cd "$AGORA_HOME"
 export AGORA_MECHANICAL=1   # pre-commit hook 的机械层凭证（install-hooks.sh）
 git add -A >/dev/null
 git -c user.name="$ACTOR" -c user.email="$ACTOR@local" commit -qm "event:$EVENT ${TASK:-} by $ACTOR"
-bash "$AGORA_HOME/scripts/derive-board.sh" >/dev/null 2>&1 || true
+bash "$SCRIPTS_DIR/derive-board.sh" >/dev/null 2>&1 || true
 git add -A >/dev/null; git commit -qm "derive: board" >/dev/null 2>&1 || true
 
 # T3 ack→注入（L2）：任务最新 dispatched 带 session: 且 API 开 → inject「ack 已落账，继续」best-effort；
 # 失败仅 derived 注记不阻塞 ack；注入侧按 sid 幂等去重（inject-tickets，沿 merge-tickets 先例 host-local）。
 # 这是 plan-ack 死锁窗的闭合面：ack 无需子会话轮询收件箱，经注入直达活会话（delegation §七 的 L2 补偿）。
-if [[ "$EVENT" == "ack" && -n "$TASK" && "${AGORA_RUNTIME_API:-1}" != "0" && "${AGORA_RUNTIME:-opencode}" == "opencode" && -f "$AGORA_HOME/scripts/runtime/opencode.sh" ]]; then
+if [[ "$EVENT" == "ack" && -n "$TASK" && "${AGORA_RUNTIME_API:-1}" != "0" && "${AGORA_RUNTIME:-opencode}" == "opencode" && -f "$SCRIPTS_DIR/runtime/opencode.sh" ]]; then
   INJ_SID=$(cat $(find "$AGORA_HOME/log" -mindepth 2 -name "*.md" -type f 2>/dev/null | sort) 2>/dev/null \
     | grep -E "(^|[|] )task:$TASK( |\$)" | grep "event:dispatched" \
     | grep -o "session:[^| ]*" | tail -1 | cut -d: -f2 || true)
   if [[ -n "$INJ_SID" ]]; then
     if [[ -e "$AGORA_HOME/.git/inject-tickets/$INJ_SID" ]]; then
       DERIVED+=("inject_dedup")
-    elif timeout "${AGORA_INJECT_TIMEOUT:-15}" bash "$AGORA_HOME/scripts/runtime/opencode.sh" inject "$INJ_SID" "ack 已落账，继续" >/dev/null 2>&1; then
+    elif timeout "${AGORA_INJECT_TIMEOUT:-15}" bash "$SCRIPTS_DIR/runtime/opencode.sh" inject "$INJ_SID" "ack 已落账，继续" >/dev/null 2>&1; then
       mkdir -p "$AGORA_HOME/.git/inject-tickets"; : > "$AGORA_HOME/.git/inject-tickets/$INJ_SID"
       DERIVED+=("injected")
     else
@@ -368,7 +376,7 @@ if [[ ${#DERIVED[@]} -gt 0 ]]; then
 fi
 
 # 同步纪律：写后推送（失败不拒事件，下次 pre 合并重试）
-SYNC_POST=$(bash "$AGORA_HOME/scripts/sync.sh" post 2>/dev/null || true)
+SYNC_POST=$(bash "$SCRIPTS_DIR/sync.sh" post 2>/dev/null || true)
 SW=$(echo "$SYNC_POST" | sed -n 's/.*"warn:\([a-z_]*\)".*/\1/p')
 if [[ -n "$SW" ]]; then
   DJSON=$(echo "$DJSON" | python3 -c 'import json,sys; d=json.load(sys.stdin); d.append("sync_warn:'"$SW"'"); print(json.dumps(d))')

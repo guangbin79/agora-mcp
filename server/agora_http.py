@@ -18,7 +18,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
 HOME = os.environ.get("AGORA_HOME", os.path.expanduser("~/agora"))
-SCRIPTS = os.path.join(HOME, "scripts")
+SCRIPTS = os.environ.get("AGORA_SCRIPTS") or os.path.join(_PKG, "scripts")   # 单源：产品仓 scripts（gt-f6e4；env 覆盖口）
 HOST = os.environ.get("AGORA_HTTP_HOST", "127.0.0.1")
 PORT = int(os.environ.get("AGORA_HTTP_PORT", "0"))
 RUNTIME_FILE = os.path.join(HOME, ".git", "httpd.json")

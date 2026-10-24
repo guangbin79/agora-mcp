@@ -2,6 +2,7 @@
 # dispatch.sh —— 跨项目派生一次性工作会话（规格 §4.7，四保险丝全在机械层）
 # 用法: dispatch.sh --actor NAME@PROJ --project DIR --task gt-xxxx [--prompt "..."]
 set -euo pipefail
+SCRIPTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"   # 单源自定位：兄弟脚本/库一律本仓 scripts（gt-f6e4）
 AGORA_HOME="${AGORA_HOME:-$HOME/agora}"
 MAX_DEPTH="${AGORA_MAX_DEPTH:-5}"; MAX_SPAWN="${AGORA_MAX_SPAWN:-30}"; MAX_GLOBAL="${AGORA_MAX_SPAWN_GLOBAL:-60}"
 RUNTIME="${AGORA_RUNTIME:-opencode}"
@@ -35,7 +36,7 @@ grep -qE '^can_spawn:[[:space:]]*true' "$ENTITY" || fail SPAWN_FORBIDDEN "$NAME 
 #          配额活跃=dispatched 集 ∩ 无终态事件（done/merged/cancelled 任一即出集）
 LEDGER_NEXT=1; LEDGER_ME=0; LEDGER_TOT=0; LEDGER_SELF=0; LDT=""
 ledger_scan() {
-PYTHONPATH="$AGORA_HOME/scripts:$(cd "$(dirname "$0")" && pwd)${PYTHONPATH:+:$PYTHONPATH}" \
+PYTHONPATH="$SCRIPTS_DIR${PYTHONPATH:+:$PYTHONPATH}" \
 python3 - "$AGORA_HOME" "${DTASK:-}" "$ACTOR" "$PDIR" "$TASK" <<'PYEOF'
 import glob, os, re, sys
 from agora_lib import main_repo_of
@@ -151,7 +152,7 @@ LOG="raw/dispatches/$DID.log"
 PROJNAME=$(basename "$PROOT")
 
 # L2 API 通道门（设计 §三）：默认开；RUNTIME=opencode 且适配器在场且 health 通才启用（stub/替代 runtime 零扰动）
-RT="$AGORA_HOME/scripts/runtime/opencode.sh"
+RT="$SCRIPTS_DIR/runtime/opencode.sh"
 API=0
 if [ "$RUNTIME" = "opencode" ] && [ "${AGORA_RUNTIME_API:-1}" != "0" ] && [ -f "$RT" ]; then
   timeout "${AGORA_API_TIMEOUT:-15}" bash "$RT" health >/dev/null 2>&1 && API=1
@@ -164,7 +165,7 @@ WT_DIR=""
 WT_MAIN=""
 if [ -n "$WT_DIR" ]; then
   RB_IN=$(realpath "$PDIR" 2>/dev/null) || RB_IN="$PDIR"   # 父链删净时保底裸路径（评审 R2-F1：stderr JSON 契约）
-  WT_MAIN=$(PYTHONPATH="$AGORA_HOME/scripts" python3 -c 'import sys, agora_lib
+  WT_MAIN=$(PYTHONPATH="$SCRIPTS_DIR" python3 -c 'import sys, agora_lib
 p = sys.argv[1]; m = agora_lib.main_repo_of(p); print(m or p)' "$RB_IN")
 fi
 # 子会话命名（gt-2845②）：create/--title 同名 "agora: <task-id> <任务title截60字>"（title 按码点截断防劈字）
@@ -249,7 +250,7 @@ fi
 # 他机会话本就无法被本机桥触达；跨机派活走 task_create + mention 异步路径
 if [ -z "$WT_DIR" ]; then
   if [ "$API" = 1 ] && timeout "${AGORA_API_TIMEOUT:-15}" bash "$RT" alive "$PDIR" delegated >/dev/null 2>&1; then
-    bash "$AGORA_HOME/scripts/post.sh" --actor "$ACTOR" --project "$PROJNAME" --event ack \
+    bash "$SCRIPTS_DIR/post.sh" --actor "$ACTOR" --project "$PROJNAME" --event ack \
       --body "dispatch $TASK notified via bridge" --mention "$CHILD" >/dev/null
     echo "{\"dispatch_id\":\"$DID\",\"mode\":\"notified\",\"child_actor\":\"$CHILD@$PROJNAME\"${VWARN_EXT}}"
     exit 0
@@ -285,7 +286,7 @@ if [ "${_SELF2:-0}" = "1" ]; then   # gt-7ca0 场景c 同豁免：锁内复核�
   (( ${_TOT2:-0} > 0 )) && _TOT2=$((_TOT2-1))
 fi
 quota_check "${_ME2:-0}" "${_TOT2:-0}"   # 分域＋总量双闸复核（gt-8c5b 口径；.live 归属已并入扫描）
-POUT=$(bash "$AGORA_HOME/scripts/post.sh" "${PARGS[@]}" 2>&1) \
+POUT=$(bash "$SCRIPTS_DIR/post.sh" "${PARGS[@]}" 2>&1) \
   || { printf '%s\n' "$POUT" >&2; fail LEDGER_FAILED "dispatched 落账失败（详情见 stderr 上一行）" 4; }
 DEDUP=$(echo "$POUT" | sed -n 's/.*"dedup":\(true\|false\).*/\1/p')
 case "$DEDUP" in true|false) ;; *) fail LEDGER_FAILED "post.sh 输出异常（无 dedup 键）: $POUT" 4;; esac
@@ -295,7 +296,7 @@ exec 8>&-
 # 幂等：同 (host,entity,sid) 不重复；重派新 sid 自然换绑（桥取同实体最新一条）。
 # 与 poll 保洁共取 .git/sessions.map.lock（评审 B-F1：截断重写窗口内追加会丢行）；锁忙＝保洁进行中，跳过本轮登记
 register_session() {
-  local _smap="$AGORA_HOME/scripts/sessions.map" _lk="$AGORA_HOME/.git/sessions.map.lock"
+  local _smap="$AGORA_HOME/sessions.map" _lk="$AGORA_HOME/.git/sessions.map.lock"
   (
     flock -w "${AGORA_LOCK_WAIT:-5}" 9 || exit 0
     [[ -f "$_smap" ]] || printf '# <机器名>  <agent名>  <opencode session id>  <登记时间>（多机：仅本机条目算"在场"）\n' > "$_smap"
@@ -334,7 +335,7 @@ spawn_attempt() {
   return 0
 }
 spawn_died_diag() {   # 秒死→日志尾落 diagnosed（失败必须响；重试间幂等窗天然去重同文落账）
-  bash "$AGORA_HOME/scripts/post.sh" --actor "$ACTOR" --project "$PROJNAME" --event diagnosed \
+  bash "$SCRIPTS_DIR/post.sh" --actor "$ACTOR" --project "$PROJNAME" --event diagnosed \
     --task "$TASK" --conclusion "$(tail -n 5 "$AGORA_HOME/$LOG" | tr '\n' ' ' | tr -d '|')" >/dev/null 2>&1 || true
 }
 api_alive_wait() {  # D7 验证窗：轮询 idle——dead=秒死；idle=过；窗口尽仍 running=过（与 run「窗口尽仍活=过」同口径）

@@ -14,6 +14,7 @@
 #   - 投递方式 delivery=queue：不打断正在跑的回合，空闲会话入队即唤起
 set -uo pipefail
 AGORA_HOME="${AGORA_HOME:-$HOME/agora}"
+SCRIPTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"   # 单源自定位：兄弟脚本/库一律本仓 scripts（gt-f6e4）
 DEBOUNCE="${AGORA_NOTIFY_DEBOUNCE_S:-60}"
 POLL_S="${AGORA_NOTIFY_POLL_S:-5}"
 MODE="${AGORA_NOTIFY_MODE:-opencode}"
@@ -28,7 +29,7 @@ notify() { # $1=entity $2=ref
   (( now - last < DEBOUNCE )) && return 0
   # sessions.map 本机条目：<host> <agent> <session> <ts>；同一实体多次登记取最新一条
   sid=$(awk -v h="$HOST" -v e="$ent" '$1==h && $2==e {sid=$3} END{if (sid) print sid}' \
-        "$AGORA_HOME/scripts/sessions.map" 2>/dev/null)
+        "$AGORA_HOME/sessions.map" 2>/dev/null)
   [[ -z "$sid" ]] && return 0   # 会话未在跑，静默
   if [[ "$MODE" == desktop ]]; then
     command -v notify-send >/dev/null 2>&1 && \
@@ -37,8 +38,8 @@ notify() { # $1=entity $2=ref
     # 传输经 runtime 适配器（opencode api CLI，delivery=queue）；守卫同 dispatch.sh:103/post.sh:262
     # （AGORA_RUNTIME≠opencode 或适配器缺失时旁路），rc 非 0 静默跳过
     if [[ "${AGORA_RUNTIME:-opencode}" == "opencode" && "${AGORA_RUNTIME_API:-1}" != "0" \
-          && -f "$AGORA_HOME/scripts/runtime/opencode.sh" ]]; then
-      bash "$AGORA_HOME/scripts/runtime/opencode.sh" inject "$sid" \
+          && -f "$SCRIPTS_DIR/runtime/opencode.sh" ]]; then
+      bash "$SCRIPTS_DIR/runtime/opencode.sh" inject "$sid" \
         "广场有新 @你的消息（${ref}），请 agora_check_mail" || :
     fi
   fi

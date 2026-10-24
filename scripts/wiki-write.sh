@@ -2,6 +2,7 @@
 # wiki-write.sh —— wiki 唯一写入入口（owner 校验 + flock + 提交）
 # 用法: wiki-write.sh --actor NAME --path RELPATH --mode replace|append  < content
 set -euo pipefail
+SCRIPTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"   # 单源自定位：兄弟脚本/库一律本仓 scripts（gt-f6e4）
 AGORA_HOME="${AGORA_HOME:-$HOME/agora}"
 ACTOR=""; P=""; MODE="replace"
 while [[ $# -gt 0 ]]; do case "$1" in
@@ -17,13 +18,13 @@ FILE="$AGORA_HOME/wiki/$P"
 # 实体页创建侧防线：名字合法性（消费侧 adjudicate/who/dispatch/poll/http 同口径过滤）
 if [[ "$P" == entities/* && ! -f "$FILE" ]]; then
   _EN="${P#entities/}"; _EN="${_EN%.md}"
-  python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import agora_lib as l; sys.exit(0 if l.valid_entity_name(sys.argv[2]) else 1)' "$AGORA_HOME/scripts" "$_EN" \
+  python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import agora_lib as l; sys.exit(0 if l.valid_entity_name(sys.argv[2]) else 1)' "$SCRIPTS_DIR" "$_EN" \
     || fail VALIDATION_FAILED "bad entity name: $_EN（仅字母/数字/下划线/点/连字符及 CJK，禁 .. 与空白）"
 fi
 CONTENT=$(cat)
 
 exec 9>"$AGORA_HOME/.git/post.lock"; flock -w "${AGORA_LOCK_WAIT:-5}" 9 || fail LOCK_TIMEOUT "flock timeout" 3
-bash "$AGORA_HOME/scripts/sync.sh" pre >/dev/null 2>&1 || true
+bash "$SCRIPTS_DIR/sync.sh" pre >/dev/null 2>&1 || true
 
 if [[ "$MODE" == append ]]; then
   [[ "$P" == topics/* ]] || fail VALIDATION_FAILED "append mode only for topics/"
@@ -43,5 +44,5 @@ fi
 cd "$AGORA_HOME"; git add -A >/dev/null
 export AGORA_MECHANICAL=1   # pre-commit hook 的机械层凭证（install-hooks.sh）
 git -c user.name="$ACTOR" -c user.email="$ACTOR@local" commit -qm "wiki:$MODE $P by $ACTOR"
-bash "$AGORA_HOME/scripts/sync.sh" post >/dev/null 2>&1 || true
+bash "$SCRIPTS_DIR/sync.sh" post >/dev/null 2>&1 || true
 echo "{\"path\":$(python3 -c 'import json,sys;print(json.dumps(sys.argv[1]))' "$P"),\"commit\":\"$(git rev-parse --short HEAD)\"}"

@@ -11,13 +11,9 @@ export AGORA_MECHANICAL=1   # 自举即机械层：本脚本的全部提交都�
 AGORA_HOME="${AGORA_HOME:-$HOME/agora}"
 AGORA_PKG="${AGORA_PKG:-$(cd "$(dirname "$0")/.." && pwd)}"
 
-# 骨架各项幂等：clone 来的仓库缺 scripts/ 时也必须补齐
-mkdir -p "$AGORA_HOME"/{log,board,inbox,raw/dispatches,scripts} \
+# 骨架各项幂等：脚本不进 AGORA_HOME（单源在产品包 _PKG/scripts，自定位调用，gt-f6e4）
+mkdir -p "$AGORA_HOME"/{log,board,inbox,raw/dispatches} \
          "$AGORA_HOME"/wiki/{entities,tasks,decisions,proposals,topics}
-cp "$AGORA_PKG"/scripts/*.sh "$AGORA_HOME/scripts/"
-cp "$AGORA_PKG"/scripts/*.py "$AGORA_HOME/scripts/"   # agora_lib.py：共享解析唯一真源（随脚本自举）
-mkdir -p "$AGORA_HOME/scripts/runtime"                # L2 适配层子目录（opencode.sh；缺席容忍＝旧包兼容）
-cp "$AGORA_PKG"/scripts/runtime/*.sh "$AGORA_HOME/scripts/runtime/" 2>/dev/null || true
 [[ -f "$AGORA_PKG/docs/CONVENTIONS.md" ]] && cp -n "$AGORA_PKG/docs/CONVENTIONS.md" "$AGORA_HOME/" 2>/dev/null || true
 [[ -f "$AGORA_PKG/docs/AGENTS.md" ]] && cp -n "$AGORA_PKG/docs/AGENTS.md" "$AGORA_HOME/" 2>/dev/null || true
 
@@ -25,10 +21,10 @@ cd "$AGORA_HOME"
 if [[ ! -d .git ]]; then git init -q; fi
 git config user.name agora-admin && git config user.email agora@local
 git config pull.rebase false   # 宣言铁律：禁 rebase
-bash "$AGORA_HOME/scripts/install-hooks.sh" >/dev/null   # 防御纵深随自举装好（幂等覆盖安装）
+bash "$AGORA_PKG/scripts/install-hooks.sh" >/dev/null   # 防御纵深随自举装好（幂等覆盖安装；脚本单源在产品包，gt-f6e4）
 # 全文本 union 合并：跨机同步的程序化冲突解决（log/board/wiki 是 .md；sessions.map 与 allowed_signers 是共享可变纯文本）
 touch .gitattributes
-for _pa in '*.md merge=union' 'scripts/sessions.map merge=union' 'wiki/allowed_signers merge=union'; do
+for _pa in '*.md merge=union' 'sessions.map merge=union' 'wiki/allowed_signers merge=union'; do
   grep -qxF "$_pa" .gitattributes || printf '%s\n' "$_pa" >> .gitattributes
 done
 [[ -f wiki/decisions/doctor-runbook.md ]] || cat > wiki/decisions/doctor-runbook.md <<'EOF'
@@ -62,7 +58,7 @@ owner: mayor
 EOF
 git add wiki/topics/delegation.md 2>/dev/null || true
 git diff --cached --quiet || git commit -qm "seed: wiki/topics/delegation.md (跨仓委托协议精简版)"
-[[ -f scripts/sessions.map ]] || printf '# <机器名>  <agent名>  <opencode session id>  <登记时间>（多机：仅本机条目算"在场"）\n' > scripts/sessions.map
+[[ -f sessions.map ]] || printf '# <机器名>  <agent名>  <opencode session id>  <登记时间>（多机：仅本机条目算"在场"）\n' > sessions.map
 git add -A
 git diff --cached --quiet || git commit -qm "init: agora bootstrap (converge)"
 git rev-parse --verify HEAD >/dev/null 2>&1 || git commit -qm "init: agora bootstrap" --allow-empty
