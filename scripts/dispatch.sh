@@ -291,6 +291,19 @@ DEDUP=$(echo "$POUT" | sed -n 's/.*"dedup":\(true\|false\).*/\1/p')
 case "$DEDUP" in true|false) ;; *) fail LEDGER_FAILED "post.sh 输出异常（无 dedup 键）: $POUT" 4;; esac
 exec 8>&-
 
+# gt-8a3c：spawn 成功后登记子会话进 sessions.map——通知桥唯一路由源，此前全链无写入方（通知静默根因）；
+# 幂等：同 (host,entity,sid) 不重复；重派新 sid 自然换绑（桥取同实体最新一条）。
+# 与 poll 保洁共取 .git/sessions.map.lock（评审 B-F1：截断重写窗口内追加会丢行）；锁忙＝保洁进行中，跳过本轮登记
+register_session() {
+  local _smap="$AGORA_HOME/scripts/sessions.map" _lk="$AGORA_HOME/.git/sessions.map.lock"
+  (
+    flock -w "${AGORA_LOCK_WAIT:-5}" 9 || exit 0
+    [[ -f "$_smap" ]] || printf '# <机器名>  <agent名>  <opencode session id>  <登记时间>（多机：仅本机条目算"在场"）\n' > "$_smap"
+    awk -v h="$(hostname)" -v e="$CHILD" -v s="$SID" '$1==h && $2==e && $3==s {f=1} END{exit !f}' "$_smap" || \
+      printf '%s %s %s %s\n' "$(hostname)" "$CHILD" "$SID" "$(date -Iseconds)" >> "$_smap"
+  ) 9>"$_lk" || :   # 评审 B-F2：路由行尽力而为——写失败不翻转已成功的派发（账本已 dispatched，假失败引发重复重派）
+}
+
 # 凭据预写（幂等重写）＋ spawn ＋ 验证窗 ＋ 有界重试（一次）
 # --auto：无人值守权限放行（未显式 deny 即放行）；子会话 cwd 由 cd 提供（--dir 随 opencode 2.0.32 移除，2026-10-20 实证 exit 1）；AGORA_RUNTIME 覆写为非 opencode 时旗标兼容性自担
 # 验证窗口径：本尝试的 EXIT:<try>=<rc> 行——0=过、非零=秒死、窗口尽仍活=过（长任务）
@@ -370,6 +383,7 @@ if [ "$API" = 1 ]; then
       fi
     fi
   fi
+  register_session
   echo "{\"dispatch_id\":\"$DID\",\"mode\":\"spawned\",\"channel\":\"api\",\"session\":\"$SID\",\"child_actor\":\"$CHILD@$PROJNAME\",\"run\":\"$LOG\",\"dedup\":${DEDUP:-false}${VWARN_EXT}}"
   exit 0
 fi
@@ -381,4 +395,5 @@ if ! spawn_attempt 1; then
   fi
 fi
 
+register_session
 echo "{\"dispatch_id\":\"$DID\",\"mode\":\"spawned\",\"child_actor\":\"$CHILD@$PROJNAME\",\"run\":\"$LOG\",\"dedup\":${DEDUP:-false}${VWARN_EXT}}"

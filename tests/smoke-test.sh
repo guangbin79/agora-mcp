@@ -491,6 +491,23 @@ RLOG=$(ls -t "$AGORA_HOME"/raw/dispatches/*.log | head -1)
 grep -q -- '--auto' "$RLOG" && ! grep -q -- '--dir' "$RLOG" \
   && ok "dispatch 拉起参数含 --auto 且无 --dir" || fail "dispatch 拉起参数异常（$RLOG）"
 
+# gt-8a3c：spawn 成功后 sessions.map 注册写入（通知桥唯一路由源，此前全链无写入方→通知静默根因）
+SMT1=$(TITLE="smemap注册甲" TC); SMT1=$(echo "$SMT1" | sed -n 's/.*"task":"\(gt-[0-9a-f]*\)".*/\1/p')
+SMOUT=$(AGORA_RUNTIME=echo bash "$AGORA_HOME/scripts/dispatch.sh" --actor tester@proj --project "$PROJ" --task "$SMT1")
+SMCHILD=$(echo "$SMOUT" | sed -n 's/.*"child_actor":"\([^"@]*\)@.*/\1/p')
+SMLOG=$(echo "$SMOUT" | sed -n 's/.*"run":"\([^"]*\)".*/\1/p')
+SMSID1=$(sed -n 's/^SESSION:1=//p' "$AGORA_HOME/$SMLOG" 2>/dev/null | head -1)
+grep -qE "^$(hostname) $SMCHILD $SMSID1 [0-9]{4}-[0-9]{2}-[0-9]{2}T" "$AGORA_HOME/scripts/sessions.map" \
+  && ok "spawn 后 sessions.map 出现注册行（gt-8a3c）" || fail "spawn 后无 sessions.map 注册行（child=$SMCHILD sid=$SMSID1）"
+SMT2=$(TITLE="smemap注册乙" TC); SMT2=$(echo "$SMT2" | sed -n 's/.*"task":"\(gt-[0-9a-f]*\)".*/\1/p')
+SMOUT2=$(AGORA_RUNTIME=echo bash "$AGORA_HOME/scripts/dispatch.sh" --actor tester@proj --project "$PROJ" --task "$SMT2")
+SMLOG2=$(echo "$SMOUT2" | sed -n 's/.*"run":"\([^"]*\)".*/\1/p')
+SMSID2=$(sed -n 's/^SESSION:1=//p' "$AGORA_HOME/$SMLOG2" 2>/dev/null | head -1)
+SMR1=$(grep -cE "^$(hostname) $SMCHILD $SMSID1 " "$AGORA_HOME/scripts/sessions.map" || true)
+SMR2=$(grep -cE "^$(hostname) $SMCHILD $SMSID2 " "$AGORA_HOME/scripts/sessions.map" || true)
+[ "$SMR1" -eq 1 ] && [ "$SMR2" -eq 1 ] && [ -z "$(sort "$AGORA_HOME/scripts/sessions.map" | uniq -d)" ] \
+  && ok "重派换绑＋同 (host,entity,sid) 零重复行（gt-8a3c 幂等）" || fail "sid 行数 $SMR1/$SMR2 或有重复行（幂等失效）"
+
 echo "===== poll 本地保洁 ====="
 # sessions.map TTL：过期本机条目剔除；他机条目与新本机条目保留
 H=$(hostname)
@@ -514,6 +531,19 @@ assert r['mails_archived']>=1, r
   && ok "TTL 只清本机过期条目" || fail "TTL 只清本机过期条目"
 ls "$AGORA_HOME/inbox/archive/tester/" 2>/dev/null | grep -q '\.md' \
   && ok "超期邮件入 archive" || fail "超期邮件入 archive"
+
+# gt-8a3c：TTL 时间戳兼容——存量裸 epoch 条目可回收（此前 fromisoformat 抛→except pass 永生）；ISO 解析不受影响
+printf '%s tester ses-epoch-old %s\n%s tester ses-iso-old 2026-10-12T10:00:00+00:00\n%s tester ses-epoch-new %s\nforeign tester ses-f 2026-10-12T10:00:00+00:00\n' \
+  "$H" "$(( $(date +%s) - 48*3600 ))" "$H" "$H" "$(date +%s)" > "$AGORA_HOME/scripts/sessions.map"
+cd "$AGORA_HOME" && git add -A >/dev/null && AGORA_MECHANICAL=1 git commit -qm "seed epoch sessions" >/dev/null
+POLL_OUT5=$(AGORA_RUNTIME=true bash "$AGORA_HOME/scripts/poll.sh")
+echo "$POLL_OUT5" | python3 -c "import json,sys; r=json.loads(sys.stdin.read()); assert r['sessions_reaped']==2, r" \
+  && ok "TTL epoch 兼容：epoch 旧＋ISO 旧同回收（gt-8a3c）" || fail "TTL epoch 兼容计数（$POLL_OUT5）"
+! grep -q "ses-epoch-old" "$AGORA_HOME/scripts/sessions.map" \
+  && ! grep -q "ses-iso-old" "$AGORA_HOME/scripts/sessions.map" \
+  && grep -q "ses-epoch-new" "$AGORA_HOME/scripts/sessions.map" \
+  && grep -q "ses-f" "$AGORA_HOME/scripts/sessions.map" \
+  && ok "TTL epoch 兼容回收明细（旧 epoch/ISO 清、新 epoch/他机留）" || fail "TTL epoch 兼容回收明细不符"
 
 echo "===== poll.sh notify 桥探活（gt-edc4） ====="
 MARK="$T/bridge-mock.log"; : > "$MARK"

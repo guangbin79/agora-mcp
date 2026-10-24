@@ -58,6 +58,7 @@ ORPHAN_MIN = int(os.environ.get("AGORA_ORPHAN_MIN", "10"))
 WT_GRACE_MIN = int(os.environ.get("AGORA_WT_GRACE_MIN", "60"))
 TTL_H = int(os.environ.get("AGORA_SESSION_TTL_H", "24"))
 ARCH_D = int(os.environ.get("AGORA_INBOX_ARCHIVE_DAYS", "90"))
+import fcntl   # gt-8a3c 评审 B-F1：sessions.map 重写与 dispatch 登记共锁互斥
 SPAWN = os.environ.get("AGORA_POLL_SPAWN", "1") != "0"
 HOST = socket.gethostname()
 WATCHDOG = f"watchdog@{HOST}"
@@ -720,18 +721,23 @@ for page in glob.glob(f"{HOME}/wiki/tasks/*.md"):
 SMAP = f"{HOME}/scripts/sessions.map"
 if TTL_H > 0 and os.path.exists(SMAP):
     kept, reaped = [], 0
-    for ln in open(SMAP, encoding="utf-8").read().splitlines(keepends=True):
-        p = ln.split()
-        if p and not ln.startswith("#") and len(p) >= 4 and p[0] == HOST:
-            try:
-                if (now - datetime.fromisoformat(p[3]).timestamp()) / 3600 > TTL_H:
+    with open(f"{HOME}/.git/sessions.map.lock", "w") as _lk:   # gt-8a3c 评审 B-F1：截断重写全程持锁，防并发追加被快照覆盖
+        fcntl.flock(_lk, fcntl.LOCK_EX)
+        for ln in open(SMAP, encoding="utf-8").read().splitlines(keepends=True):
+            p = ln.split()
+            if p and not ln.startswith("#") and len(p) >= 4 and p[0] == HOST:
+                try:
+                    ts = datetime.fromisoformat(p[3]).timestamp()
+                except Exception:
+                    try: ts = float(p[3])   # gt-8a3c：存量裸 epoch 兼容——否则存疑不动成永生条目，TTL 保洁失效
+                    except Exception: ts = None   # 双失败才存疑不动（保守）
+                if ts is not None and (now - ts) / 3600 > TTL_H:
                     reaped += 1
                     continue
-            except Exception: pass  # 时间戳解析失败 = 条目存疑但不动它（保守）
-        kept.append(ln)
-    if reaped:
-        open(SMAP, "w", encoding="utf-8").writelines(kept)
-        report["sessions_reaped"] = reaped
+            kept.append(ln)
+        if reaped:
+            open(SMAP, "w", encoding="utf-8").writelines(kept)
+            report["sessions_reaped"] = reaped
 
 # ---------- ④b inbox 归档（文件名 = 纳秒时间戳，定宽可解析；解析失败退回 mtime） ----------
 if ARCH_D > 0:
