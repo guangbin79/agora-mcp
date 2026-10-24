@@ -14,6 +14,7 @@ fail() { python3 -c 'import json,sys; print(json.dumps({"code":sys.argv[1],"mess
 # ---------- 参数解析 ----------
 ACTOR=""; PROJECT=""; EVENT=""; TASK=""; COMMIT=""; EVIDENCE=""
 CONCLUSION=""; REASON=""; BODY=""; MENTION=""; IDEM=""; TARGET=""; CHILD=""; RUN=""; DTASK=""; BRANCH=""; SESSION=""
+SETS=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --actor) ACTOR="$2";; --project) PROJECT="$2";; --event) EVENT="$2";;
@@ -21,6 +22,7 @@ while [[ $# -gt 0 ]]; do
     --conclusion) CONCLUSION="$2";; --reason) REASON="$2";; --body) BODY="$2";;
     --mention) MENTION="$2";; --idem) IDEM="$2";; --target) TARGET="$2";;
     --child) CHILD="$2";; --run) RUN="$2";; --dispatcher-task) DTASK="$2";; --branch) BRANCH="$2";; --session) SESSION="$2";;
+    --set) SETS+=("$2");;
     *) fail VALIDATION_FAILED "unknown arg: $1";;
   esac; shift 2
 done
@@ -28,12 +30,12 @@ done
 
 # ---------- 文法校验（宣言 §5.2） ----------
 case "$EVENT" in
-  claimed|done|blocked|diagnosed|escalated|retired|proposal|ack|dispatched|progress|cancelled|reopened|attached|plan|merged) ;;
+  claimed|done|blocked|diagnosed|escalated|retired|proposal|ack|dispatched|progress|cancelled|reopened|attached|plan|merged|amended) ;;
   *) fail VALIDATION_FAILED "bad event: $EVENT";;
 esac
 [[ -n "$ACTOR" && -n "$PROJECT" ]] || fail VALIDATION_FAILED "actor/project required"
 
-TASK_CLASS="claimed done blocked diagnosed escalated dispatched progress cancelled reopened attached plan merged"
+TASK_CLASS="claimed done blocked diagnosed escalated dispatched progress cancelled reopened attached plan merged amended"
 if [[ " $TASK_CLASS " == *" $EVENT "* ]]; then
   [[ "$TASK" =~ ^gt-[a-z0-9]+$ ]] || fail VALIDATION_FAILED "task id must match gt-xxxx"
   [[ -f "$AGORA_HOME/wiki/tasks/$TASK.md" ]] || fail UNKNOWN_TASK "task not found: $TASK"
@@ -72,9 +74,70 @@ if [[ "$EVENT" == dispatched ]]; then
     && fail VALIDATION_FAILED "bad dispatcher name from actor: $_DN（实体名不得含 | / .. , \\ 或换行）"
 fi
 
+# ---------- amended：任务页机械字段修正通道（gt-b9fb 三实例成律） ----------
+# 权限收窄=仅该任务页 dispatcher: actor（名部相等）；仅 wt_dir/verify/project_dir 三机械字段；
+# 字段行须已存在（修正非新增）；页 frontmatter 原位改写＋amended 事件留痕——账本只追加，不改历史行
+[[ ${#SETS[@]} -gt 0 && "$EVENT" != amended ]] && fail VALIDATION_FAILED "--set 仅 amended 事件可用（本次: $EVENT）"   # F3：显式拒，防静默丢弃误导操作者
+_wt_dir_guard() {   # $1=value $2=page —— ocr2-H1/H2：主仓同级＋<REPO>__wt-<TASK>__* 本任务专属命名；锚点 project_dir 需名册注册域
+  local _v="$1" _pg="$2" _pd _mr _vd
+  _pd=$(sed -n "2,/^---\$/p" "$_pg" | grep -m1 '^project_dir:' | sed 's/^project_dir:[[:space:]]*//; s/[[:space:]]*$//; s/^"\(.*\)"$/\1/')
+  _mr=$(PYTHONPATH="$AGORA_HOME/scripts" python3 -c 'import sys, agora_lib
+p = sys.argv[1]; m = agora_lib.main_repo_of(p); print(m or p)' "${_pd:-/nonexistent}" 2>/dev/null || true)
+  [[ -n "$_mr" && -d "$_mr" ]] || fail VALIDATION_FAILED "wt_dir 修正需任务页 project_dir 可解析主仓"
+  _vd=$(realpath "$(dirname "$_v")" 2>/dev/null) || _vd=$(dirname "$_v")
+  [[ "$_vd" == "$(dirname "$_mr")" ]] || fail VALIDATION_FAILED "wt_dir 须为主仓同级命名域（../<REPO>__wt-*）: $_v"
+  case "$(basename "$_v")" in
+    "$(basename "$_mr")"__wt-"${TASK}"__*) ;;
+    *) fail VALIDATION_FAILED "wt_dir 须为 <REPO>__wt-${TASK}__* 本任务专属命名（防指他任务树/主仓本体）: $_v" ;;
+  esac
+}
+if [[ "$EVENT" == amended ]]; then
+  [[ ${#SETS[@]} -gt 0 ]] || fail VALIDATION_FAILED "amended 需要至少一个 --set key=value"
+  PAGE_A="$AGORA_HOME/wiki/tasks/$TASK.md"
+  [[ $(head -1 "$PAGE_A") == "---" ]] || fail VALIDATION_FAILED "任务页缺 frontmatter（修正无锚）: $TASK"   # ocr2：锚定段须以开界符为前提
+  _HAS_WT=0; _HAS_PD=0
+  for _s in "${SETS[@]}"; do case "${_s%%=*}" in wt_dir) _HAS_WT=1;; project_dir) _HAS_PD=1;; esac; done
+  [[ $_HAS_WT -eq 1 && $_HAS_PD -eq 1 ]] && fail VALIDATION_FAILED "project_dir 与 wt_dir 不得同次混改（锚点漂移窗，ocr2）"
+  # ocr-D：dispatcher 权威读同锚 frontmatter——正文 prose 行 `dispatcher: x` 不得充当授权锚
+  DISP_A=$(sed -n "2,/^---\$/p" "$PAGE_A" | grep -m1 '^dispatcher:' | sed 's/^dispatcher:[[:space:]]*//; s/[[:space:]]*$//' || true)
+  [[ -n "$DISP_A" ]] || fail AMEND_FORBIDDEN "任务页无 dispatcher 标注（未派发过，无修正主体）: $TASK"
+  [[ "$DISP_A" == "${ACTOR%%@*}" ]] || fail AMEND_FORBIDDEN "仅该任务 dispatcher actor 可修正（page: $DISP_A ≠ actor: ${ACTOR%%@*}）"
+  for _s in "${SETS[@]}"; do
+    [[ "$_s" == *=* ]] || fail VALIDATION_FAILED "--set 需要 key=value 形态: $_s"
+    _K="${_s%%=*}"; _V="${_s#*=}"
+    case "$_K" in wt_dir|verify|project_dir) ;; *) fail VALIDATION_FAILED "不可修正字段: $_K（仅 wt_dir/verify/project_dir）";; esac
+    # C-F1（C 册）：守卫同锚 frontmatter 区——正文 prose 行不得让「行已存在」误放行（否则 amend 静默 no-op，账页背离）
+    sed -n "2,/^---\$/p" "$PAGE_A" | grep -q "^${_K}:" || fail VALIDATION_FAILED "frontmatter 字段行不存在（修正非新增）: $_K"
+    if [[ "$_K" == wt_dir ]]; then   # C-F3（C 册）＋ocr2-H1/H2：命名域收敛
+      _wt_dir_guard "$_V" "$PAGE_A"
+    fi
+    if [[ "$_K" == project_dir ]]; then   # ocr2-H2：project_dir 是命名域锚点，改它须落名册注册域（防两跳迁锚绕过 C-F3）
+      _ER=$(PYTHONPATH="$AGORA_HOME/scripts" python3 - "$AGORA_HOME" "$_V" <<'PYEOF'
+import sys
+sys.path.insert(0, sys.argv[1] + "/scripts")
+import agora_lib
+r = agora_lib.resolve_entity(sys.argv[1], sys.argv[2])
+print(r[0] if r else "")
+PYEOF
+)
+      [[ -n "$_ER" ]] || fail VALIDATION_FAILED "project_dir 修正须指向名册已注册目录（防迁锚绕过命名域）: $_V"
+    fi
+    [[ "$_V" == *"|"* || "$_V" == *$'\n'* ]] && fail VALIDATION_FAILED "set 值含 | 或换行"
+    [[ -n "$_V" ]] || fail VALIDATION_FAILED "set 值不得为空: $_K"   # ocr-B：空值静默造不一致契约态（wt_dir=空→wt:true 残留）
+    [[ "$_K" == verify || "$_V" != *".."* ]] || fail VALIDATION_FAILED "$_K 路径不得含 ..: $_V"
+  done
+  [[ -z "$BODY" ]] && BODY=$(printf '%s' "${SETS[*]}")   # 留痕行缺省携带修正对
+  _SETS_IN_IDEM=1   # 标记：idem 段与 LINE 段消费（sets 必须进 idem 材料，防同 body 异 set 撞 dedup 吞修正）
+fi
+
 # ---------- 验证门（宣言 §6：done 由机械层执行 verify 背书；两段制——wt_dir 优先） ----------
 DERIVED=()
 if [[ "$EVENT" == done ]]; then
+  # C-F2（C 册）＋ocr2：任务曾 amend verify 合同 → derived 显式标注。判读走专用 set: 字段（body 可被 --body 覆盖，
+  # 子串误判由字段定界消除）；find -print0|xargs -0 -r 防空 find 挂 stdin 与路径空格撕裂
+  _AMV=$(find "$AGORA_HOME/log" -mindepth 2 -name "*.md" -type f -print0 2>/dev/null | sort -z | xargs -0 -r cat 2>/dev/null \
+    | grep -E "(^|[|] )task:$TASK( |$)" | grep "event:amended" | grep -cE "\| set:(verify=|[^|]* verify=)" || true)
+  [[ "${_AMV:-0}" -gt 0 ]] && DERIVED+=("verify_amended")
   TASK_PAGE="$AGORA_HOME/wiki/tasks/$TASK.md"
   VERIFY=$(grep -m1 '^verify:' "$TASK_PAGE" | sed 's/^verify:[[:space:]]*//; s/^"\(.*\)"$/\1/' || true)
   PROJDIR=$(grep -m1 '^project_dir:' "$TASK_PAGE" | sed 's/^project_dir:[[:space:]]*//; s/^"\(.*\)"$/\1/' || true)
@@ -154,7 +217,9 @@ if [[ -z "$IDEM" ]]; then
   [[ -n "$RUN" ]] && IDEM_INPUT="$IDEM_INPUT|$RUN"
   [[ -n "$SESSION" ]] && IDEM_INPUT="$IDEM_INPUT|$SESSION"
   IDEM=$(printf '%s' "$IDEM_INPUT" | sha1sum | cut -c1-8)
+  _IDEM_DERIVED=1
 fi
+[[ -n "${_SETS_IN_IDEM:-}" && -n "${_IDEM_DERIVED:-}" ]] && { IDEM_INPUT="$IDEM_INPUT|${SETS[*]}"; IDEM=$(printf '%s' "$IDEM_INPUT" | sha1sum | cut -c1-8); }   # ocr2：sets 进 idem 材料（显式 --idem 尊重调用方）
 
 # 派生回报链：dispatched 时把 dispatcher 写入任务页；done/plan 时自动 @提及 dispatcher（plan 的 ack 回路由机制保证，v1.30）
 # 前移至写入前段（fail=零写入契约，v1.31）：dispatcher 读取+校验+拼接不产生任何落盘副作用
@@ -220,6 +285,28 @@ LINE="- seq:$SEQ | ts:$TS | actor:$ACTOR | event:$EVENT | idem:$IDEM | seen:$PRO
 [[ -n "${VERIFY_NOTE:-}" ]] && LINE="$LINE | verify_output:$VERIFY_NOTE"
 [[ -n "$BODY" ]] && LINE="$LINE | body:$BODY"
 [[ -n "$MENTION" ]] && LINE="$LINE | mention:$MENTION"
+[[ -n "${_SETS_IN_IDEM:-}" ]] && LINE="$LINE | set:$(printf '%s' "${SETS[*]}")"   # ocr2：修正对专用留痕字段（C-F2 判读锚点，不赖 body 缺省）
+
+# amended：页 frontmatter 原位改写——F2（B 册）：置于账本 append 之前，中断（append 前 sed 后）时
+# 页领先账本、同参重试无 dedup 挡路幂等收敛；反序则 dedup 静默吞修复致账本↔页永久分歧。
+# F1（B 册）：sed 锚定 2,/^---$/（frontmatter 区）——正文引用旧合同的 `verify:` 行不被连带改写。
+# 校验已前移；| 定界防值注入——set 值已拒 | 与换行，& 与反斜杠 sed 转义
+if [[ "$EVENT" == amended ]]; then
+  # ocr-A：锁内复核——sync pre 可拉远端页变更，授权与字段存在性以写前一刻为准（反例：远端改派后旧授权改写）
+  DISP_B=$(sed -n "2,/^---\$/p" "$PAGE_A" | grep -m1 '^dispatcher:' | sed 's/^dispatcher:[[:space:]]*//; s/[[:space:]]*$//' || true)
+  [[ "$DISP_B" == "${ACTOR%%@*}" ]] || fail AMEND_FORBIDDEN "锁内复核 dispatcher 不符（page: ${DISP_B:-∅} ≠ ${ACTOR%%@*}）"
+  for _s in "${SETS[@]}"; do   # ocr2：先全量复核再统一改写——set#1 已改 set#2 复核败的半应用态不落盘
+    _K="${_s%%=*}"
+    sed -n "2,/^---\$/p" "$PAGE_A" | grep -q "^${_K}:" || fail VALIDATION_FAILED "字段行不存在（锁内复核）: $_K"
+    [[ "$_K" == wt_dir ]] && _wt_dir_guard "${_s#*=}" "$PAGE_A"   # 命名域以写前一刻页值为准（sync 漂移窗）
+  done
+  for _s in "${SETS[@]}"; do
+    _K="${_s%%=*}"; _V="${_s#*=}"
+    _E="${_V//\\/\\\\}"; _E="${_E//&/\\&}"
+    sed -i "2,/^---\$/s|^${_K}:.*|${_K}: ${_E}|" "$PAGE_A"
+  done
+fi
+
 echo "$LINE" >> "$SHARD"
 REF="log/$DATE/$PROJECT.md:$(grep -c '^- seq:' "$SHARD")"
 

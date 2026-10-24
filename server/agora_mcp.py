@@ -113,13 +113,14 @@ INSTRUCTIONS = f"""你已接入 Agora 广场——AI 协作的异步账本，仓
 BOARD_VIEWS = lib.BOARD_VIEWS   # schema 枚举与服务端白名单单点口径（agora_lib.BOARD_VIEWS）
 T = {"type": "object", "additionalProperties": False}
 TOOLS = [
- {"name": "agora_post", "description": "发事件（写日志唯一入口）。done 必带 commit+evidence 且机械层会真实执行 verify；claimed 撞车仍落账，仅在 derived 中标注 claim_conflict:<先认领者>；plan 落实施计划（body 必填，挂 task 时自动 @任务页 dispatcher，dispatcher ack 或 30min 超时自放行）；dispatched 请改用 agora_dispatch。",
+ {"name": "agora_post", "description": "发事件（写日志唯一入口）。done 必带 commit+evidence 且机械层会真实执行 verify；claimed 撞车仍落账，仅在 derived 中标注 claim_conflict:<先认领者>；plan 落实施计划（body 必填，挂 task 时自动 @任务页 dispatcher，dispatcher ack 或 30min 超时自放行）；dispatched 请改用 agora_dispatch；amended 为 dispatcher 修正任务页机械字段专用（--set wt_dir/verify/project_dir，仅任务页 dispatcher actor）。",
   "inputSchema": {**T, "properties": {
-    "event": {"type": "string", "enum": ["claimed","done","blocked","diagnosed","escalated","retired","proposal","ack","progress","cancelled","reopened","attached","plan"]},
+    "event": {"type": "string", "enum": ["claimed","done","blocked","diagnosed","escalated","retired","proposal","ack","progress","cancelled","reopened","attached","plan","amended"]},
     "task": {"type": "string", "description": "gt-xxxx，任务类事件必填"},
     "commit": {"type": "string"}, "evidence": {"type": "string"},
     "conclusion": {"type": "string"}, "reason": {"type": "string"},
     "body": {"type": "string"}, "mention": {"type": "array", "items": {"type": "string"}},
+    "set": {"type": "array", "items": {"type": "string"}, "description": "amended 专用：k=v 修正对，仅 wt_dir/verify/project_dir，字段行须已存在"},
     "idem": {"type": "string", "description": "可选；缺省按内容派生，重试天然去重"},
     "actor": {"type": "string", "description": "可选；显式声明落账身份。dispatch 派生的子会话 MUST 传 dispatch 记录给定的 child_actor（共享 MCP 进程级 ACTOR 归 dispatcher，gt-49fb）；漏传时 server 按 dispatch env（AGORA_LIVEF/AGORA_PDIR）反查 child_actor 兜底（gt-eefd）"}},
    "required": ["event"]}},
@@ -209,6 +210,7 @@ def call(name, a):
         for k in ("task","commit","evidence","conclusion","reason","body","idem"):
             if a.get(k): args += [f"--{k}", a[k]]
         if a.get("mention"): args += ["--mention", ",".join(a["mention"])]
+        for s in a.get("set") or []: args += ["--set", s]   # amended 机械字段修正对
         return run_script("post.sh", args)
     if name == "agora_check_mail":
         if not ACTOR: return {"unread": [], "count": 0, "note": "未注册身份无收件箱"}, None

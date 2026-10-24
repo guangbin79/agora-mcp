@@ -2787,6 +2787,128 @@ OUT=$(AGORA_HOME="$SHOME_B" bash "$SHOME_B/scripts/doctor.sh" 2>&1)
 echo "$OUT" | grep -q "ALL GREEN" && ok "并发九派doctor：场景B 夹具（含 done 终态）ALL GREEN" || { fail "并发九派doctor B"; echo "$OUT"; }
 
 echo
+echo "===== 合同卫生（gt-b9fb）：verify 静态守卫＋任务页机械字段修正通道＋doctor idem 文案一致化 ====="
+# ① verify 合同静态守卫：三种坏合同各告警恰一次（warnings 非阻断），好合同零告警
+VG_A=$(TID "$(TITLE="守卫绝对路径合同用例" VERIFY="bash /abs/main-repo/tests/smoke.sh" PROJECT_DIR="$REPA" TC)")
+VG_B=$(TID "$(TITLE="守卫AGORAHOME合同用例" VERIFY='bash $AGORA_HOME/main-repo/tests/smoke.sh' PROJECT_DIR="$REPA" TC)")
+VG_C=$(TID "$(TITLE="守卫引号绝对路径用例" VERIFY='bash "/abs/main-repo/tests/smoke.sh"' PROJECT_DIR="$REPA" TC)")
+VG_OK=$(TID "$(TITLE="守卫好合同对照用例" VERIFY="bash tests/smoke-test.sh" PROJECT_DIR="$REPA" TC)")
+GVA_OUT=$(BDSP --actor borch@repa --project "$REPA" --task "$VG_A" 2>/dev/null)
+echo "$GVA_OUT" | python3 -c 'import json,sys
+d=json.load(sys.stdin); w=d.get("warnings",[])
+assert d.get("mode")=="spawned", d
+assert len(w)==1 and "绝对路径" in w[0], w' \
+  && ok "守卫①绝对路径坏合同告警恰一次（不阻断）" || fail "守卫①绝对路径（$GVA_OUT）"
+GVB_OUT=$(BDSP --actor borch@repa --project "$REPA" --task "$VG_B" 2>/dev/null)
+echo "$GVB_OUT" | python3 -c 'import json,sys
+d=json.load(sys.stdin); w=d.get("warnings",[])
+assert len(w)==1 and "AGORA_HOME" in w[0], w' \
+  && ok "守卫①\$AGORA_HOME 坏合同告警恰一次" || fail "守卫①\$AGORA_HOME（$GVB_OUT）"
+GVC_OUT=$(BDSP --actor borch@repa --project "$REPA" --task "$VG_C" 2>/dev/null)
+echo "$GVC_OUT" | python3 -c 'import json,sys
+d=json.load(sys.stdin); w=d.get("warnings",[])
+assert len(w)==1 and "绝对路径" in w[0], w' \
+  && ok "守卫①引号包裹绝对路径同防（告警恰一次）" || fail "守卫①引号绝对路径（$GVC_OUT）"
+GVOK_OUT=$(BDSP --actor borch@repa --project "$REPA" --task "$VG_OK" 2>/dev/null)
+echo "$GVOK_OUT" | python3 -c 'import json,sys
+d=json.load(sys.stdin)
+assert d.get("mode")=="spawned" and "warnings" not in d, d' \
+  && ok "守卫①好合同（仓内相对路径）零告警" || fail "守卫①好合同误告警（$GVOK_OUT）"
+
+# ② 任务页机械字段修正通道：仅 dispatcher actor；amended 留痕；merge.sh 按新值走
+AMUP=$(TID "$(TITLE="amend链上游对照任务" VERIFY=true PROJECT_DIR="$PROJ" TC)")   # 非 wt 上游：merge 目标保持主仓默认分支
+AM=$(MKWT "amend修正任务标题够长" "true" b9a); WAM=$(ls -d "$T"/proj__wt-${AM}__*)
+echo a > "$WAM/amend-file"; git -C "$WAM" add -A >/dev/null; git -C "$WAM" -c user.name=t -c user.email=t@l commit -qm am
+BDSP --actor tester@proj --project "$PROJ" --task "$AM" --dispatcher-task "$AMUP" >/dev/null 2>&1   # dispatcher: tester 标注
+grep -q "^dispatcher: tester$" "$AGORA_HOME/wiki/tasks/$AM.md" \
+  && ok "② 前置：dispatched 落 dispatcher 标注" || fail "② dispatcher 未标注（amend 权限锚点缺失）"
+printf '正文引用旧合同：verify: body-note-keep\n' >> "$AGORA_HOME/wiki/tasks/$AM.md"   # F1 回归夹具：正文同前缀行不得被 amend 连带改写
+NEWWT="$T/proj__wt-${AM}__moved"
+OUT=$(bash "$AGORA_HOME/scripts/post.sh" --actor tester@proj --project proj --event amended --task "$AM" --set "wt_dir=$NEWWT" 2>&1)
+grep -q "^wt_dir: $NEWWT$" "$AGORA_HOME/wiki/tasks/$AM.md" \
+  && ok "② dispatcher 修正 wt_dir（页 frontmatter 原位改写）" || fail "② amend 改写（$OUT）"
+grep -q "verify: body-note-keep" "$AGORA_HOME/wiki/tasks/$AM.md" \
+  && ok "② F1 回归：正文同前缀行不被 amend 改写（frontmatter 锚定）" || fail "② F1 正文被连带改写"
+LEV "$AM" amended | grep -q "event:amended" \
+  && ok "② amended 事件落账留痕（历史行未改）" || fail "② amended 事件缺失（$OUT）"
+rm -rf "$WAM"   # 旧树离场：merge 只能按页上新值重建
+OUT=$(MERGE "$AM" 2>/dev/null)
+echo "$OUT" | grep -q '"result":"merged"' && grep -q a "$PROJ/amend-file" && [ ! -d "$NEWWT" ] \
+  && ok "② merge.sh 按修正后 wt_dir 走（新值重建→合并→清树）" || fail "② merge 按新值（out=$OUT olddir=$([ -d "$WAM" ] && echo in || echo gone) newdir=$([ -d "$NEWWT" ] && echo in || echo gone)）"
+# 权限收窄：非 dispatcher 拒且零写入
+AM2=$(MKWT "amend权限对照任务" "true" b9b); WAM2=$(ls -d "$T"/proj__wt-${AM2}__*)
+BDSP --actor tester@proj --project "$PROJ" --task "$AM2" --dispatcher-task "$AMUP" >/dev/null 2>&1
+FM_BEFORE=$(grep '^wt_dir:' "$AGORA_HOME/wiki/tasks/$AM2.md")
+OUT=$(bash "$AGORA_HOME/scripts/post.sh" --actor rival@proj2 --project proj2 --event amended --task "$AM2" --set "wt_dir=$T/hijack" 2>&1); RC=$?
+[[ $RC -ne 0 ]] && echo "$OUT" | grep -q AMEND_FORBIDDEN \
+  && [[ "$(grep '^wt_dir:' "$AGORA_HOME/wiki/tasks/$AM2.md")" == "$FM_BEFORE" ]] \
+  && [ -z "$(LEV "$AM2" amended)" ] \
+  && ok "② 非 dispatcher 被拒（AMEND_FORBIDDEN，页与账本零写入）" || fail "② 非 dispatcher 未拒（rc=$RC $OUT）"
+bash "$AGORA_HOME/scripts/post.sh" --actor tester@proj --project proj --event amended --task "$AM2" 2>/dev/null
+[[ $? -eq 2 ]] && ok "② amended 缺 --set 被拒(rc=2)" || fail "② 缺 --set 未拒"
+bash "$AGORA_HOME/scripts/post.sh" --actor tester@proj --project proj --event amended --task "$AM2" --set "title=hijack" 2>/dev/null
+[[ $? -eq 2 ]] && ok "② 非机械字段（title）被拒" || fail "② 非机械字段未拒"
+bash "$AGORA_HOME/scripts/post.sh" --actor tester@proj --project proj --event proposal --body x --set "wt_dir=/x" 2>/dev/null
+[[ $? -eq 2 ]] && ok "② F3 回归：非 amended 事件带 --set 显式拒" || fail "② F3 非 amended 带 set 未拒"
+OUT=$(bash "$AGORA_HOME/scripts/post.sh" --actor tester@proj --project proj --event amended --task "$AM2" --set "wt_dir=$T/elsewhere/steal" 2>&1); RC=$?
+[[ $RC -ne 0 ]] && echo "$OUT" | grep -q "主仓同级" && [[ "$(grep '^wt_dir:' "$AGORA_HOME/wiki/tasks/$AM2.md")" == "$FM_BEFORE" ]] \
+  && ok "② C-F3 回归：wt_dir 越主仓同级命名域被拒（页零写入）" || fail "② C-F3 未拒（rc=$RC $OUT）"
+# C-F2 回归：amend verify 换约后 done 的 derived 显式标注（评审者可见，不阻断）
+AM3=$(TID "$(TITLE="amend换约标注任务标题够长" VERIFY=true PROJECT_DIR="$PROJ" TC)")
+bash "$AGORA_HOME/scripts/post.sh" --actor tester@proj --project proj --event dispatched --task "$AM3" --target "$PROJ" --child tester --run "raw/dispatches/d-b9am3.log" >/dev/null
+OUT=$(bash "$AGORA_HOME/scripts/post.sh" --actor tester@proj --project proj --event amended --task "$AM3" --set "verify=true" 2>&1)
+grep -q "^verify: true$" "$AGORA_HOME/wiki/tasks/$AM3.md" \
+  && ok "② C-F2 前置：amend verify 换约落页" || fail "② C-F2 前置（$OUT）"
+OUT=$(bash "$AGORA_HOME/scripts/post.sh" --actor tester@proj --project proj --event done --task "$AM3" --commit HEAD --evidence x)
+echo "$OUT" | grep -q "verify_amended" \
+  && ok "② C-F2 回归：done derived 显式标注 verify_amended" || fail "② C-F2 标注缺失（$OUT）"
+# ocr-E 回归：值级边界（转义往返 / | 拒 / 空值拒）——落 AM2（无 merge 夹具耦合）
+OUT=$(bash "$AGORA_HOME/scripts/post.sh" --actor tester@proj --project proj --event amended --task "$AM2" --set 'verify=bash a&b\c.sh' 2>&1)
+grep -Fq 'verify: bash a&b\c.sh' "$AGORA_HOME/wiki/tasks/$AM2.md" \
+  && ok "② ocr-E：set 值 & 与反斜杠 sed 转义往返无损" || fail "② ocr-E 转义（$OUT）"
+bash "$AGORA_HOME/scripts/post.sh" --actor tester@proj --project proj --event amended --task "$AM2" --set 'wt_dir=/a|b' 2>/dev/null
+[[ $? -eq 2 ]] && ok "② ocr-E：set 值含 | 被拒(rc=2)" || fail "② ocr-E | 未拒"
+bash "$AGORA_HOME/scripts/post.sh" --actor tester@proj --project proj --event amended --task "$AM2" --set 'wt_dir=' 2>/dev/null
+[[ $? -eq 2 ]] && ok "② ocr-E：set 空值被拒(rc=2)" || fail "② ocr-E 空值未拒"
+# ocr2-H1/H2 回归：本任务专属命名＋project_dir 名册域＋混改窗
+OUT=$(bash "$AGORA_HOME/scripts/post.sh" --actor tester@proj --project proj --event amended --task "$AM2" --set "wt_dir=$T/proj__wt-gt-9999__0000" 2>&1); RC=$?
+[[ $RC -ne 0 ]] && echo "$OUT" | grep -q "本任务专属" \
+  && ok "② ocr2-H1：wt_dir 指他任务树名被拒（basename 钉死）" || fail "② ocr2-H1 未拒（rc=$RC $OUT）"
+UNREG_B9="/tmp/opencode/gt-b9fb-unreg-probe"; mkdir -p "$UNREG_B9"   # 夹具须在 $T 外：$T 本身被「自动注册」用例注册为实体域（covers 前缀）
+OUT=$(bash "$AGORA_HOME/scripts/post.sh" --actor tester@proj --project proj --event amended --task "$AM2" --set "project_dir=$UNREG_B9" 2>&1); RC=$?
+rm -rf "$UNREG_B9"
+[[ $RC -ne 0 ]] && echo "$OUT" | grep -q "名册已注册" \
+  && ok "② ocr2-H2：project_dir 改名册外目录被拒（锚点不可迁）" || fail "② ocr2-H2 未拒（rc=$RC $OUT）"
+OUT=$(bash "$AGORA_HOME/scripts/post.sh" --actor tester@proj --project proj --event amended --task "$AM2" --set "project_dir=$PROJ" --set "wt_dir=$NEWWT" 2>&1); RC=$?
+[[ $RC -ne 0 ]] && echo "$OUT" | grep -q "混改" \
+  && ok "② ocr2：project_dir×wt_dir 同次混改被拒（漂移窗）" || fail "② ocr2 混改未拒（rc=$RC $OUT）"
+# MCP 面：amended 经 agora_post 工具（枚举＋set 透传）——dispatcher 修正 verify 合同
+cd "$PROJ" && python3 - "$PKG/server/agora_mcp.py" "$AM2" <<'PYEOF' && ok "② MCP agora_post amended（枚举+set 透传）" || fail "② MCP amended 未通"
+import json, subprocess, sys
+p = subprocess.Popen(["python3", sys.argv[1]], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+def rpc(m, ps=None, i=1):
+    p.stdin.write(json.dumps({"jsonrpc":"2.0","id":i,"method":m,"params":ps or {}})+"\n"); p.stdin.flush()
+    return json.loads(p.stdout.readline())
+rpc("initialize", {})
+r = rpc("tools/call", {"name":"agora_post","arguments":{"event":"amended","task":sys.argv[2],"set":["verify=bash tests/smoke-test.sh"]}}, 2)
+d = json.loads(r["result"]["content"][0]["text"])
+assert d.get("seq"), d
+p.stdin.close()
+PYEOF
+grep -q '^verify: bash tests/smoke-test.sh$' "$AGORA_HOME/wiki/tasks/$AM2.md" \
+  && ok "② MCP amend 改写 verify 合同（修正通道全脸可用）" || fail "② MCP amend 页未改写"
+
+# ③ doctor idem 恢复文案与 doctor-runbook 一致（标注无效不删行）
+SH9="$AGORA_HOME/log/$(date +%F)/proj.md"
+mkdir -p "$(dirname "$SH9")"
+printf -- '- seq:1 | ts:%s | actor:idemdup@p9 | event:proposal | idem:dupb9 | seen:p9@0\n' "$(date --iso-8601=seconds)" >> "$SH9"
+printf -- '- seq:2 | ts:%s | actor:idemdup@p9 | event:proposal | idem:dupb9 | seen:p9@0\n' "$(date --iso-8601=seconds)" >> "$SH9"
+OUT=$(bash "$AGORA_HOME/scripts/doctor.sh" 2>&1)
+echo "$OUT" | grep -q "发 diagnosed 标注无效行 ref" && echo "$OUT" | grep -q "doctor-runbook §idem" \
+  && ! echo "$OUT" | grep -q "删除后续行" \
+  && ok "③ doctor idem 文案与 runbook 一致（标注不删行）" || fail "③ doctor idem 文案（$(echo "$OUT" | grep "idem" | head -2)）"
+
+echo
 echo "===== 结果: $PASS 通过, $FAIL 失败 ====="
 
 wait_live_clear || true   # gt-2153：rm 夹具前等派发子会话退场（清空或超时再删）

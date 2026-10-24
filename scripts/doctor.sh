@@ -49,7 +49,7 @@ for f in sorted((glob.glob(f"{HOME}/log/*/*.md") + glob.glob(f"{HOME}/log/*/.*.m
 print("\n".join(bad))
 PYEOF
 )
-[[ -z "$IDEM_BAD" ]] && ok "idem 完整性" || bad "连续重复 idem（重试残留）: $IDEM_BAD" "保留首条，人工删除后续行（doctor-runbook §idem）"
+[[ -z "$IDEM_BAD" ]] && ok "idem 完整性" || bad "连续重复 idem（重试残留）: $IDEM_BAD" "保留首条，后续行发 diagnosed 标注无效行 ref（doctor-runbook §idem；不删行）"
 
 # 3. board 对账：cp/推导/diff 全程持 post.lock——对账窗口对写路径完全闭合
 TMP=$(mktemp -d)

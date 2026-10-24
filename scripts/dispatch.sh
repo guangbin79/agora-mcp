@@ -146,6 +146,26 @@ if [ -f "$PAGE" ]; then
   CTITLE=$(python3 -c 'import sys;print(("agora: "+sys.argv[1]+" "+sys.argv[2][:60]).rstrip())' "$TASK" "$_TT")
 fi
 
+# verify 合同静态守卫（gt-b9fb 三实例成律 gt-6cad/e4f3/944f）：绝对路径／$AGORA_HOME 引用在 wt 树内
+# 与他机不可达——落账前静态检查，warnings 非阻断提示改仓内相对路径（wt 树内执行语义）
+VWARN=()
+if [ -f "$PAGE" ]; then
+  _V=$(sed -n 's/^verify:[[:space:]]*//p' "$PAGE" | head -1)   # sed -n 形态：无 verify 行不触发 pipefail（gt-b9fb 首跑实证）
+  set -f
+  for _w in $_V; do
+    _t=$(printf '%s' "$_w" | tr -d "\"'")   # 剥引号后再判：引号包裹的绝对路径同防
+    case "$_t" in
+      '$AGORA_HOME'/*|'${AGORA_HOME}'/*) VWARN+=("verify 含 \$AGORA_HOME/… 路径（派生树内/他机不可达），建议改仓内相对路径（wt 树内执行语义）") ;;
+      /*) VWARN+=("verify 含绝对路径 $_t（wt 树内/他机不可达），建议改仓内相对路径（wt 树内执行语义）") ;;
+    esac
+  done
+  set +f
+fi
+VWARN_EXT=""
+if [ ${#VWARN[@]} -gt 0 ]; then
+  VWARN_EXT=",\"warnings\":$(printf '%s\n' "${VWARN[@]}" | python3 -c 'import json,sys;print(json.dumps([l.strip() for l in sys.stdin if l.strip()],ensure_ascii=False))')"
+fi
+
 # 预检（落账前，失败零账本残留；SPAWN_PRECHECK 同步可见——失败必须响）
 "$RUNTIME" --version >/dev/null 2>&1 || fail SPAWN_PRECHECK "runtime 不可用: $RUNTIME" 9
 [ -d "$PDIR" ] || fail SPAWN_PRECHECK "project_dir 不存在: $PDIR" 9
@@ -208,7 +228,7 @@ if [ -z "$WT_DIR" ]; then
   if [ "$_PRESENT" = 1 ]; then
   bash "$AGORA_HOME/scripts/post.sh" --actor "$ACTOR" --project "$PROJNAME" --event ack \
     --body "dispatch $TASK notified via bridge" --mention "$CHILD" >/dev/null
-  echo "{\"dispatch_id\":\"$DID\",\"mode\":\"notified\",\"child_actor\":\"$CHILD@$PROJNAME\"}"
+  echo "{\"dispatch_id\":\"$DID\",\"mode\":\"notified\",\"child_actor\":\"$CHILD@$PROJNAME\"${VWARN_EXT}}"
   exit 0
   fi
 fi
@@ -323,7 +343,7 @@ if [ "$API" = 1 ]; then
       fi
     fi
   fi
-  echo "{\"dispatch_id\":\"$DID\",\"mode\":\"spawned\",\"channel\":\"api\",\"session\":\"$SID\",\"child_actor\":\"$CHILD@$PROJNAME\",\"run\":\"$LOG\",\"dedup\":${DEDUP:-false}}"
+  echo "{\"dispatch_id\":\"$DID\",\"mode\":\"spawned\",\"channel\":\"api\",\"session\":\"$SID\",\"child_actor\":\"$CHILD@$PROJNAME\",\"run\":\"$LOG\",\"dedup\":${DEDUP:-false}${VWARN_EXT}}"
   exit 0
 fi
 if ! spawn_attempt 1; then
@@ -334,4 +354,4 @@ if ! spawn_attempt 1; then
   fi
 fi
 
-echo "{\"dispatch_id\":\"$DID\",\"mode\":\"spawned\",\"child_actor\":\"$CHILD@$PROJNAME\",\"run\":\"$LOG\",\"dedup\":${DEDUP:-false}}"
+echo "{\"dispatch_id\":\"$DID\",\"mode\":\"spawned\",\"child_actor\":\"$CHILD@$PROJNAME\",\"run\":\"$LOG\",\"dedup\":${DEDUP:-false}${VWARN_EXT}}"
