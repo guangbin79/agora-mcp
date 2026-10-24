@@ -58,6 +58,13 @@ owner: mayor
 EOF
 git add wiki/topics/delegation.md 2>/dev/null || true
 git diff --cached --quiet || git commit -qm "seed: wiki/topics/delegation.md (跨仓委托协议精简版)"
+# 存量迁移（幂等，评审 R1-F2/F3）：老位置登记数据并入根 sessions.map——防升级后活会话通知路由
+# 静默消失（gt-8a3c 口径）；老文件随 git add -A 记账删除，账本仓不留双源
+if [[ -f scripts/sessions.map ]]; then
+  touch sessions.map
+  cat scripts/sessions.map >> sessions.map
+  rm -f scripts/sessions.map
+fi
 [[ -f sessions.map ]] || printf '# <机器名>  <agent名>  <opencode session id>  <登记时间>（多机：仅本机条目算"在场"）\n' > sessions.map
 git add -A
 git diff --cached --quiet || git commit -qm "init: agora bootstrap (converge)"

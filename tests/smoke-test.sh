@@ -201,7 +201,7 @@ REMOTE="$T/remote.git"; git init -q --bare "$REMOTE"
 # 机器 A 先配远端并 push 全量历史
 AGORA_HOME="$AGORA_HOME" AGORA_PKG="$PKG" AGORA_REMOTE="file://$REMOTE" bash "$PKG/scripts/init.sh" >/dev/null 2>&1
 git -C "$AGORA_HOME" remote get-url origin | grep -q "remote.git" && ok "已有仓库补配远端" || fail "已有仓库补配远端"
-# 机器 B：clone 远端后 init（骨架必须幂等补齐 scripts/）
+# 机器 B：clone 远端后 init（脚本单源在产品包——init 只补数据骨架，不再装脚本）
 HOME2="$T/agora-b"; git clone -q "file://$REMOTE" "$HOME2" 2>/dev/null
 AGORA_HOME="$HOME2" AGORA_PKG="$PKG" bash "$PKG/scripts/init.sh" >/dev/null 2>&1
 [[ ! -f "$HOME2/scripts/post.sh" ]] && ok "clone 后 init 不再装脚本（单源在产品包，gt-f6e4）" || fail "clone 后 init 仍装脚本（应已停装）"
@@ -538,6 +538,8 @@ assert r['mails_archived']>=1, r
   && ok "TTL 只清本机过期条目" || fail "TTL 只清本机过期条目"
 ls "$AGORA_HOME/inbox/archive/tester/" 2>/dev/null | grep -q '\.md' \
   && ok "超期邮件入 archive" || fail "超期邮件入 archive"
+git -C "$AGORA_HOME" status --porcelain -- sessions.map | grep -q . \
+  && fail "保洁 chore 未入库（sessions.map 脏，评审 R1-F1 回归）" || ok "保洁 chore 已入库（sessions.map 净）"
 
 # gt-8a3c：TTL 时间戳兼容——存量裸 epoch 条目可回收（此前 fromisoformat 抛→except pass 永生）；ISO 解析不受影响
 printf '%s tester ses-epoch-old %s\n%s tester ses-iso-old 2026-10-12T10:00:00+00:00\n%s tester ses-epoch-new %s\nforeign tester ses-f 2026-10-12T10:00:00+00:00\n' \

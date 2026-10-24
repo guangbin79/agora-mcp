@@ -51,7 +51,6 @@ from datetime import datetime, timedelta
 
 HOME = os.environ["AGORA_HOME"]
 SCRIPTS = os.environ["SCRIPTS_DIR"]   # 单源自定位（gt-f6e4）：兄弟脚本/桥/runtime 一律本仓 scripts
-SCRIPTS = os.environ["SCRIPTS_DIR"]   # 单源自定位（gt-f6e4）：兄弟脚本/桥/runtime 一律本仓 scripts
 WARN = int(os.environ.get("AGORA_POLL_WARN_MIN", "20"))
 CRIT = int(os.environ.get("AGORA_POLL_CRIT_MIN", "40"))
 LIVE_TIMEOUT = int(os.environ.get("AGORA_DISPATCH_TIMEOUT", "30"))
@@ -759,7 +758,7 @@ if ARCH_D > 0:
 # 保洁变更 best-effort 入库 + 推送（失败不拒，下轮 pre 合并重试）
 if report["sessions_reaped"] or report["mails_archived"]:
     env = {**os.environ, "AGORA_HOME": HOME, "AGORA_MECHANICAL": "1"}
-    subprocess.run(["git", "add", "scripts/sessions.map", "inbox/"],
+    subprocess.run(["git", "add", "sessions.map", "inbox/"],
                    cwd=HOME, env=env, capture_output=True)
     r = subprocess.run(["git", "-c", f"user.name={WATCHDOG}",
                         "-c", f"user.email={WATCHDOG}@local", "commit", "-qm",
