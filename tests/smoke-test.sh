@@ -1309,8 +1309,8 @@ rm -f "$AGORA_HOME/scripts/sessions.map"   # 前序桥段残留会触发在场�
 for _t in $(python3 - "$AGORA_HOME" <<'PYEOF'
 import glob, re, sys
 home = sys.argv[1]; disp, terminal = {}, set()
-for f in sorted(glob.glob(f"{home}/log/*/*.md")):
-    try: lines = open(f, encoding="utf-8").read().splitlines()
+for f in sorted(glob.glob(f"{home}/log/*/*.md") + glob.glob(f"{home}/log/*/.*.md")):
+    try: lines = open(f, encoding="utf-8", errors="replace").read().splitlines()
     except OSError: continue
     for line in lines:
         m = re.search(r"task:(gt-[0-9a-f]{4,})", line)
@@ -1349,8 +1349,8 @@ for _t in $(python3 - "$AGORA_HOME" <<'PYEOF'   # 先清零 tester 域（②③�
 import glob, re, sys
 home = sys.argv[1]
 disp, terminal = {}, set()
-for f in sorted(glob.glob(f"{home}/log/*/*.md")):
-    try: lines = open(f, encoding="utf-8").read().splitlines()
+for f in sorted(glob.glob(f"{home}/log/*/*.md") + glob.glob(f"{home}/log/*/.*.md")):
+    try: lines = open(f, encoding="utf-8", errors="replace").read().splitlines()
     except OSError: continue
     for line in lines:
         m = re.search(r"task:(gt-[0-9a-f]{4,})", line)
@@ -1390,8 +1390,8 @@ rm -f "$AGORA_HOME/scripts/sessions.map"
 for _t in $(python3 - "$AGORA_HOME" <<'PYEOF'
 import glob, re, sys
 home = sys.argv[1]; disp, terminal = {}, set()
-for f in sorted(glob.glob(f"{home}/log/*/*.md")):
-    try: lines = open(f, encoding="utf-8").read().splitlines()
+for f in sorted(glob.glob(f"{home}/log/*/*.md") + glob.glob(f"{home}/log/*/.*.md")):
+    try: lines = open(f, encoding="utf-8", errors="replace").read().splitlines()
     except OSError: continue
     for line in lines:
         m = re.search(r"task:(gt-[0-9a-f]{4,})", line)
@@ -1463,8 +1463,8 @@ rm -f "$AGORA_HOME/scripts/sessions.map"
 for _t in $(python3 - "$AGORA_HOME" <<'PYEOF'
 import glob, re, sys
 home = sys.argv[1]; disp, terminal = {}, set()
-for f in sorted(glob.glob(f"{home}/log/*/*.md")):
-    try: lines = open(f, encoding="utf-8").read().splitlines()
+for f in sorted(glob.glob(f"{home}/log/*/*.md") + glob.glob(f"{home}/log/*/.*.md")):
+    try: lines = open(f, encoding="utf-8", errors="replace").read().splitlines()
     except OSError: continue
     for line in lines:
         m = re.search(r"task:(gt-[0-9a-f]{4,})", line)
@@ -1529,8 +1529,8 @@ rm -f "$AGORA_HOME/scripts/sessions.map"
 for _t in $(python3 - "$AGORA_HOME" <<'PYEOF'
 import glob, re, sys
 home = sys.argv[1]; disp, terminal = {}, set()
-for f in sorted(glob.glob(f"{home}/log/*/*.md")):
-    try: lines = open(f, encoding="utf-8").read().splitlines()
+for f in sorted(glob.glob(f"{home}/log/*/*.md") + glob.glob(f"{home}/log/*/.*.md")):
+    try: lines = open(f, encoding="utf-8", errors="replace").read().splitlines()
     except OSError: continue
     for line in lines:
         m = re.search(r"task:(gt-[0-9a-f]{4,})", line)
@@ -1673,12 +1673,55 @@ AGORA_MERGE_WAIT_MIN=9999 AGORA_ORPHAN_MIN=9999 AGORA_WT_GRACE_MIN=9999 AGORA_DI
 LEV "$SL" diagnosed | grep -q "滞留" && ok "⑦ .live 滞留→diagnosed（既有档回归）" || fail "⑦ stale-live"
 rm -f "$AGORA_HOME/raw/dispatches/d-stale.log.live"   # gt-2153：清 stale 标记——teardown 轮询须零等待
 
+# ⑧⑨⑩＋R5 gt-caf3 终闸发现核销（gt-40cc）：同秒 tie/GC stale prune/未尝试重派 null＋裸 glob 守卫
+# ⑧ 同秒 tie：cancelled（点分片，先扫）与 dispatched（后扫分片）同秒 → 终态不被孤儿档复活重派（gt-caf3 ①）
+TT=$(MKWT2 "tie终态" t9a)
+TS8="$(date -Iseconds)"
+mkdir -p "$AGORA_HOME/log/$(date +%F)"
+printf -- '- seq:991 | ts:%s | actor:orch@.tiep | event:cancelled | idem:t9c1 | seen:x | task:%s\n' "$TS8" "$TT" > "$AGORA_HOME/log/$(date +%F)/.tie-orch.md"
+printf -- '- seq:992 | ts:%s | actor:tester@proj | event:dispatched | idem:t9c2 | seen:x | task:%s | run:raw/dispatches/d-tie8.log | target:%s | child:tester\n' "$TS8" "$TT" "$PROJ" > "$AGORA_HOME/log/$(date +%F)/tie-wd.md"
+POLLT >/dev/null
+[ "$(LEV "$TT" dispatched | grep -c event:dispatched)" -eq 1 ] && [ -z "$(LEV "$TT" diagnosed | grep -F 孤儿)" ] \
+  && ok "⑧ 同秒 cancelled+dispatched 平局取终态（不复活）" || fail "⑧ tie（disp=$(LEV "$TT" dispatched | grep -c event:dispatched)）"
+rm -f "$AGORA_HOME/log/$(date +%F)/.tie-orch.md" "$AGORA_HOME/log/$(date +%F)/tie-wd.md"
+# ⑧b 同秒 done+cancelled 跨分片 → closer 胜，done-unmerged 梯子不误燃（gt-40cc① 同源残角，终闸 A 册）
+TB=$(MKWT2 "tie双终态" t9d)
+TS9="$(date -Iseconds)"
+printf -- '- seq:993 | ts:%s | actor:tester@proj | event:cancelled | idem:t9d1 | seen:x | task:%s\n' "$TS9" "$TB" > "$AGORA_HOME/log/$(date +%F)/.tie2-orch.md"
+printf -- '- seq:994 | ts:%s | actor:tester@proj | event:done | idem:t9d2 | seen:x | task:%s | commit:x | evidence:ok\n' "$TS9" "$TB" > "$AGORA_HOME/log/$(date +%F)/tie2-wd.md"
+POLLT >/dev/null
+[ -z "$(LEV "$TB" diagnosed | grep -F 未合并)" ] && ok "⑧b 同秒 done+cancelled closer 胜（梯子安静）" || fail "⑧b done-unmerged 误燃（$(LEV "$TB" diagnosed | head -1)）"
+rm -f "$AGORA_HOME/log/$(date +%F)/.tie2-orch.md" "$AGORA_HOME/log/$(date +%F)/tie2-wd.md"
+# ⑨ GC：空壳残留＋stale 注册 → prune 后 branch -D 删净（gt-caf3 ②；不修则每例残一分支永不回收）
+GT2=$(MKWT2 "gc空壳" t9b); WG2=$(ls -d "$T"/proj__wt-${GT2}__*)
+echo g > "$WG2/g2file"; git -C "$WG2" add -A; git -C "$WG2" -c user.name=t -c user.email=t@l commit -qm g2
+POST tester@proj --event claimed --task "$GT2" >/dev/null
+POST tester@proj --event done --task "$GT2" --commit HEAD --evidence ok >/dev/null
+git -C "$PROJ" merge -q --ff-only "wt/$GT2" 2>/dev/null
+tick "$GT2"; POST tester@proj --event merged --task "$GT2" --commit "$(git -C "$PROJ" rev-parse HEAD)" --branch "$(git -C "$PROJ" symbolic-ref --short HEAD)" >/dev/null; untick "$GT2"
+rm -rf "$WG2"; mkdir "$WG2"   # 空壳＋stale 注册：remove validation failed → rmdir 可删 → branch -D 拒删形态
+POLLT >/dev/null
+git -C "$PROJ" rev-parse -q --verify "refs/heads/wt/$GT2" >/dev/null && fail "⑨ GC 空壳 stale：分支泄漏" || ok "⑨ GC 空壳 stale 注册：prune 后分支删净"
+# ⑩ 未尝试重派记 null：SPAWN=0 孤儿档 → redispatched:null（区别尝试失败 false）（gt-caf3 ③）
+ON=$(MKWT2 "未尝试" t9c)
+POST tester@proj --event dispatched --task "$ON" --target "$PROJ" --child tester --run "raw/dispatches/d-none9.log" >/dev/null
+PO=$(AGORA_POLL_SPAWN=0 AGORA_MERGE_WAIT_MIN=0 AGORA_ORPHAN_MIN=0 AGORA_WT_GRACE_MIN=0 AGORA_DISPATCH_TIMEOUT=0 AGORA_MAX_SPAWN=9 AGORA_RUNTIME=echo bash "$AGORA_HOME/scripts/poll.sh" 2>/dev/null)
+echo "$PO" | python3 -c "
+import json, sys
+r = json.loads(sys.stdin.read())
+e = [x for x in r['orphan_diag'] if x['task'] == '$ON']
+assert e and e[0]['redispatched'] is None, r['orphan_diag']
+" && ok "⑩ 孤儿未尝试重派记 null" || fail "⑩ 未尝试重派未记 null"
+# R5 (gt-40cc)：smoke 账本扫描禁裸 glob——点分片必须伴生（gt-3ea2 点仓盲同类：跨分片核验禁裸 glob）
+BARE_GLOB=$(grep -F 'glob.glob(f"{home}/log/*/*.md")' "$PKG/tests/smoke-test.sh" | grep -vcF '.*.md' || true)
+[ "$BARE_GLOB" -eq 0 ] && ok "R5 smoke 账本扫描全带点分片伴生 glob" || fail "R5 裸 glob 残留 $BARE_GLOB 处"
+
 echo "===== BOOT 链式协议＋setup 钩子（全量委托 L1 Task8） ====="
 for _t in $(python3 - "$AGORA_HOME" <<'PYEOF'
 import glob, re, sys
 home = sys.argv[1]; disp, terminal = {}, set()
-for f in sorted(glob.glob(f"{home}/log/*/*.md")):
-    try: lines = open(f, encoding="utf-8").read().splitlines()
+for f in sorted(glob.glob(f"{home}/log/*/*.md") + glob.glob(f"{home}/log/*/.*.md")):
+    try: lines = open(f, encoding="utf-8", errors="replace").read().splitlines()
     except OSError: continue
     for line in lines:
         m = re.search(r"task:(gt-[0-9a-f]{4,})", line)
@@ -1800,8 +1843,8 @@ echo "===== 已知风险批次（B-M3 孤儿判据 / B-M4 重派回报 / B-M7 GC
 for _t in $(python3 - "$AGORA_HOME" <<'PYEOF'
 import glob, re, sys
 home = sys.argv[1]; disp, terminal = {}, set()
-for f in sorted(glob.glob(f"{home}/log/*/*.md")):
-    try: lines = open(f, encoding="utf-8").read().splitlines()
+for f in sorted(glob.glob(f"{home}/log/*/*.md") + glob.glob(f"{home}/log/*/.*.md")):
+    try: lines = open(f, encoding="utf-8", errors="replace").read().splitlines()
     except OSError: continue
     for line in lines:
         m = re.search(r"task:(gt-[0-9a-f]{4,})", line)
@@ -2049,7 +2092,7 @@ CNT=$(grep -c "PROMPT-OK" "$FAKE_HOME/calls.log" 2>/dev/null || true); CNT=${CNT
 for _t in $(python3 - "$AGORA_HOME" <<'PYEOF'
 import glob, re, sys
 home = sys.argv[1]; done_open = {}
-for f in sorted(glob.glob(f"{home}/log/*/*.md")):
+for f in sorted(glob.glob(f"{home}/log/*/*.md") + glob.glob(f"{home}/log/*/.*.md")):
     try: lines = open(f, encoding="utf-8", errors="replace").read().splitlines()
     except OSError: continue
     for line in lines:

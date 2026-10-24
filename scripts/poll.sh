@@ -139,7 +139,11 @@ def scan_tasks():
                 if e["event"] == "dispatched":
                     d["dispatched"].append((e.get("actor", ""), e.get("run", ""), e.get("dispatcher_task", ""), e.get("session", "")))
     for d in tasks.values():
-        rows = sorted(d["_rows"], key=lambda r: r[0])  # gt-caf3/gt-db15：跨分片文件序≠时间序，状态机统一按 ts 序
+        # gt-caf3/gt-db15：跨分片文件序≠时间序，状态机统一按 ts 序；gt-40cc①：同秒平局按事件语义定序——
+        # 派发(0) < done(1) < merged/cancelled/reopened(2)：终态语义后于其前置事件，防同秒跨分片时
+        # last 取 dispatched 令已取消任务被孤儿档复活重派、或 last=done 令已取消任务误燃 done-unmerged 梯子
+        _RANK = {"done": 1, "merged": 2, "cancelled": 2, "reopened": 2}
+        rows = sorted(d["_rows"], key=lambda r: (r[0], _RANK.get(r[1], 0)))
         d["last"] = rows[-1][1] if rows else None  # B-M3：last 按 ts 序取尾行——与 done_open 重放同口径（同 ts 平局一致）
         for _ts, ev, _ac in rows:  # gt-db15：done_open 同按 ts 序重放——同日多分片文件名字典序≠时间序
             if ev == "done": d["done_open"] = True          # done 未闭：merged/cancelled/reopened 才清
@@ -446,7 +450,7 @@ for t, d in TASKS.items():
                         "--task", t,
                         "--conclusion", f"孤儿 dispatched：{t} 已落账派发但 run log 缺失（spawn 未执行，第 {n}/{REDISPATCH_MAX} 次），恢复性重派"])
     page = f"{HOME}/wiki/tasks/{t}.md"
-    redisp = False  # B-M4：核查 dispatch 返回码，失败如实回报不谎报
+    redisp = None  # B-M4：核查 dispatch 返回码如实回报不谎报；gt-40cc③：未尝试=None（区别尝试失败=False）
     if r.returncode == 0 and SPAWN and os.path.exists(page):
         upd = re.search(r'^project_dir:\s*(\S+)', open(page, encoding="utf-8", errors="replace").read(), re.M)
         if upd:
@@ -640,20 +644,45 @@ for page in glob.glob(f"{HOME}/wiki/tasks/*.md"):
     # （cancelled 树凭据 dirty 现状只能人工清，违背终清闭环）；其余 dirty 维持保守只报告
     if dirty and not (d.get("last_terminal") == "cancelled" and _cred_only_dirty(wtd)):
         report["wt_kept_dirty"].append(t); continue
-    main_ = lib.main_repo_of(wtd) or wtd
-    rr = subprocess.run(["git", "-C", main_, "worktree", "remove"] + (["--force"] if dirty else []) + [wtd],
-                        capture_output=True, text=True)
-    if rr.returncode != 0:
-        try: os.rmdir(wtd)   # remove 失败常剩空壳（git 已摘 worktree 元数据）；rmdir 只删空目录，不碰有数据现场
-        except OSError: pass
+    # gt-40cc②：树可能已外删/空壳——main_repo_of 断链（无 .git 指针可验）时按注册指针反查主仓：
+    # 扫 wtd 同级仓的 .git/worktrees/*/gitdir 指向 wtd/.git 者（盘上注册真值）。不信任任务页
+    # project_dir——多写入方可控字段喂 git -C 仓库级操作（branch -D 触发 core.hooksPath）＝
+    # 账本写入方→poll 主机 RCE（终闸 C 册 critical）；再断链则复用 gcst 里上轮已过盘上校验的
+    # main_（poll-state 本机文件不经广场同步，remove 半完成态「注册已摘目录未删」下重试必需）；
+    # 全部未命中 → 跳过 git 仓库级操作，wt_remove_failed 显报、分支保守保留
+    main_ = lib.main_repo_of(wtd) or (e.get("main") if isinstance(e, dict) and e.get("main") else None)
+    if main_ is None:
+        par = os.path.dirname(os.path.realpath(wtd))
+        try: sibs = os.listdir(par)
+        except OSError: sibs = []
+        for s in sibs:
+            wtb = os.path.join(par, s, ".git", "worktrees")
+            if not os.path.isdir(wtb): continue
+            for nm in os.listdir(wtb):
+                try: c = open(os.path.join(wtb, nm, "gitdir"), encoding="utf-8", errors="replace").read().strip()
+                except OSError: continue
+                if os.path.realpath(c) == os.path.realpath(os.path.join(wtd, ".git")):
+                    main_ = os.path.join(par, s); break
+            if main_ is not None: break
+    rr = None
+    if main_ is not None:
+        rr = subprocess.run(["git", "-C", main_, "worktree", "remove"] + (["--force"] if dirty else []) + [wtd],
+                            capture_output=True, text=True)
+        if rr.returncode != 0:
+            try: os.rmdir(wtd)   # remove 失败常剩空壳（git 已摘 worktree 元数据）；rmdir 只删空目录，不碰有数据现场
+            except OSError: pass
     if not os.path.isdir(wtd):
         gcst.pop(t, None); report["wt_removed"].append(t)
-        subprocess.run(["git", "-C", main_, "branch", "-q", "-D", f"wt/{t}"], capture_output=True)
+        if main_ is not None:
+            subprocess.run(["git", "-C", main_, "worktree", "prune"], capture_output=True)  # gt-40cc②：stale 注册令 branch -D 拒删（used by worktree），先 prune
+            subprocess.run(["git", "-C", main_, "branch", "-q", "-D", f"wt/{t}"], capture_output=True)
     else:
         # B-M7：删失败必响（report 可见）且 gcst 保留待下轮重试；跳过 branch -D（防分支先于树删除）
+        if main_ is not None: e["main"] = main_   # gt-40cc②：已过盘上校验的 owner 存档，防 remove 半完成态断链
         report["wt_remove_failed"].append(
             {"task": t, "dir": wtd,
-             "err": ((rr.stderr or rr.stdout or "unknown").strip().splitlines() or ["unknown"])[-1][:160]})
+             "err": "owner 未定（main_repo_of 断链且注册指针未命中），分支保守保留" if rr is None
+                    else ((rr.stderr or rr.stdout or "unknown").strip().splitlines() or ["unknown"])[-1][:160]})
 
 # ---------- ④a sessions.map TTL 保洁（只清本机条目；他机条目由它自己机器的 poll 清） ----------
 SMAP = f"{HOME}/scripts/sessions.map"
