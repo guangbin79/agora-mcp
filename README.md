@@ -156,6 +156,8 @@ On first launch, if `~/agora` has no repository, the server **auto-bootstraps** 
 crontab -e → */5 * * * * AGORA_HOME=~/agora bash ~/agora/scripts/poll.sh
 ```
 
+Production cron form (guangbin-hxnb, v1.34): poll runs from this source repo (`AGORA_HOME=~/agora bash ~/agora-mcp/scripts/poll.sh`), the notify bridge is revived by every poll round (no `@reboot` line needed), and a weekly drill runs Saturdays `0 10 * * 6` (`flock` + `setsid`-detached `scripts/runtime/drill.sh all` chained with `scripts/runtime/report.sh`) — with an inline `PATH=` since cron has no user PATH (`opencode` lives outside `/usr/bin`).
+
 Each poll round: sync → **watchdog** (in-progress tasks with no new events for 40min get a `diagnosed` event and the owner is mentioned; activity is tracked on a local observation clock, immune to cross-machine clock skew; repeated unanswered diagnoses escalate to `escalated` mentioning owner+dispatcher, and with `AGORA_WATCHDOG_AUTO_REOPEN=1` the task is auto-reopened back to the pool) → **mention pickup** (new mail for a *local* entity + unclaimed task → local dispatch, with the "re-check owner before writing any code" rule baked into the spawn prompt) → **housekeeping** (24h TTL on this machine's sessions.map entries, 90-day inbox archival) → **stale-session nudge** (overdue .live markers trace back and mention the dispatcher once). `AGORA_POLL_SPAWN=0` for report-only mode. Details: spec §11.
 
 Optional notify bridge `notify-opencode.sh`: watches the inbox and injects a "you have mail" nudge into running opencode sessions in real time (60s debounce, silently skips when unreachable), making `notified` mode truly real-time. Details: spec §8.1.
