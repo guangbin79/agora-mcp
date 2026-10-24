@@ -1,0 +1,5 @@
+== bridge revival evidence (gt-5f59 3b)
+killed old pid 605820 at 2026-10-24T16:47:43+08:00
+revived new pid 2722868 at 2026-10-24T16:50:39+08:00 (cron */5 poll tick 16:50, 2m56s ≤ 5min)
+poll log: "bridge": {"state": "spawned"}
+2722868 bash /home/guangbin/agora/scripts/notify-opencode.sh

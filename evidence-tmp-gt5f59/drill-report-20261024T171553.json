@@ -1,0 +1,111 @@
+{
+ "ts": "20261024T171553",
+ "scenario": [
+  "restart",
+  "kill",
+  "quota",
+  "wave"
+ ],
+ "results": [
+  {
+   "name": "restart 首派 spawn（run 通道）",
+   "pass": true,
+   "detail": "task=gt-a459 {\"dispatch_id\":\"d-fa7066dd\",\"mode\":\"spawned\",\"child_actor\":\"drill@agora-drill\",\"run\":\"raw/dispatches/d-fa7066dd.log\",\"dedup\":false}"
+  },
+  {
+   "name": "restart setsid 脱附",
+   "pass": true,
+   "detail": "drill_sid=452909 restart_sid=593647"
+  },
+  {
+   "name": "restart 自身会话无伤",
+   "pass": true,
+   "detail": "pid 452909 存活"
+  },
+  {
+   "name": "restart 服务回魂（health）",
+   "pass": true,
+   "detail": "等待 1s"
+  },
+  {
+   "name": "restart 看门狗唤醒（滞留诊断）",
+   "pass": false,
+   "detail": "task=gt-a459 无滞留诊断"
+  },
+  {
+   "name": "kill 首派 spawn（run 通道）",
+   "pass": true,
+   "detail": "task=gt-e9b2 {\"dispatch_id\":\"d-24b66ddb\",\"mode\":\"spawned\",\"child_actor\":\"drill@agora-drill\",\"run\":\"raw/dispatches/d-24b66ddb.log\",\"dedup\":false}"
+  },
+  {
+   "name": "kill 首派认领",
+   "pass": true,
+   "detail": "task=gt-e9b2"
+  },
+  {
+   "name": "kill 扰动注入（进程组）",
+   "pass": true,
+   "detail": "run=raw/dispatches/d-24b66ddb.log"
+  },
+  {
+   "name": "kill 看门狗滞留诊断",
+   "pass": true,
+   "detail": "task=gt-e9b2"
+  },
+  {
+   "name": "kill 恢复性重派 spawn",
+   "pass": true,
+   "detail": "{\"dispatch_id\":\"d-340a52ad\",\"mode\":\"spawned\",\"child_actor\":\"drill@agora-drill\",\"run\":\"raw/dispatches/d-340a52ad.log\",\"dedup\":false}"
+  },
+  {
+   "name": "kill 闭环：新会话互异（2 派 2 sid）",
+   "pass": true,
+   "detail": "sid ses_K8d6yMK18L1GEYwlffU3HxUEa7→ses_x2p8BUCtYs0gUIbBQaf4uCr6hR"
+  },
+  {
+   "name": "kill 闭环：新会话认领",
+   "pass": true,
+   "detail": "task=gt-e9b2"
+  },
+  {
+   "name": "quota fail-closed rc8",
+   "pass": true,
+   "detail": "task=gt-24d9 {\"code\": \"QUOTA_EXCEEDED\", \"message\": \"分域满：actor drill@agora-drill 活跃 2/0（他人域不受影响，仅本 actor 域额尽）\"}"
+  },
+  {
+   "name": "quota fail-closed 零残留",
+   "pass": true,
+   "detail": "dispatched=0 .live 2→2"
+  },
+  {
+   "name": "quota 复通 dispatch spawned",
+   "pass": false,
+   "detail": "rc=0 {\"dispatch_id\":\"d-06191de5\",\"mode\":\"notified\",\"child_actor\":\"drill@agora-drill\"}"
+  },
+  {
+   "name": "wave 3 并发派发全成",
+   "pass": false,
+   "detail": "task=gt-8164 success=0/3"
+  },
+  {
+   "name": "wave 账本 3 派＋run log 齐全（无孤儿）",
+   "pass": false,
+   "detail": "dispatched=0 runs=0 missing=0"
+  },
+  {
+   "name": "wave 会话互异（无双生会话）",
+   "pass": false,
+   "detail": "sids=0"
+  },
+  {
+   "name": "wave 无孤儿复活波",
+   "pass": false,
+   "detail": "poll 后 dispatched=0"
+  },
+  {
+   "name": "wave 无双认领",
+   "pass": true,
+   "detail": "claimed=0 conflicts=0"
+  }
+ ]
+}

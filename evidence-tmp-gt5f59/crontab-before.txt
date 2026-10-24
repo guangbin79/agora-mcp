@@ -1,0 +1,7 @@
+0 22 * * * /home/guangbin/Documents/Work/scripts/daily-report-cron.sh
+0 2 * * * /home/guangbin/.dotfiles/bin/agentctl groom run
+0 9 1 * * mkdir -p /tmp/opencode && /home/guangbin/.dotfiles/.session-stats/collector.py >> /tmp/opencode/session-stats.log 2>&1
+15 4 * * 6 /home/guangbin/.dotfiles/bin/agentctl practice --auto
+*/5 * * * * AGORA_HOME=/home/guangbin/agora bash /home/guangbin/agora/scripts/poll.sh >> /home/guangbin/.local/state/agora-poll.log 2>&1
+0 4 * * * cd /home/guangbin/.dotfiles && git bundle create /home/guangbin/.local/backups/dotfiles-\%a.bundle --all
+@reboot sleep 60 && cd /home/guangbin/agora && setsid nohup bash scripts/notify-opencode.sh >/dev/null 2>&1 < /dev/null
