@@ -413,9 +413,20 @@ B2=$(cat "$AGORA_HOME"/log/*/watchdog.md | grep -c "blocked 滞留")
 seed_blk; AGORA_WATCHDOG_ESCALATE_AFTER=1 AGORA_RUNTIME=true bash "$AGORA_HOME/scripts/poll.sh" >/dev/null
 cat "$AGORA_HOME"/log/*/watchdog.md | grep "event:escalated" | grep "$BLKT" | grep -q "blocked 滞留升级" \
   && ok "blocked 升级阶梯：escalated" || fail "blocked 升级阶梯：escalated"
-POST tester@proj --event claimed --task "$BLKT" >/dev/null   # 认领者恢复 → 出泳道复位
+E1=$(cat "$AGORA_HOME"/log/*/watchdog.md | grep -c "$BLKT")
+seed_blk; AGORA_WATCHDOG_ESCALATE_AFTER=1 AGORA_RUNTIME=true bash "$AGORA_HOME/scripts/poll.sh" >/dev/null   # escalated 后保持安静
+E2=$(cat "$AGORA_HOME"/log/*/watchdog.md | grep -c "$BLKT")
+[[ "$E1" == "$E2" ]] && ok "blocked escalated 后保持安静" || fail "blocked escalated 后刷屏（$E1→$E2）"
+POST tester@proj --event claimed --task "$BLKT" >/dev/null   # 同 owner re-claim：看板仍 blocked（derive-board no-op）→ 不出泳道
 AGORA_RUNTIME=true bash "$AGORA_HOME/scripts/poll.sh" >/dev/null
-python3 - "$AGORA_HOME" "$BLKT" <<'PYEOF' && ok "blocked 后 claimed 复位出泳道" || fail "blocked 出泳道未清跟踪表"
+python3 - "$AGORA_HOME" "$BLKT" <<'PYEOF' && ok "claimed 不出泳道（与 derive-board 口径对齐）" || fail "claimed 误出泳道（看板仍 blocked 却失去看护）"
+import json, sys
+s = json.load(open(sys.argv[1] + "/.git/poll-state.json"))
+assert sys.argv[2] in s.get("_blocked_act", {}), "claimed 误清跟踪表"
+PYEOF
+POST tester@proj --event reopened --task "$BLKT" >/dev/null   # 返工回池 → 看板出 blocked 泳道 → 跟踪复位
+AGORA_RUNTIME=true bash "$AGORA_HOME/scripts/poll.sh" >/dev/null
+python3 - "$AGORA_HOME" "$BLKT" <<'PYEOF' && ok "blocked 后 reopened 复位出泳道" || fail "reopened 出泳道未清跟踪表"
 import json, sys
 s = json.load(open(sys.argv[1] + "/.git/poll-state.json"))
 assert sys.argv[2] not in s.get("_blocked_act", {}), "出泳道未清跟踪表"
