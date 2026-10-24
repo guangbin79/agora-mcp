@@ -89,7 +89,7 @@ report = {"poll": "ok", "host": HOST, "stalled": [], "suspicious": [], "escalate
           "reopened": [], "spawned": [], "held": [], "stale_live": 0,
           "sessions_reaped": 0, "mails_archived": 0, "idle_kicked": [],
           "merge_wait_diag": [], "redispatched": [], "escalated_merge": [], "merge_lagged": [],
-          "orphan_diag": [], "wt_removed": [], "wt_kept_dirty": [], "wt_kept_grace": [], "wt_remove_failed": []}
+          "orphan_diag": [], "wt_removed": [], "wt_kept_dirty": [], "wt_kept_grace": [], "wt_remove_failed": [], "wt_branch_kept": []}
 
 now = time.time()
 
@@ -139,10 +139,12 @@ def scan_tasks():
                 if e["event"] == "dispatched":
                     d["dispatched"].append((e.get("actor", ""), e.get("run", ""), e.get("dispatcher_task", ""), e.get("session", "")))
     for d in tasks.values():
-        # gt-caf3/gt-db15：跨分片文件序≠时间序，状态机统一按 ts 序；gt-40cc①：同秒平局按事件语义定序——
-        # 派发(0) < done(1) < merged/cancelled/reopened(2)：终态语义后于其前置事件，防同秒跨分片时
-        # last 取 dispatched 令已取消任务被孤儿档复活重派、或 last=done 令已取消任务误燃 done-unmerged 梯子
-        _RANK = {"done": 1, "merged": 2, "cancelled": 2, "reopened": 2}
+        # gt-caf3/gt-db15：跨分片文件序≠时间序，状态机统一按 ts 序；gt-40cc①：同秒平局仅对
+        # 「真闭铃」merged/cancelled 升阶（2）——跨分片同秒时闭铃压过 done/dispached 的扫描序，
+        # 防已取消任务被孤儿档复活重派、被误燃 done-unmerged 梯子。done/reopened/dispatched 同为
+        # 0 阶：同片按追加序（＝真因果序）——守卫六 done→reopened 同秒须 reopened 收 done_open、
+        # redispatch 流 reopened→dispatched 同秒须 dispatched 压尾（终闸 ocr high），升阶任一即瞎
+        _RANK = {"merged": 2, "cancelled": 2}
         rows = sorted(d["_rows"], key=lambda r: (r[0], _RANK.get(r[1], 0)))
         d["last"] = rows[-1][1] if rows else None  # B-M3：last 按 ts 序取尾行——与 done_open 重放同口径（同 ts 平局一致）
         for _ts, ev, _ac in rows:  # gt-db15：done_open 同按 ts 序重放——同日多分片文件名字典序≠时间序
@@ -658,8 +660,12 @@ for page in glob.glob(f"{HOME}/wiki/tasks/*.md"):
         for s in sibs:
             wtb = os.path.join(par, s, ".git", "worktrees")
             if not os.path.isdir(wtb): continue
-            for nm in os.listdir(wtb):
-                try: c = open(os.path.join(wtb, nm, "gitdir"), encoding="utf-8", errors="replace").read().strip()
+            try: nms = os.listdir(wtb)
+            except OSError: continue   # gt-40cc：TOCTOU/权限——与父目录 listdir 同口径（终闸 ocr）
+            for nm in nms:
+                gd = os.path.join(wtb, nm)
+                if not (os.path.exists(os.path.join(gd, "commondir")) and os.path.exists(os.path.join(gd, "HEAD"))): continue  # 真注册必有，对齐 main_repo_of gt-ac14 防捏造（终闸 ocr）
+                try: c = open(os.path.join(gd, "gitdir"), encoding="utf-8", errors="replace").read().strip()
                 except OSError: continue
                 if os.path.realpath(c) == os.path.realpath(os.path.join(wtd, ".git")):
                     main_ = os.path.join(par, s); break
@@ -671,18 +677,32 @@ for page in glob.glob(f"{HOME}/wiki/tasks/*.md"):
         if rr.returncode != 0:
             try: os.rmdir(wtd)   # remove 失败常剩空壳（git 已摘 worktree 元数据）；rmdir 只删空目录，不碰有数据现场
             except OSError: pass
+    else:
+        try: os.rmdir(wtd)   # gt-40cc：owner 未定仍清空壳（rmdir 非仓库级操作不触 hook；空目录无数据），非空自失败落显报（终闸 ocr：防永不收敛）
+        except OSError: pass
     if not os.path.isdir(wtd):
-        gcst.pop(t, None); report["wt_removed"].append(t)
+        bdel = False
         if main_ is not None:
             subprocess.run(["git", "-C", main_, "worktree", "prune"], capture_output=True)  # gt-40cc②：stale 注册令 branch -D 拒删（used by worktree），先 prune
-            subprocess.run(["git", "-C", main_, "branch", "-q", "-D", f"wt/{t}"], capture_output=True)
+            rb = subprocess.run(["git", "-C", main_, "branch", "-q", "-D", f"wt/{t}"], capture_output=True)
+            bdel = rb.returncode == 0 and subprocess.run(["git", "-C", main_, "rev-parse", "-q", "--verify", f"refs/heads/wt/{t}"],
+                                                          capture_output=True).returncode != 0
+        if bdel:
+            gcst.pop(t, None); report["wt_removed"].append(t)
+        else:
+            # gt-40cc②：分支未删净/owner 未定必响（B-M7「删失败必响」同口径，终闸 ocr medium）——
+            # 目录已清，本环不再重访，显报供人工处置
+            report["wt_branch_kept"].append(
+                {"task": t, "main": main_,
+                 "err": "owner 未定（main_repo_of 断链且注册指针未命中），分支保守保留" if main_ is None
+                        else f"branch -D 未删净 refs/heads/wt/{t}（可能被他 worktree 检出）"})
     else:
         # B-M7：删失败必响（report 可见）且 gcst 保留待下轮重试；跳过 branch -D（防分支先于树删除）
         if main_ is not None: e["main"] = main_   # gt-40cc②：已过盘上校验的 owner 存档，防 remove 半完成态断链
         report["wt_remove_failed"].append(
             {"task": t, "dir": wtd,
-             "err": "owner 未定（main_repo_of 断链且注册指针未命中），分支保守保留" if rr is None
-                    else ((rr.stderr or rr.stdout or "unknown").strip().splitlines() or ["unknown"])[-1][:160]})
+             "err": ((rr.stderr or rr.stdout or "unknown").strip().splitlines() or ["unknown"])[-1][:160] if rr is not None
+                    else "owner 未定（main_repo_of 断链且注册指针未命中），分支保守保留"})
 
 # ---------- ④a sessions.map TTL 保洁（只清本机条目；他机条目由它自己机器的 poll 清） ----------
 SMAP = f"{HOME}/scripts/sessions.map"

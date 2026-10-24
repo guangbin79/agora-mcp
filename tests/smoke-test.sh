@@ -1543,7 +1543,7 @@ PYEOF
 ); do POST tester@proj --event cancelled --task "$_t" >/dev/null 2>&1; done
 POLLT() { AGORA_MERGE_WAIT_MIN=0 AGORA_ORPHAN_MIN=0 AGORA_WT_GRACE_MIN=0 AGORA_DISPATCH_TIMEOUT=0 \
            AGORA_MAX_SPAWN=9 AGORA_RUNTIME=echo bash "$AGORA_HOME/scripts/poll.sh" 2>/dev/null; }
-LEV() { cat "$AGORA_HOME"/log/*/*.md 2>/dev/null | grep -E "(^|[|] )task:$1( |$)" | grep "event:$2"; }
+LEV() { cat "$AGORA_HOME"/log/*/*.md "$AGORA_HOME"/log/*/.*.md 2>/dev/null | grep -E "(^|[|] )task:$1( |$)" | grep "event:$2"; }   # gt-40cc：点分片伴生（跨分片核验禁裸 glob，终闸 ocr）
 MKWT2() { TID "$(TITLE="$1" VERIFY="true" PROJECT_DIR="$PROJ" WT=1 IDEM="$2" TC)"; }
 # ① done-unmerged：poll → diagnosed（未合并）＋恢复性重派上游
 PU=$(MKWT2 "上游u" t7a); PD_=$(MKWT2 "下游d" t7b)
@@ -1676,22 +1676,31 @@ rm -f "$AGORA_HOME/raw/dispatches/d-stale.log.live"   # gt-2153：清 stale 标�
 # ⑧⑨⑩＋R5 gt-caf3 终闸发现核销（gt-40cc）：同秒 tie/GC stale prune/未尝试重派 null＋裸 glob 守卫
 # ⑧ 同秒 tie：cancelled（点分片，先扫）与 dispatched（后扫分片）同秒 → 终态不被孤儿档复活重派（gt-caf3 ①）
 TT=$(MKWT2 "tie终态" t9a)
-TS8="$(date -Iseconds)"
-mkdir -p "$AGORA_HOME/log/$(date +%F)"
-printf -- '- seq:991 | ts:%s | actor:orch@.tiep | event:cancelled | idem:t9c1 | seen:x | task:%s\n' "$TS8" "$TT" > "$AGORA_HOME/log/$(date +%F)/.tie-orch.md"
-printf -- '- seq:992 | ts:%s | actor:tester@proj | event:dispatched | idem:t9c2 | seen:x | task:%s | run:raw/dispatches/d-tie8.log | target:%s | child:tester\n' "$TS8" "$TT" "$PROJ" > "$AGORA_HOME/log/$(date +%F)/tie-wd.md"
+TS8="$(date -Iseconds)"; D8="$(date +%F)"
+mkdir -p "$AGORA_HOME/log/$D8"
+printf -- '- seq:991 | ts:%s | actor:orch@.tiep | event:cancelled | idem:t9c1 | seen:x | task:%s\n' "$TS8" "$TT" > "$AGORA_HOME/log/$D8/.tie-orch.md"
+printf -- '- seq:992 | ts:%s | actor:tester@proj | event:dispatched | idem:t9c2 | seen:x | task:%s | run:raw/dispatches/d-tie8.log | target:%s | child:tester\n' "$TS8" "$TT" "$PROJ" > "$AGORA_HOME/log/$D8/tie-wd.md"
 POLLT >/dev/null
 [ "$(LEV "$TT" dispatched | grep -c event:dispatched)" -eq 1 ] && [ -z "$(LEV "$TT" diagnosed | grep -F 孤儿)" ] \
   && ok "⑧ 同秒 cancelled+dispatched 平局取终态（不复活）" || fail "⑧ tie（disp=$(LEV "$TT" dispatched | grep -c event:dispatched)）"
-rm -f "$AGORA_HOME/log/$(date +%F)/.tie-orch.md" "$AGORA_HOME/log/$(date +%F)/tie-wd.md"
+rm -f "$AGORA_HOME/log/$D8/.tie-orch.md" "$AGORA_HOME/log/$D8/tie-wd.md"
 # ⑧b 同秒 done+cancelled 跨分片 → closer 胜，done-unmerged 梯子不误燃（gt-40cc① 同源残角，终闸 A 册）
 TB=$(MKWT2 "tie双终态" t9d)
-TS9="$(date -Iseconds)"
-printf -- '- seq:993 | ts:%s | actor:tester@proj | event:cancelled | idem:t9d1 | seen:x | task:%s\n' "$TS9" "$TB" > "$AGORA_HOME/log/$(date +%F)/.tie2-orch.md"
-printf -- '- seq:994 | ts:%s | actor:tester@proj | event:done | idem:t9d2 | seen:x | task:%s | commit:x | evidence:ok\n' "$TS9" "$TB" > "$AGORA_HOME/log/$(date +%F)/tie2-wd.md"
+TS9="$(date -Iseconds)"; D9="$(date +%F)"
+printf -- '- seq:993 | ts:%s | actor:tester@proj | event:cancelled | idem:t9d1 | seen:x | task:%s\n' "$TS9" "$TB" > "$AGORA_HOME/log/$D9/.tie2-orch.md"
+printf -- '- seq:994 | ts:%s | actor:tester@proj | event:done | idem:t9d2 | seen:x | task:%s | commit:x | evidence:ok\n' "$TS9" "$TB" > "$AGORA_HOME/log/$D9/tie2-wd.md"
 POLLT >/dev/null
 [ -z "$(LEV "$TB" diagnosed | grep -F 未合并)" ] && ok "⑧b 同秒 done+cancelled closer 胜（梯子安静）" || fail "⑧b done-unmerged 误燃（$(LEV "$TB" diagnosed | head -1)）"
-rm -f "$AGORA_HOME/log/$(date +%F)/.tie2-orch.md" "$AGORA_HOME/log/$(date +%F)/tie2-wd.md"
+rm -f "$AGORA_HOME/log/$D9/.tie2-orch.md" "$AGORA_HOME/log/$D9/tie2-wd.md"
+# ⑧c 同秒 reopened+dispatched 同片（redispatch.sh 一次性流常规产形）→ 0 阶同片按追加序＝真因果序，
+# 孤儿/idle-kick 探测不得被 reopened 升阶瞎掉（终闸 ocr high）
+TC=$(MKWT2 "tie重开" t9f)
+TSA="$(date -Iseconds)"
+printf -- '- seq:995 | ts:%s | actor:tester@proj | event:reopened | idem:t9f1 | seen:x | task:%s\n' "$TSA" "$TC" > "$AGORA_HOME/log/$D9/tie3-wd.md"
+printf -- '- seq:996 | ts:%s | actor:tester@proj | event:dispatched | idem:t9f2 | seen:x | task:%s | run:raw/dispatches/d-tie3.log | target:%s | child:tester\n' "$TSA" "$TC" "$PROJ" >> "$AGORA_HOME/log/$D9/tie3-wd.md"
+POLLT >/dev/null
+[ -n "$(LEV "$TC" diagnosed | grep -F 孤儿)" ] && ok "⑧c 同秒 reopened+dispatched 追加序胜（孤儿探测在线）" || fail "⑧c 孤儿探测被瞎（rank 升阶回归）"
+rm -f "$AGORA_HOME/log/$D9/tie3-wd.md"
 # ⑨ GC：空壳残留＋stale 注册 → prune 后 branch -D 删净（gt-caf3 ②；不修则每例残一分支永不回收）
 GT2=$(MKWT2 "gc空壳" t9b); WG2=$(ls -d "$T"/proj__wt-${GT2}__*)
 echo g > "$WG2/g2file"; git -C "$WG2" add -A; git -C "$WG2" -c user.name=t -c user.email=t@l commit -qm g2
@@ -1702,6 +1711,23 @@ tick "$GT2"; POST tester@proj --event merged --task "$GT2" --commit "$(git -C "$
 rm -rf "$WG2"; mkdir "$WG2"   # 空壳＋stale 注册：remove validation failed → rmdir 可删 → branch -D 拒删形态
 POLLT >/dev/null
 git -C "$PROJ" rev-parse -q --verify "refs/heads/wt/$GT2" >/dev/null && fail "⑨ GC 空壳 stale：分支泄漏" || ok "⑨ GC 空壳 stale 注册：prune 后分支删净"
+# ⑨b owner 未定：注册摘除＋空壳 → 不跑仓库级 git 操作（C 册 RCE 收口），显报＋空壳收敛＋分支保留（终闸 ocr）
+GT3=$(MKWT2 "gc无主" t9e); WG3=$(ls -d "$T"/proj__wt-${GT3}__*)
+POST tester@proj --event claimed --task "$GT3" >/dev/null
+POST tester@proj --event done --task "$GT3" --commit HEAD --evidence ok >/dev/null
+git -C "$PROJ" merge -q --ff-only "wt/$GT3" 2>/dev/null
+tick "$GT3"; POST tester@proj --event merged --task "$GT3" --commit "$(git -C "$PROJ" rev-parse HEAD)" --branch "$(git -C "$PROJ" symbolic-ref --short HEAD)" >/dev/null; untick "$GT3"
+rm -rf "$WG3"; mkdir "$WG3"; rm -rf "$PROJ/.git/worktrees"/proj__wt-${GT3}__*   # 摘注册：main_repo_of 与反查双断链
+PO9=$(POLLT)
+echo "$PO9" | python3 -c "
+import json, sys
+r = json.loads(sys.stdin.read())
+k = [x for x in r['wt_branch_kept'] if x['task'] == '$GT3']
+assert k and 'owner 未定' in k[0]['err'], (r['wt_branch_kept'], r['wt_remove_failed'])
+" && ok "⑨b owner 未定显报（wt_branch_kept，B-M7 同口径）" || fail "⑨b owner 未定未显报"
+[ ! -d "$WG3" ] && ok "⑨b 空壳收敛（rmdir 无 owner 也清，防永不收敛）" || fail "⑨b 空壳未收敛"
+git -C "$PROJ" rev-parse -q --verify "refs/heads/wt/$GT3" >/dev/null && ok "⑨b 分支保守保留（无误删）" || fail "⑨b 分支被误删"
+git -C "$PROJ" branch -q -D "wt/$GT3" 2>/dev/null; rm -rf "$WG3"   # 清场：不污染后续段落
 # ⑩ 未尝试重派记 null：SPAWN=0 孤儿档 → redispatched:null（区别尝试失败 false）（gt-caf3 ③）
 ON=$(MKWT2 "未尝试" t9c)
 POST tester@proj --event dispatched --task "$ON" --target "$PROJ" --child tester --run "raw/dispatches/d-none9.log" >/dev/null
@@ -1712,9 +1738,12 @@ r = json.loads(sys.stdin.read())
 e = [x for x in r['orphan_diag'] if x['task'] == '$ON']
 assert e and e[0]['redispatched'] is None, r['orphan_diag']
 " && ok "⑩ 孤儿未尝试重派记 null" || fail "⑩ 未尝试重派未记 null"
-# R5 (gt-40cc)：smoke 账本扫描禁裸 glob——点分片必须伴生（gt-3ea2 点仓盲同类：跨分片核验禁裸 glob）
+# R5 (gt-40cc)：smoke 账本扫描禁裸 glob——守 python glob 与 LEV 两种命名形态（点分片必须伴生；
+# gt-3ea2 点仓盲同类：跨分片核验禁裸 glob，终闸 ocr）。其余内生 cat 断言为已知边界不守（区域局部
+# 任务，点分片事件不涉）——重构收口归专门批次，不在核销批扩面
 BARE_GLOB=$(grep -F 'glob.glob(f"{home}/log/*/*.md")' "$PKG/tests/smoke-test.sh" | grep -vcF '.*.md' || true)
-[ "$BARE_GLOB" -eq 0 ] && ok "R5 smoke 账本扫描全带点分片伴生 glob" || fail "R5 裸 glob 残留 $BARE_GLOB 处"
+BARE_LEV=$(grep -F 'LEV() {' "$PKG/tests/smoke-test.sh" | grep -vcF '.*.md' || true)
+[ "$((BARE_GLOB + BARE_LEV))" -eq 0 ] && ok "R5 smoke 账本扫描全带点分片伴生 glob" || fail "R5 裸 glob 残留 $BARE_GLOB+$BARE_LEV 处"
 
 echo "===== BOOT 链式协议＋setup 钩子（全量委托 L1 Task8） ====="
 for _t in $(python3 - "$AGORA_HOME" <<'PYEOF'
