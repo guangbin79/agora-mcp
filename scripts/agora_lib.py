@@ -169,10 +169,11 @@ def scan_tasks(home):
             elif ev in ("merged", "cancelled"): d["inflight"] = False
             elif d["post_disp"] is not None and not _ac.startswith("watchdog@"):
                 d["post_disp"].add(ev)   # gt-7ca0：尾派发后的子会话活动（watchdog 机械回执不算——不遮蔽真停转）
-            # gt-ef98：blocked 泳道成员资格（ts 序重放）——认领者/派发/终态任一恢复即出泳道；
-            # watchdog 诊断/升级不复位（阶梯续燃）
+            # gt-ef98：blocked 泳道成员资格（ts 序重放）——出泳道集与 derive-board 对齐
+            # （done/merged/cancelled/reopened/retired；claimed 是看板 no-op、progress 只记心跳、
+            # dispatched 不改看板态，瞬时活性由指纹时钟归零覆盖）；watchdog 诊断/升级不复位（阶梯续燃）
             if ev == "blocked": d["inblocked"] = True; d["blocked_actor"] = _ac
-            elif ev in ("merged", "cancelled", "reopened", "claimed", "done", "dispatched", "progress", "retired"): d["inblocked"] = False
+            elif ev in ("merged", "cancelled", "reopened", "done", "retired"): d["inblocked"] = False
         del d["_rows"]
     return tasks
 
