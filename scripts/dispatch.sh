@@ -33,13 +33,24 @@ grep -qE '^can_spawn:[[:space:]]*true' "$ENTITY" || fail SPAWN_FORBIDDEN "$NAME 
 # 保险丝 2/3：深度与配额——env 与账本推导取更大值（v1.32 账本化：L2/API 模式无 env 通道时账本为唯一来源）
 # 账本口径：深度=dispatched 事件 dispatcher_task 链逐跳计数（任务最新 dispatched 为准，环检测兜底）；
 #          配额活跃=dispatched 集 ∩ 无终态事件（done/merged/cancelled 任一即出集）
-LEDGER_NEXT=1; LEDGER_ME=0; LEDGER_TOT=0; LDT=""
+LEDGER_NEXT=1; LEDGER_ME=0; LEDGER_TOT=0; LEDGER_SELF=0; LDT=""
 ledger_scan() {
-python3 - "$AGORA_HOME" "${DTASK:-}" "$ACTOR" <<'PYEOF'
+PYTHONPATH="$AGORA_HOME/scripts:$(cd "$(dirname "$0")" && pwd)${PYTHONPATH:+:$PYTHONPATH}" \
+python3 - "$AGORA_HOME" "${DTASK:-}" "$ACTOR" "$PDIR" "$TASK" <<'PYEOF'
 import glob, os, re, sys
+from agora_lib import main_repo_of
 home = sys.argv[1]; dtask = sys.argv[2] if len(sys.argv) > 2 and sys.argv[2] else ""
 actor = sys.argv[3] if len(sys.argv) > 3 else ""
-disp, terminal, last_alive, claimed, dact, runs = {}, set(), {}, {}, {}, {}
+pdir = sys.argv[4] if len(sys.argv) > 4 else ""
+ttask = sys.argv[5] if len(sys.argv) > 5 else ""
+def _norm(p):   # worktree 路径归一主仓后 realpath（actor 碰撞同项目判据用）
+    if not p: return ""
+    try: m = main_repo_of(p) or p
+    except Exception: m = p
+    try: return os.path.realpath(m)
+    except Exception: return m
+cur = _norm(pdir)
+disp, terminal, last_alive, claimed, dact, runs, tproj = {}, set(), {}, {}, {}, {}, {}
 for f in sorted((glob.glob(f"{home}/log/*/*.md") + glob.glob(f"{home}/log/*/.*.md"))):
     try: lines = open(f, encoding="utf-8", errors="replace").read().splitlines()
     except OSError: continue
@@ -54,6 +65,8 @@ for f in sorted((glob.glob(f"{home}/log/*/*.md") + glob.glob(f"{home}/log/*/.*.m
             am = re.search(r"\| actor:(\S+)", line); dact[t] = am.group(1) if am else ""
             rm_ = re.search(r"\| run:(\S+)", line)
             if rm_: runs[rm_.group(1)] = dact[t]   # .live→actor 归属（分域 .live 计数用）
+            tm_ = re.search(r"\| target:(\S+)", line)
+            if tm_: tproj[t] = tm_.group(1)   # 派发目标项目路径（actor 碰撞判据用）
             last_alive[t] = True
         elif "event:claimed" in line:
             am = re.search(r'\| actor:(\S+)', line)
@@ -70,9 +83,13 @@ def depth(t, seen, budget=100):   # 链长上限 100：账本他机可写不可�
     if t not in disp or t in seen: return 0
     d = disp[t]
     return 1 if not d else 1 + depth(d, seen | {t}, budget - 1)
-# dispatcher_task 机械推导（终审 A-W1）：未显式传入时取本 actor 最近 claimed 且无终态的任务
+# dispatcher_task 机械推导（终审 A-W1）：未显式传入时取本 actor 最近 claimed 且无终态的任务。
+# gt-7ca0 场景a（actor 碰撞）：同名 actor 的主会话与派生子会话共享身份——claimed 目标与本派发
+# 同项目且该 claimed 无自身链证据（disp 为空＝根任务工人）时，那是子会话的 claim 不是本会话的，排除；
+# 跨项目 claimed（真委托链）与同项目但有链证据（链上工人同仓再派）保留
 if not dtask and actor:
-    cands = [t for t, a in claimed.items() if a == actor]
+    cands = [t for t, a in claimed.items()
+             if a == actor and not (cur and _norm(tproj.get(t, "")) == cur and not disp.get(t))]
     if cands: dtask = cands[-1]
 nxt = depth(dtask, frozenset()) + 1 if dtask in disp else 1
 # 配额活跃＝dispatched ∩ 无终态 ∩ 非僵尸（last_alive=False＝已死出集；真活由 .live 计数兜底取 max）
@@ -90,12 +107,23 @@ for lf in glob.glob(f"{home}/raw/dispatches/*.live"):
     if a is not None: live_by[a] = live_by.get(a, 0) + 1
 me = max(by_actor.get(actor, 0), live_by.get(actor, 0))
 total = max(live_tot, sum(by_actor.values()))
-print(nxt, me, total, dtask)
+# gt-7ca0 场景c：目标任务自身活跃（在飞无终态）＝恢复性重派对象自己的旧槽，配额闸豁免。
+# 域归属校验（终闸 C-F2）：任务须计入本 actor 域（dispatched 行 actor 或 claimed 兜底==本 actor）
+# 才豁免——堵伪造无 actor 行借豁免净赚 +1 槽，亦防跨 actor 重派误扣他域槽
+selfact = 1 if (ttask and ttask in disp and ttask not in terminal and last_alive.get(ttask, True)
+                and (dact.get(ttask) or claimed.get(ttask, "")) == actor) else 0
+print(nxt, me, total, selfact, dtask)
 PYEOF
 }
 SCAN_OUT="$(ledger_scan)" || SCAN_OUT=""   # 扫描崩溃不致命：空输出落退化分支（评审 B1：here-string 空 stdout read 仍 rc=0，必须显式判空）
-if [ -n "$SCAN_OUT" ] && read -r LN LME LTOT LDT <<<"$SCAN_OUT"; then [ -n "$LN" ] && LEDGER_NEXT=$LN; LEDGER_ME=${LME:-0}; LEDGER_TOT=${LTOT:-0}
+if [ -n "$SCAN_OUT" ] && read -r LN LME LTOT LSELF LDT <<<"$SCAN_OUT"; then [ -n "$LN" ] && LEDGER_NEXT=$LN; LEDGER_ME=${LME:-0}; LEDGER_TOT=${LTOT:-0}; LEDGER_SELF=${LSELF:-0}
 else LEDGER_TOT=$(find "$AGORA_HOME/raw/dispatches" -name '*.live' 2>/dev/null | wc -l) || LEDGER_TOT=0; fi   # 扫描失败/空输出退化：.live 总数兜底总量闸（分域漏检可容忍，总量不失守；|| 防 find 失败×pipefail 杀死 set -e）
+# gt-7ca0 场景c：恢复性重派豁免自身槽位——目标任务占的正是本次要重发的旧槽，不豁免则
+# done-unmerged/孤儿恢复重派被自己锁死（QUOTA_EXCEEDED 自锁×2 实证）。退化分支无法判自身，不豁免
+if [ "$LEDGER_SELF" = "1" ]; then
+  (( LEDGER_ME > 0 )) && LEDGER_ME=$((LEDGER_ME-1))
+  (( LEDGER_TOT > 0 )) && LEDGER_TOT=$((LEDGER_TOT-1))
+fi
 # 推导回填（A-W1）：显式传入优先，机械推导兜底——两者都进 dispatched 落账
 [ -z "$DTASK" ] && [ -n "${LDT:-}" ] && [ "$LDT" != "None" ] && DTASK="$LDT"
 DEPTH="${AGORA_DEPTH:-0}"; NEXT=$((DEPTH+1))
@@ -256,7 +284,11 @@ exec 8>"$AGORA_HOME/.git/dispatch.lock"
 flock -w "${AGORA_LOCK_WAIT:-5}" 8 || fail QUOTA_LOCK "dispatch 锁超时（${AGORA_LOCK_WAIT:-5}s）；可安全重试" 3
 _LS2=$(ledger_scan || true)
 [ -n "$_LS2" ] || fail QUOTA_SCAN "锁内账本扫描失败（fail-closed，配额闸拒绝降级）；可安全重试" 3   # ocr-R0/A-F3：空输出若放行＝.live 恒 0 退化→TOCTOU 复辟；|| true 使崩溃场景也达 QUOTA_SCAN（set -e 否则先杀）
-read -r _LN2 _ME2 _TOT2 _LDT2 <<<"$_LS2"
+read -r _LN2 _ME2 _TOT2 _SELF2 _LDT2 <<<"$_LS2"
+if [ "${_SELF2:-0}" = "1" ]; then   # gt-7ca0 场景c 同豁免：锁内复核口径与外闸一致
+  (( ${_ME2:-0} > 0 )) && _ME2=$((_ME2-1))
+  (( ${_TOT2:-0} > 0 )) && _TOT2=$((_TOT2-1))
+fi
 quota_check "${_ME2:-0}" "${_TOT2:-0}"   # 分域＋总量双闸复核（gt-8c5b 口径；.live 归属已并入扫描）
 POUT=$(bash "$AGORA_HOME/scripts/post.sh" "${PARGS[@]}" 2>&1) \
   || { printf '%s\n' "$POUT" >&2; fail LEDGER_FAILED "dispatched 落账失败（详情见 stderr 上一行）" 4; }

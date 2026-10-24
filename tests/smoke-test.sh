@@ -1729,6 +1729,7 @@ F3D=$(TID "$(TITLE="漂移d" VERIFY=true PROJECT_DIR="$PROJ" WT=1 IDEM=f3d TC)")
 AGORA_RUNTIME=echo AGORA_MAX_SPAWN=9 bash "$AGORA_HOME/scripts/dispatch.sh" --actor tester@proj --project "$PROJ" --task "$F3D" --dispatcher-task "$F3U" >/dev/null 2>&1
 echo x > "$W3D/xf"; git -C "$W3D" add -A; git -C "$W3D" -c user.name=t -c user.email=t@l commit -qm x
 git -C "$W3D" rebase -q "wt/$F3U" 2>/dev/null; DC3=$(git -C "$W3D" rev-parse HEAD)
+echo u > "$W3U/uf"; git -C "$W3U" add -A; git -C "$W3U" -c user.name=t -c user.email=t@l commit -qm uf   # gt-7ca0：上游须有真实提交（零提交分支 tip==main 会按祖先检查回落 main，漂移守卫路径够不着）
 git -C "$W3U" checkout -qb side-branch 2>/dev/null   # 上游树检出他支
 OUT=$(bash "$AGORA_HOME/scripts/merge.sh" --actor tester@proj --task "$F3D" 2>&1)
 echo "$OUT" | grep -q TARGET_DETACHED && ok "F3 目标分支漂移被拒" || fail "F3 漂移未拒（$OUT）"
@@ -2907,6 +2908,229 @@ OUT=$(bash "$AGORA_HOME/scripts/doctor.sh" 2>&1)
 echo "$OUT" | grep -q "发 diagnosed 标注无效行 ref" && echo "$OUT" | grep -q "doctor-runbook §idem" \
   && ! echo "$OUT" | grep -q "删除后续行" \
   && ok "③ doctor idem 文案与 runbook 一致（标注不删行）" || fail "③ doctor idem 文案（$(echo "$OUT" | grep "idem" | head -2)）"
+
+echo "===== 四缺口红测试批（gt-7ca0）：actor碰撞推导/链目标死循环/配额自锁/idle停转自恢复 ====="
+# 独立夹具（B批模式）：每场景独立 AGORA_HOME（mktemp 隔离，不触主测试账本）；stub runtime 离线
+QLEDEV() { cat "$1"/log/*/*.md "$1"/log/*/.*.md 2>/dev/null | grep -F "task:$2" | grep "event:$3"; }
+
+# ---- 场景a（actor 碰撞推导）：同名 actor 先 claim 同项目任务 A（在飞）再派发 B → B 不继承 dispatcher_task:A ----
+QA_HOME="$T/qa/agora"; mkdir -p "$QA_HOME"
+AGORA_HOME="$QA_HOME" bash "$PKG/scripts/init.sh" >/dev/null 2>&1
+QAREPO="$T/qa-repo"; mkdir -p "$QAREPO"
+(cd "$QAREPO" && git init -q . && echo FIXED > app.txt && git add -A && git -c user.name=t -c user.email=t@local commit -qm init)
+QBREPO="$T/qa-repo2"; mkdir -p "$QBREPO" && (cd "$QBREPO" && git init -q .)
+mkdir -p "$QA_HOME/wiki/entities"
+printf -- '---\nname: qa\ndirs:\n  - %s\n  - %s\ncan_spawn: true\n---\n' "$QAREPO" "$QBREPO" > "$QA_HOME/wiki/entities/qa.md"
+(cd "$QA_HOME" && git add -A && AGORA_MECHANICAL=1 git commit -qm entities >/dev/null)
+QAPOST() { AGORA_HOME="$QA_HOME" bash "$QA_HOME/scripts/post.sh" --actor "$1" --project "$2" "${@:3}"; }
+QATC() { TID "$(AGORA_HOME="$QA_HOME" TITLE="$1" VERIFY=true PROJECT_DIR="$QAREPO" bash "$QA_HOME/scripts/task-create.sh")"; }
+QADSP() { AGORA_RUNTIME=echo AGORA_HOME="$QA_HOME" bash "$QA_HOME/scripts/dispatch.sh" --actor qa@qa-repo --project "$QAREPO" --task "$1"; }
+# 主断言：A 在飞（同项目、无链证据）→ 派 B 不得挂 dispatcher_task:A
+QA_A=$(QATC "qa碰撞在飞任务A")
+QAPOST qa@qa-repo qa-repo --event dispatched --task "$QA_A" --target "$QAREPO" --child qa --run "raw/dispatches/d-qa-a.log" >/dev/null
+QAPOST qa@qa-repo qa-repo --event claimed --task "$QA_A" >/dev/null
+QA_B=$(QATC "qa碰撞新派任务B")
+QOUT_B=$(QADSP "$QA_B" 2>&1)
+echo "$QOUT_B" | grep -q '"mode":"spawned"' && ok "场景a：B 派发放行" || fail "场景a：B 派发未放行（$QOUT_B）"
+! QLEDEV "$QA_HOME" "$QA_B" dispatched | grep -q "dispatcher_task:" \
+  && ok "场景a：同 actor 同项目 claimed 不推导为链（B 不挂 dispatcher_task:A）" \
+  || fail "场景a：B 被误挂 dispatcher_task:A（actor 碰撞推导未排除同项目 claimed）"
+# 对照1：跨项目 claimed 仍推导为链（真链保留）。C 事件落 qa-repo 分片（扫描序早于后文的 E）
+QA_C=$(TID "$(AGORA_HOME="$QA_HOME" TITLE="qa跨仓在飞C" VERIFY=true PROJECT_DIR="$QBREPO" bash "$QA_HOME/scripts/task-create.sh")")
+QAPOST qa@qa-repo qa-repo --event dispatched --task "$QA_C" --target "$QBREPO" --child qa --run "raw/dispatches/d-qa-c.log" >/dev/null
+QAPOST qa@qa-repo qa-repo --event claimed --task "$QA_C" >/dev/null
+QA_D=$(QATC "qa跨仓新派D")
+QADSP "$QA_D" >/dev/null 2>&1
+QLEDEV "$QA_HOME" "$QA_D" dispatched | grep -q "dispatcher_task:$QA_C" \
+  && ok "场景a对照1：跨项目 claimed 仍推导 dispatcher_task（真链保留）" \
+  || fail "场景a对照1：跨项目链推导被误伤"
+# 对照2：同项目 claimed 但自带链证据（E 自身挂在 R 链上）→ 仍推导（链上工人同仓再派不断链）
+QA_R=$(QATC "qa链根R")
+QAPOST qa@qa-repo qa-repo --event dispatched --task "$QA_R" --target "$QAREPO" --child qa --run "raw/dispatches/d-qa-r.log" >/dev/null
+QA_E=$(QATC "qa链上E")
+QAPOST qa@qa-repo qa-repo --event dispatched --task "$QA_E" --target "$QAREPO" --child qa --run "raw/dispatches/d-qa-e.log" --dispatcher-task "$QA_R" >/dev/null
+QAPOST qa@qa-repo qa-repo --event claimed --task "$QA_E" >/dev/null
+QA_F=$(QATC "qa链上新派F")
+QADSP "$QA_F" >/dev/null 2>&1
+QLEDEV "$QA_HOME" "$QA_F" dispatched | grep -q "dispatcher_task:$QA_E" \
+  && ok "场景a对照2：同项目 claimed 有链证据仍推导（E 是链上子任务）" \
+  || fail "场景a对照2：链证据 carve-out 被误伤"
+rm -rf "$QA_HOME" "$QAREPO" "$QBREPO"
+
+# ---- 场景b（链目标死循环）：上游已并入 main（tip 是 main 祖先/分支已清）→ 下游 merge 目标回落 main ----
+QB_HOME="$T/qb/agora"; mkdir -p "$QB_HOME"
+AGORA_HOME="$QB_HOME" bash "$PKG/scripts/init.sh" >/dev/null 2>&1
+QGREPO="$T/qb-repo"; mkdir -p "$QGREPO"
+(cd "$QGREPO" && git init -q -b main . && echo BASE > base.txt && git add -A && git -c user.name=t -c user.email=t@local commit -qm init)
+mkdir -p "$QB_HOME/wiki/entities"
+printf -- '---\nname: mer\ndirs:\n  - %s\ncan_spawn: true\n---\n' "$QGREPO" > "$QB_HOME/wiki/entities/mer.md"
+(cd "$QB_HOME" && git add -A && AGORA_MECHANICAL=1 git commit -qm entities >/dev/null)
+QBPOST() { AGORA_HOME="$QB_HOME" bash "$QB_HOME/scripts/post.sh" --actor mer@qb-repo --project qb-repo "$@"; }
+QBTC() { TID "$(AGORA_HOME="$QB_HOME" TITLE="$1" VERIFY=true PROJECT_DIR="$QGREPO" WT=1 bash "$QB_HOME/scripts/task-create.sh")"; }
+QBCM() { echo "$2" > "$1/$3"; git -C "$1" add -A >/dev/null; git -C "$1" -c user.name=t -c user.email=t@l commit -qm "$3"; }
+# b1：上游分支在场且 tip 已是 main 祖先（手动 ff 并主、分支保留）→ 下游合并目标回落 main
+QBU1=$(QBTC "qb上游U1"); QWU1=$(ls -d "$T"/qb-repo__wt-${QBU1}__*)
+QBD1=$(QBTC "qb下游D1"); QWD1=$(ls -d "$T"/qb-repo__wt-${QBD1}__*)
+QBCM "$QWU1" up up1; QBCM "$QWD1" down down1
+git -C "$QWD1" rebase -q "wt/$QBU1"
+QBPOST --event dispatched --task "$QBD1" --target "$QGREPO" --child mer --run "raw/dispatches/d-qb-d1.log" --dispatcher-task "$QBU1" >/dev/null
+git -C "$QGREPO" merge -q --ff-only "wt/$QBU1"   # 上游并入 main（绕过 merge.sh，分支 wt/U1 保留在场）
+UTIP1=$(git -C "$QGREPO" rev-parse "wt/$QBU1")
+DC1=$(git -C "$QGREPO" rev-parse "wt/$QBD1")
+QOUT_B1=$(AGORA_HOME="$QB_HOME" bash "$QB_HOME/scripts/merge.sh" --actor mer@qb-repo --task "$QBD1" 2>&1)
+echo "$QOUT_B1" | grep -q '"result":"merged"' && ok "场景b1：下游合并闭环" || fail "场景b1：下游合并失败（$QOUT_B1）"
+QLEDEV "$QB_HOME" "$QBD1" merged | grep -q "branch:main" \
+  && ok "场景b1：合并目标回落 main（上游 tip 已是 main 祖先不锚上游分支）" \
+  || fail "场景b1：目标仍锚上游 wt 分支（$(QLEDEV "$QB_HOME" "$QBD1" merged | grep -o 'branch:[^ |]*')）"
+[ "$(git -C "$QGREPO" rev-parse "wt/$QBU1")" = "$UTIP1" ] \
+  && ok "场景b1：上游分支未被复活/移动（tip 不动）" || fail "场景b1：上游分支被动过"
+git -C "$QGREPO" merge-base --is-ancestor "$DC1" main \
+  && ok "场景b1：下游产出真实并入 main" || fail "场景b1：下游产出未进 main"
+# b2：上游已并且分支树已清（gt-2b25 补票三连 NOT_FF 形态）→ 回落 main、不锚点重建复活
+QBU2=$(QBTC "qb上游U2"); QWU2=$(ls -d "$T"/qb-repo__wt-${QBU2}__*)
+QBD2=$(QBTC "qb下游D2"); QWD2=$(ls -d "$T"/qb-repo__wt-${QBD2}__*)
+QBCM "$QWU2" up up2; QBCM "$QWD2" down down2
+git -C "$QWD2" rebase -q "wt/$QBU2"
+QBPOST --event dispatched --task "$QBD2" --target "$QGREPO" --child mer --run "raw/dispatches/d-qb-d2.log" --dispatcher-task "$QBU2" >/dev/null
+AGORA_HOME="$QB_HOME" bash "$QB_HOME/scripts/merge.sh" --actor mer@qb-repo --task "$QBU2" >/dev/null 2>&1   # 上游正常并主（分支/树清理）
+if [ -z "$(git -C "$QGREPO" branch --list "wt/$QBU2")" ] && [ ! -d "$QWU2" ]; then
+  ok "场景b2前置：上游合并后分支树已清"
+else
+  fail "场景b2前置：上游清理未生效（branch=$(git -C "$QGREPO" branch --list "wt/$QBU2") dir=$QWU2）"
+fi
+QOUT_B2=$(AGORA_HOME="$QB_HOME" bash "$QB_HOME/scripts/merge.sh" --actor mer@qb-repo --task "$QBD2" 2>&1)
+echo "$QOUT_B2" | grep -q '"result":"merged"' && ok "场景b2：done 未合并下游补票闭环" || fail "场景b2：下游合并失败（$QOUT_B2）"
+QLEDEV "$QB_HOME" "$QBD2" merged | grep -q "branch:main" \
+  && ok "场景b2：上游已并（分支已清）时目标回落 main（幂等票落账）" \
+  || fail "场景b2：目标锚了重建的上游分支（$(QLEDEV "$QB_HOME" "$QBD2" merged | grep -o 'branch:[^ |]*')）"
+[ -z "$(git -C "$QGREPO" branch --list "wt/$QBU2")" ] \
+  && ok "场景b2：上游分支不被锚点重建复活" || fail "场景b2：wt/$QBU2 被复活"
+[ ! -d "$QWU2" ] && ok "场景b2：上游树不重建" || fail "场景b2：上游树被重建"
+rm -rf "$QB_HOME" "$QGREPO" "$T"/qb-repo__wt-*
+
+# ---- 场景c（配额自锁）：任务 X 自身活跃占槽时恢复性重派 → 豁免自身槽位放行（MAX_SPAWN 不调大） ----
+QC_HOME="$T/qc/agora"; mkdir -p "$QC_HOME"
+AGORA_HOME="$QC_HOME" bash "$PKG/scripts/init.sh" >/dev/null 2>&1
+QCREPO="$T/qc-repo"; mkdir -p "$QCREPO"
+(cd "$QCREPO" && git init -q . && echo FIXED > app.txt && git add -A && git -c user.name=t -c user.email=t@local commit -qm init)
+mkdir -p "$QC_HOME/wiki/entities"
+printf -- '---\nname: rec\ndirs:\n  - %s\ncan_spawn: true\n---\n' "$QCREPO" > "$QC_HOME/wiki/entities/rec.md"
+(cd "$QC_HOME" && git add -A && AGORA_MECHANICAL=1 git commit -qm entities >/dev/null)
+QCX=$(TID "$(AGORA_HOME="$QC_HOME" TITLE="qc自锁任务X" VERIFY=true PROJECT_DIR="$QCREPO" bash "$QC_HOME/scripts/task-create.sh")")
+QCY=$(TID "$(AGORA_HOME="$QC_HOME" TITLE="qc他任务Y" VERIFY=true PROJECT_DIR="$QCREPO" bash "$QC_HOME/scripts/task-create.sh")")
+AGORA_HOME="$QC_HOME" bash "$QC_HOME/scripts/post.sh" --actor rec@qc-repo --project qc-repo --event dispatched --task "$QCX" --target "$QCREPO" --child rec --run "raw/dispatches/d-qc-x.log" >/dev/null
+OUT=$(AGORA_HOME="$QC_HOME" AGORA_RUNTIME=true AGORA_MAX_SPAWN=1 \
+  bash "$QC_HOME/scripts/dispatch.sh" --actor rec@qc-repo --project "$QCREPO" --task "$QCX" 2>&1)
+echo "$OUT" | grep -q '"mode":"spawned"' \
+  && ok "场景c：X 自身活跃占槽时重派 X 放行（恢复路径豁免自身槽位）" \
+  || fail "场景c：X 重派被自身旧槽锁死 QUOTA（$OUT）"
+OUT=$(AGORA_HOME="$QC_HOME" AGORA_RUNTIME=true AGORA_MAX_SPAWN=1 \
+  bash "$QC_HOME/scripts/dispatch.sh" --actor rec@qc-repo --project "$QCREPO" --task "$QCY" 2>&1)
+echo "$OUT" | grep -q QUOTA_EXCEEDED \
+  && ok "场景c：他任务 Y 仍被拒（豁免仅及自身，闸门不虚开）" \
+  || fail "场景c：Y 未被拒——豁免越界（$OUT）"
+rm -rf "$QC_HOME" "$QCREPO"
+
+# ---- 场景d（idle 停转自恢复）：dispatched 会话 runtime status=idle 超阈且任务未终态 → poll 自动 inject 续跑（账本回执） ----
+QD_HOME="$T/qd/agora"; mkdir -p "$QD_HOME"
+AGORA_HOME="$QD_HOME" bash "$PKG/scripts/init.sh" >/dev/null 2>&1
+QDREPO="$T/qd-repo"; mkdir -p "$QDREPO"
+(cd "$QDREPO" && git init -q . && echo FIXED > app.txt && git add -A && git -c user.name=t -c user.email=t@local commit -qm init)
+mkdir -p "$QD_HOME/wiki/entities"
+printf -- '---\nname: idler\ndirs:\n  - %s\ncan_spawn: true\n---\n' "$QDREPO" > "$QD_HOME/wiki/entities/idler.md"
+(cd "$QD_HOME" && git add -A && AGORA_MECHANICAL=1 git commit -qm entities >/dev/null)
+# 假 opencode stub：status 由 ctrl 文件控（idle|running）、inject 落证 append
+QDBIN="$T/qd-fakebin"; QDFAKE="$T/qd-fake"; mkdir -p "$QDBIN" "$QDFAKE"
+cat > "$QDBIN/opencode" <<'STUB'
+#!/usr/bin/env bash
+FH="${QD_FAKE:?QD_FAKE required}"
+case "${1:-}" in
+  --version) exit 0 ;;
+  api) ;;
+  *) exit 2 ;;
+esac
+shift; M=""; P=""; D=""
+while [ $# -gt 0 ]; do case "$1" in
+  -d) D="$2"; shift 2 ;;
+  *) if [ -z "$M" ]; then M="$1"; elif [ -z "$P" ]; then P="$1"; fi; shift ;;
+esac; done
+case "$P" in
+  */prompt) printf '%s\n' "$D" >> "$FH/prompts.log"; exit 0 ;;
+esac
+case "$M $P" in
+  "GET /api/session/"*)
+    if [ "$(cat "$FH/ctrl" 2>/dev/null || echo idle)" = "running" ]; then
+      echo '{"data":{"id":"x","time":{"created":1}}}'
+    else
+      echo '{"data":{"id":"x","outcome":"succeeded","time":{"created":1,"idle":2}}}'
+    fi
+    exit 0 ;;
+esac
+echo "not found" >&2; exit 1
+STUB
+chmod +x "$QDBIN/opencode"
+QDPOLL() { PATH="$QDBIN:$PATH" QD_FAKE="$QDFAKE" AGORA_HOME="$QD_HOME" bash "$QD_HOME/scripts/poll.sh" 2>/dev/null; }
+QDID=$(TID "$(AGORA_HOME="$QD_HOME" TITLE="qd idle停转任务" VERIFY=true PROJECT_DIR="$QDREPO" WT=1 bash "$QD_HOME/scripts/task-create.sh")")
+AGORA_HOME="$QD_HOME" bash "$QD_HOME/scripts/post.sh" --actor idler@qd-repo --project qd-repo --event dispatched --task "$QDID" --target "$QDREPO" --child idler --run "raw/dispatches/d-qd-idle.log" --session ses_qdidle1 >/dev/null
+touch "$QD_HOME/raw/dispatches/d-qd-idle.log"   # run log 在场（不撞孤儿档）
+: > "$QDFAKE/prompts.log"
+QDPOLL >/dev/null   # 首轮：建立 idle 跟踪基线（不 kick）
+python3 - "$QD_HOME" "$QDID" <<'PYEOF' && ok "场景d首轮：idle 跟踪建档（不提前 kick）" || fail "场景d首轮：无 idle 跟踪档"
+import json, sys, time
+f, tid = sys.argv[1] + "/.git/poll-state.json", sys.argv[2]
+s = json.load(open(f))
+e = s.get("_idle_kick", {}).get(tid)
+assert e, "无 _idle_kick 跟踪条目"
+e["since"] = time.time() - 3600   # 拨回 1h 前模拟 idle 超阈
+json.dump(s, open(f, "w"))
+PYEOF
+QDOUT=$(QDPOLL)
+echo "$QDOUT" | python3 -c 'import json,sys; r=json.load(sys.stdin); tid=sys.argv[1]
+assert any(k["task"]==tid and k["injected"] for k in r.get("idle_kicked",[])), r' "$QDID" \
+  && ok "场景d：idle 超阈触发 inject 续跑（report 可见）" || fail "场景d：report 无 idle_kicked（$QDOUT）"
+QLEDEV "$QD_HOME" "$QDID" diagnosed | grep -q "idle 停转" \
+  && ok "场景d：账本可见回执（watchdog diagnosed）" || fail "场景d：账本无 idle 停转回执"
+python3 -c 'import json,sys
+rows=[json.loads(l) for l in open(sys.argv[1]) if l.strip()]   # 适配器 ensure_ascii=True 落盘，须解析后断言原文
+txt="".join(r.get("text","") for r in rows)
+assert rows and all(r.get("delivery")=="queue" for r in rows) and "停转自恢复" in txt and "agora_history" in txt and sys.argv[2] in txt, txt' "$QDFAKE/prompts.log" "$QDID" \
+  && ok "场景d：inject 携续跑指令送达（stub 落证）" || fail "场景d：inject 未送达或缺续跑指令"
+N1=$(wc -l < "$QDFAKE/prompts.log")
+QDPOLL >/dev/null   # cadence：kick 后时钟复位，紧接一轮不重复 kick
+N2=$(wc -l < "$QDFAKE/prompts.log")
+[ "$N1" = "$N2" ] && ok "场景d：kick 后 cadence 不刷屏（时钟复位）" || fail "场景d：重复 kick（$N1→$N2）"
+# 对照：status=running（在转）不 kick
+printf 'running' > "$QDFAKE/ctrl"
+python3 - "$QD_HOME" "$QDID" <<'PYEOF'
+import json, sys, time
+f, tid = sys.argv[1] + "/.git/poll-state.json", sys.argv[2]
+s = json.load(open(f))
+s["_idle_kick"][tid] = {"since": time.time() - 3600, "n": 0}
+json.dump(s, open(f, "w"))
+PYEOF
+N3=$(wc -l < "$QDFAKE/prompts.log")
+QDPOLL >/dev/null
+N4=$(wc -l < "$QDFAKE/prompts.log")
+[ "$N3" = "$N4" ] && ok "场景d对照：status=running 不 kick" || fail "场景d对照：running 误 kick（$N3→$N4）"
+# 超限升级：已 kick 超过 REDISPATCH_MAX 次 → escalated 而不再 inject
+printf 'idle' > "$QDFAKE/ctrl"
+QDID2=$(TID "$(AGORA_HOME="$QD_HOME" TITLE="qd idle超限任务" VERIFY=true PROJECT_DIR="$QDREPO" WT=1 bash "$QD_HOME/scripts/task-create.sh")")
+AGORA_HOME="$QD_HOME" bash "$QD_HOME/scripts/post.sh" --actor idler@qd-repo --project qd-repo --event dispatched --task "$QDID2" --target "$QDREPO" --child idler --run "raw/dispatches/d-qd-idle2.log" --session ses_qdidle2 >/dev/null
+touch "$QD_HOME/raw/dispatches/d-qd-idle2.log"
+python3 - "$QD_HOME" "$QDID2" <<'PYEOF'
+import json, sys, time
+f, tid = sys.argv[1] + "/.git/poll-state.json", sys.argv[2]
+s = json.load(open(f))
+s["_idle_kick"][tid] = {"since": time.time() - 3600, "n": 99}   # 远超上限
+json.dump(s, open(f, "w"))
+PYEOF
+N5=$(wc -l < "$QDFAKE/prompts.log")
+QDPOLL >/dev/null
+N6=$(wc -l < "$QDFAKE/prompts.log")
+QLEDEV "$QD_HOME" "$QDID2" escalated | grep -q "idle 停转超限" \
+  && [ "$N5" = "$N6" ] \
+  && ok "场景d：kick 超限升级 escalated（不再 inject）" || fail "场景d：超限未升级或仍 inject（$N5→$N6 escal=$(QLEDEV "$QD_HOME" "$QDID2" escalated | head -1)）"
+rm -rf "$QD_HOME" "$QDREPO" "$QDBIN" "$QDFAKE" "$T"/qd-repo__wt-*
 
 echo
 echo "===== 结果: $PASS 通过, $FAIL 失败 ====="

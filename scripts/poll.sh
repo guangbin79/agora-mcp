@@ -87,7 +87,7 @@ def task_last_refs():
 
 report = {"poll": "ok", "host": HOST, "stalled": [], "suspicious": [], "escalated": [],
           "reopened": [], "spawned": [], "held": [], "stale_live": 0,
-          "sessions_reaped": 0, "mails_archived": 0,
+          "sessions_reaped": 0, "mails_archived": 0, "idle_kicked": [],
           "merge_wait_diag": [], "redispatched": [], "escalated_merge": [], "merge_lagged": [],
           "orphan_diag": [], "wt_removed": [], "wt_kept_dirty": [], "wt_kept_grace": [], "wt_remove_failed": []}
 
@@ -132,8 +132,8 @@ def scan_tasks():
                 if not e: continue
                 t = e.get("task") or ""
                 if not re.fullmatch(r"gt-[0-9a-f]+", t): continue
-                d = tasks.setdefault(t, {"dispatched": [], "has": set(), "last": None, "done_open": False, "terminal": False, "inflight": False, "last_actor": "", "last_terminal": None, "_rows": []})
-                d["_rows"].append((e.get("ts", ""), e["event"]))
+                d = tasks.setdefault(t, {"dispatched": [], "has": set(), "last": None, "done_open": False, "terminal": False, "inflight": False, "last_actor": "", "last_terminal": None, "_rows": [], "post_disp": None})
+                d["_rows"].append((e.get("ts", ""), e["event"], e.get("actor", "")))
                 d["has"].add(e["event"])
                 d["last_actor"] = e.get("actor", "")
                 if e["event"] == "dispatched":
@@ -141,16 +141,18 @@ def scan_tasks():
     for d in tasks.values():
         rows = sorted(d["_rows"], key=lambda r: r[0])  # gt-caf3/gt-db15：跨分片文件序≠时间序，状态机统一按 ts 序
         d["last"] = rows[-1][1] if rows else None  # B-M3：last 按 ts 序取尾行——与 done_open 重放同口径（同 ts 平局一致）
-        for _ts, ev in rows:  # gt-db15：done_open 同按 ts 序重放——同日多分片文件名字典序≠时间序
+        for _ts, ev, _ac in rows:  # gt-db15：done_open 同按 ts 序重放——同日多分片文件名字典序≠时间序
             if ev == "done": d["done_open"] = True          # done 未闭：merged/cancelled/reopened 才清
             elif ev in ("merged", "cancelled", "reopened"): d["done_open"] = False
             if ev in ("merged", "cancelled"): d["terminal"] = True; d["last_terminal"] = ev   # gt-99af：当前终态（mention 核查棒）；gt-b5e9：记明哪一种（GC 窄域判别）
             elif ev == "reopened": d["terminal"] = False     # 返工/恢复重开 → 回到可拾取
             # gt-ae6f 守卫二在飞口径：只计末次 reopened 之后（且未被终态闭合）的 dispatched——
             # reopened 返工清空在飞（历史 dispatched 不永久压制回池任务），merged/cancelled 闭飞
-            if ev == "reopened": d["inflight"] = False
-            elif ev == "dispatched": d["inflight"] = True
+            if ev == "reopened": d["inflight"] = False; d["post_disp"] = None
+            elif ev == "dispatched": d["inflight"] = True; d["post_disp"] = set()
             elif ev in ("merged", "cancelled"): d["inflight"] = False
+            elif d["post_disp"] is not None and not _ac.startswith("watchdog@"):
+                d["post_disp"].add(ev)   # gt-7ca0：尾派发后的子会话活动（watchdog 机械回执不算——不遮蔽真停转）
         del d["_rows"]
     return tasks
 
@@ -322,7 +324,7 @@ for f in sorted(glob.glob(f"{HOME}/wiki/entities/*.md")):
             # gt-ae6f 守卫二：派发即回写内存账本视图——同轮后续邮件走在飞去重，至多一派
             dd = TASKS.setdefault(task, {"dispatched": [], "has": set(), "last": None,
                                          "done_open": False, "terminal": False, "inflight": False,
-                                         "last_actor": "", "last_terminal": None})
+                                         "last_actor": "", "last_terminal": None, "post_disp": None})
             dd["dispatched"].append((f"{name}@{os.path.basename(dirs[0])}", out.get("run", ""), "", out.get("session", "")))
             dd["has"].add("dispatched"); dd["last"] = "dispatched"; dd["inflight"] = True
         else:
@@ -453,6 +455,58 @@ for t, d in TASKS.items():
             redisp = r2.returncode == 0
     orph[t] = {"since": now, "n": n, "redispatched": redisp}
     report["orphan_diag"].append({"task": t, "n": n, "redispatched": redisp})
+
+# ---------- ②f idle 停转自恢复档（gt-7ca0 场景d）：dispatched 子会话 runtime status=idle 超阈且任务未终态
+# → 自动 inject 续跑指令＋watchdog diagnosed 账本回执（2026-10-23/24 两次手工注入救活的自动化）。
+# 判据＝在飞且尾派发后零子会话活动（post_disp 空集；watchdog 回执不计——不遮蔽真停转）；
+# status 恒 idle 才 kick（running=在转不扰；dead/缺 run log 走孤儿/秒死档）；sid 只在本机服务有效
+# → wt_host≠本机跳过（沿用 L2 注入跨机判则）
+kick = state.setdefault("_idle_kick", {})
+IDLE_KICK_MIN = int(os.environ.get("AGORA_IDLE_KICK_MIN", "15"))
+api_on = (os.environ.get("AGORA_RUNTIME_API", "1") != "0"
+          and os.environ.get("AGORA_RUNTIME", "opencode") == "opencode"
+          and os.path.exists(f"{HOME}/scripts/runtime/opencode.sh"))
+if SPAWN and api_on:
+    for t, d in TASKS.items():
+        if not d.get("inflight") or d.get("terminal") or d.get("done_open") or d.get("post_disp") != set():
+            kick.pop(t, None); continue
+        sid = d["dispatched"][-1][3] if d.get("dispatched") else ""
+        if not sid:
+            kick.pop(t, None); continue
+        page = f"{HOME}/wiki/tasks/{t}.md"
+        wh = ""
+        if os.path.exists(page):
+            wm2 = re.search(r'^wt_host:\s*(\S+)', open(page, encoding="utf-8", errors="replace").read(), re.M)
+            wh = wm2.group(1) if wm2 else ""
+        if wh != HOST:
+            # 失败关闭（gt-7ca0 终闸 C-F1）：sid 是跨机不可信账本字段，无本机归属证据（无任务页/
+            # 无 wt_host/异机）一律不注入——判则对齐既有 done-unmerged 注入路径（upsess∧wh==HOST）
+            kick.pop(t, None); continue
+        st = run("runtime/opencode.sh", ["status", sid])
+        if st.returncode != 0 or st.stdout.strip() != "idle":
+            kick.pop(t, None); continue
+        e = kick.get(t)
+        if not isinstance(e, dict): e = {"since": now, "n": 0}; kick[t] = e
+        if (now - float(e.get("since", now))) / 60 < IDLE_KICK_MIN: continue
+        n = int(e.get("n", 0)) + 1
+        actor = d["dispatched"][-1][0] or "watchdog"
+        if n > REDISPATCH_MAX:
+            r = run("post.sh", ["--actor", WATCHDOG, "--project", "watchdog", "--event", "escalated",
+                                "--task", t, "--conclusion", f"idle 停转超限：{t} 子会话 {sid} 已 {n-1} 次注入续跑仍无进展（上限 {REDISPATCH_MAX}），请 operator 介入",
+                                "--mention", actor.split("@")[0]])
+            if r.returncode == 0: kick.pop(t, None)
+            report["escalated_merge"].append({"task": t, "idle_kick": True, "n": n, "ok": r.returncode == 0})
+            continue
+        boot = (f"idle 停转自恢复：你的会话已 idle 超 {IDLE_KICK_MIN}min 且任务 {t} 未终态。"
+                f"先 bash {HOME}/scripts/sync.sh pre，再用 agora_history(task={t}) 自查进度、git status 查半成品，接着做；"
+                f"若已收工请补落相应事件（done/blocked）。")
+        ri = run("runtime/opencode.sh", ["inject", sid, boot])
+        r = run("post.sh", ["--actor", WATCHDOG, "--project", "watchdog", "--event", "diagnosed",
+                            "--task", t,
+                            "--conclusion", f"idle 停转：子会话 {sid} idle 超 {IDLE_KICK_MIN}min 无活动（第 {n}/{REDISPATCH_MAX} 次），inject 续跑{'已发出' if ri.returncode == 0 else '发出失败'}"])
+        kick[t] = {"since": now, "n": n}   # 回执即复位时钟：下轮重新计时，cadence 不刷屏
+        if r.returncode == 0:
+            report["idle_kicked"].append({"task": t, "session": sid, "n": n, "injected": ri.returncode == 0})
 
 # ---------- ②e 每日督报（跨日闸门：last_supervise_date≠今日 → 重放昨日账本，整页重写 topics/supervision.md） ----------
 today_s = datetime.now().strftime("%F")

@@ -48,15 +48,30 @@ if [ -n "${UP:-}" ]; then
     [ -n "${UPPD:-}" ] && UPMAIN=$(PYTHONPATH="$AGORA_HOME/scripts" python3 -c 'import sys, agora_lib
 p = sys.argv[1]; m = agora_lib.main_repo_of(p); print(m or p)' "$(realpath "$UPPD")" || true)
     if [ -n "${UPWTD:-}" ] && [ "$UPMAIN" = "$MAIN" ]; then
-      # 同仓链：目标=上游 wt 分支（目录=上游树）。上游树缺失→锚点重建
-      if [ ! -d "$UPWTD" ]; then
-        git -C "$MAIN" worktree prune
-        git -C "$MAIN" show-ref --verify --quiet "refs/heads/wt/$UP" \
-          && git -C "$MAIN" worktree add -q "$UPWTD" "wt/$UP" \
-          || git -C "$MAIN" worktree add -q -b "wt/$UP" "$UPWTD" \
-          || fail WORKTREE_REBUILD_FAILED "上游树重建失败: $UPWTD"
+      # gt-7ca0 场景b（链目标死循环）祖先检查：上游 tip 已并入主仓默认分支（已并）或分支已清
+      # （并后清理）→ 链目标已死，目标回落主仓默认分支——不再锚点重建复活上游分支
+      # （gt-2b25 补票三连 NOT_FF 根因）。分支在场且 tip 未并入 → 活链锚点照旧
+      UP_LIVE=0
+      if git -C "$MAIN" show-ref --verify --quiet "refs/heads/wt/$UP"; then
+        DEFTGT=$(git -C "$MAIN" symbolic-ref -q --short HEAD 2>/dev/null || echo "")
+        if [ -n "$DEFTGT" ] && git -C "$MAIN" rev-parse --verify --quiet "refs/heads/$DEFTGT" >/dev/null 2>&1 \
+           && git -C "$MAIN" merge-base --is-ancestor "refs/heads/wt/$UP" "refs/heads/$DEFTGT"; then
+          :   # 上游已并：目标回落默认分支
+        else
+          UP_LIVE=1
+        fi
       fi
-      TARGET_DIR="$UPWTD"; TARGET_BRANCH="wt/$UP"
+      if [ "$UP_LIVE" = 1 ]; then
+        # 同仓链：目标=上游 wt 分支（目录=上游树）。上游树缺失→锚点重建
+        if [ ! -d "$UPWTD" ]; then
+          git -C "$MAIN" worktree prune
+          git -C "$MAIN" show-ref --verify --quiet "refs/heads/wt/$UP" \
+            && git -C "$MAIN" worktree add -q "$UPWTD" "wt/$UP" \
+            || git -C "$MAIN" worktree add -q -b "wt/$UP" "$UPWTD" \
+            || fail WORKTREE_REBUILD_FAILED "上游树重建失败: $UPWTD"
+        fi
+        TARGET_DIR="$UPWTD"; TARGET_BRANCH="wt/$UP"
+      fi
     fi
   fi
 fi
