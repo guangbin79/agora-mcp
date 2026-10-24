@@ -1,0 +1,584 @@
+===== 环境自举 =====
+ok   | init.sh 自举
+ok   | init 幂等（再跑一次）
+===== agora_task_create =====
+ok   | task_create 分配 hash ID
+ok   | 任务页已生成
+ok   | task_create 后 todo 即时可见（同锁重推导）
+ok   | parent 写入 frontmatter
+ok   | verify 缺 project_dir 被拒(rc=2)
+ok   | deps 引用不存在被拒(rc=5)
+===== 认领 / done / verify 门 =====
+ok   | done+verify 通过
+ok   | claim 冲突派生 claim_conflict
+ok   | claim_conflict 已派生入板
+ok   | verify 失败拒 done(rc=4)
+ok   | verify_failed 落账
+===== 幂等：连续窗口语义 =====
+ok   | 连续重复判重试（dedup:true）
+ok   | reopen 后 re-claim 正常落账
+===== cancelled / reopened 生命周期 =====
+ok   | cancelled 后出板
+ok   | B reopen 后 re-claim 落账
+ok   | reopen 后 done
+===== 计划进度聚合 =====
+ok   | 计划聚合 2/2
+===== agora_history =====
+ok   | history 事件链完整（7 条）
+ok   | history 顺序权威
+===== agora_attach（证据落项目库） =====
+ok   | attach 返回证据 commit
+ok   | 证据 ref 已建（orphan）
+ok   | 工作区 HEAD 未动
+ok   | 工作区/index 未污染
+ok   | 证据内容可取回
+ok   | attached 事件落账（URL@commit）
+ok   | 证据链式（二次 attach 以前次为父）
+ok   | attach 缺文件被拒(rc=2)
+ok   | attach 未知任务被拒(rc=5)
+===== 并发写入 =====
+ok   | 20 并发：相同×10→1，不同×10→10
+===== MCP 协议（十四工具 + 权限） =====
+ok   | MCP 全链
+ok   | 未注册目录自动注册后可写
+ok   | 不可注册目录（$HOME）写仍被拒
+===== 远端同步与 SSH 签名 =====
+ok   | 已有仓库补配远端
+ok   | clone 后 init 补齐骨架
+ok   | https 远端被拒(rc=1)
+ok   | pre-pull 合并远端事件
+ok   | post 后 push 到远端
+ok   | agora_sync 显式拉取（merged_new=true）
+ok   | 读路径同步后可见他机事件
+ok   | agora_who 名册发现
+ok   | 他机在场记录被忽略（仍派生）
+ok   | 本机在场降级为通知
+ok   | 签名配置启用
+ok   | 机械提交带有效签名（%G?=G）
+===== HTTP 只读窗口（agora-http） =====
+ok   | HTTP 七端点 + Web 页
+ok   | wiki 路径穿越被拒（400）
+ok   | 随机端口分配 + 运行文件发现
+ok   | agora_who 报告 http 端口
+ok   | 退出后运行文件已清理
+ok   | 缺省端口即随机（≠8471）
+ok   | 运行文件未入库
+===== poll.sh 唤醒与看门狗 =====
+ok   | poll 拾取本机 mention 并派生
+ok   | 拉起模板内置复查 owner 惯例
+ok   | 外机实体不被拾取
+ok   | 邮件水位不重复派生
+ok   | 基线 poll 不误报（活性时钟自首次观察起计）
+ok   | stalled 看门狗派生 diagnosed（本机观察时钟）
+ok   | 看门狗 cadence 不刷屏
+ok   | stalled 升级阶梯：escalated
+ok   | watchdog 自动回池（reopened → todo）
+ok   | stale .live 提醒派单方
+ok   | stale .live 不重复提醒
+ok   | POLL_SPAWN=0 只报告不派生
+===== dispatch 注入防御 =====
+ok   | dispatch 拒绝非法 task id
+ok   | dispatch prompt 注入不执行
+ok   | dispatch 拉起参数含 --auto 且无 --dir
+===== poll 本地保洁 =====
+ok   | poll 保洁计数（sessions+归档）
+ok   | TTL 只清本机过期条目
+ok   | 超期邮件入 archive
+===== poll 每日督报（跨日闸门，gt-abcd） =====
+ok   | 督报跨日闸门首触发
+ok   | 督报页首建 owner=watchdog
+ok   | 督报统计（分类/闭环率/复发点名/深度分布）
+ok   | 同日不重复触发（页字节不变＋闸门翻今日）
+ok   | 督报页他人写被 owner 拒(rc=5)
+ok   | 7 天有界截断：最老段出局
+ok   | 跨日翻新：次新旧段保留
+ok   | 督报页恰 7 段
+ok   | 跨日翻新：昨日段置顶
+===== 通知桥（notify-opencode.sh，规格 §8.1；传输=runtime CLI，无 HTTP 依赖） =====
+ok   | 通知桥注入运行中会话（runtime CLI inject）
+ok   | 通知桥 queue 投递 + 只递提醒
+ok   | 通知桥 60s 去抖
+ok   | 无 HTTP 服务时桥仍可注入（传输=opencode api CLI）
+ok   | 通知桥注入失败静默跳过
+ok   | 无映射实体静默跳过
+===== 项目注册表（wiki/projects） =====
+ok   | 项目页注册
+ok   | verify 从项目页回填
+ok   | 无项目页无 verify 仍被拒(rc=2)
+ok   | agora_who 含项目清单
+ok   | 双清 claim 回放兜底入 conflicts
+===== 增量推导（derive-cache） =====
+ok   | 增量缓存已建立
+ok   | 无新事件走增量路径
+ok   | 增量与全量结果一致
+ok   | 前缀篡改回退全量且结果一致
+===== doctor =====
+ok   | 未推送证据 warn 不破 ALL GREEN
+ok   | 推送后证据对账转 ok
+ok   | doctor 全绿
+===== 审核修复回归（v1.17） =====
+ok   | TITLE 换行被拒(rc=2)
+ok   | VERIFY 换行被拒(rc=2)
+ok   | 词边界：gt-zzzz 不被 gt-zzzz9 误伤
+ok   | 词边界：幂等 LAST_EV 不被 gt-wwww9 干扰
+ok   | check_mail since 水位语义
+ok   | waiting 视图（枚举+all）
+ok   | init 自举即装 pre-commit hook
+ok   | .gitattributes 覆盖共享可变文本
+ok   | hook 拦截 wiki/ 裸提交
+ok   | 机械凭证放行
+ok   | doctor 检出 MERGE_HEAD 残留
+ok   | doctor --fix 恢复合并中断
+ok   | wiki replace owner 不符被拒(rc=5)
+ok   | wiki 新建 topics 页
+ok   | topics append 放行（带署名）
+ok   | 非 topics append 被拒(rc=2)
+ok   | wiki_write 无后缀路径归一落盘 .md（与读侧同口径）
+ok   | wiki_read 无 .md 路径归一可读（topics/delegation）
+ok   | backup bundle 生成
+ok   | instructions 长路径仍 <600 字
+instructions 长路径渲染长度 = 597（预算 <600）
+ok   | instructions 长路径渲染 <600（实测 597 字）
+ok   | instructions 含跨仓关键词（跨仓/实体页/topics/delegation/广场仓 docs/AGENTS.md）
+ok   | instructions 无旧碰撞文本「细节读 AGENTS.md」
+ok   | agora_dispatch 描述含「跨仓委托的标准路径」定位句
+===== owner 过滤（个人任务队列，v1.18） =====
+ok   | blocked 行渲染认领者
+ok   | owner 过滤（me/他人/组合）
+===== 审核回归（v1.26） =====
+ok   | seq 前缀撞名防御（pre@a 不误数 pre@ab）
+ok   | mention 路径逃逸被拒(rc=2)
+ok   | mention 未逃逸出 inbox/
+ok   | 邮件 ref 与账本 ref 一致且分片存在
+ok   | cancelled 独立任务落 board/cancelled.md
+ok   | MCP board：枚举+聚合 conflicts/cancelled
+ok   | HTTP /api/board 含 conflicts/cancelled 视图
+ok   | reopen 后 cancelled.md 陈旧文件清除
+===== 审核回归二期（v1.27） =====
+ok   | mention 含 | 被拒(rc=2)
+ok   | 幻影 task 字段未落账
+ok   | mention 含换行被拒(rc=2)
+ok   | fail stderr 为合法 JSON（引号转义）
+ok   | 派发逃逸任务就绪（DT=gt-cc1f）
+ok   | 坏名 dispatcher 写入侧被拒(rc=2)
+ok   | 毒 dispatcher 读取侧兜底拒（无逃逸）
+ok   | 投毒事件落账就绪
+ok   | SEQ 双侧定界（跨 actor body 注入不虚高）
+ok   | scripts 目录内相对调用 history.sh 出合法 JSON
+ok   | MCP view 白名单（越枚举拒）
+ok   | HTTP /api/inbox 拒 name=..（400）
+ok   | actor 含 | 被拒（账本行完整性）
+ok   | idem 含换行被拒(rc=2)
+ok   | 伪造事件行未落账
+ok   | project 含 / 与 .. 被拒(rc=2)
+ok   | dispatched 坏名拒且零写入
+ok   | post unknown-arg stderr 为合法 JSON
+ok   | attach 缺文件 stderr 为合法 JSON
+===== 跨仓委托协议播种 =====
+ok   | init 播种 delegation.md（含与宿主准则的关系）
+ok   | init 重复执行不覆盖 delegation.md（幂等）
+ok   | 论坛 AGENTS.md 含跨仓委托指路行
+===== 跨仓委托链（stub runtime 全链路账本断言） =====
+ok   | dispatch stub 返回 mode:spawned
+ok   | dispatch 名册解析子身份 worker@target
+ok   | 子会话 done 通过 verify 门
+ok   | 委托链事件序列 dispatched→claimed→done
+ok   | done 事件自动 @派单方（mention 含 orch）
+ok   | 全链无 verify_failed
+ok   | 任务页 frontmatter 标注 dispatcher:orch
+ok   | 尾引号标量 verify 类 done 过门（成对剥离后原样透传）
+ok   | history.sh 未导出 AGORA_HOME 仍出合法 JSON（默认导出）
+ok   | 同任务二次派生 dispatched 审计行落账（基线 1 + 新增 1）
+ok   | dispatch 响应 JSON 含 dedup:false（裸布尔）
+ok   | child_actor 兜底：子会话 post 不带 actor 归 child（gt-eefd）
+===== dispatch worktree 感知（独立论坛：名册仅主 repo 实体） =====
+ok   | worktree 路径派发归属主 repo 实体（project=repo）
+ok   | 陌生目录（非 worktree）仍拒派发
+ok   | worktree cwd 身份裁决归属主实体（who.you=tester@repo）
+ok   | worktree cwd 不自动注册实体页
+ok   | worktree 子目录派发归属主 repo 实体
+ok   | worktree 子目录身份裁决归属主实体
+ok   | 子目录 cwd 不误注册实体页
+ok   | 匿名 worktree cwd 的 proposal 落账归一主 repo 名
+shell-init: error retrieving current directory: getcwd: cannot access parent directories: No such file or directory
+shell-init: error retrieving current directory: getcwd: cannot access parent directories: No such file or directory
+chdir: error retrieving current directory: getcwd: cannot access parent directories: No such file or directory
+chdir: error retrieving current directory: getcwd: cannot access parent directories: No such file or directory
+chdir: error retrieving current directory: getcwd: cannot access parent directories: No such file or directory
+ok   | 读取侧 dispatcher 坏名（含反斜杠）拒 done
+ok   | 读取侧 fail 零写入（无 shard 头残留）
+shell-init: error retrieving current directory: getcwd: cannot access parent directories: No such file or directory
+shell-init: error retrieving current directory: getcwd: cannot access parent directories: No such file or directory
+chdir: error retrieving current directory: getcwd: cannot access parent directories: No such file or directory
+chdir: error retrieving current directory: getcwd: cannot access parent directories: No such file or directory
+chdir: error retrieving current directory: getcwd: cannot access parent directories: No such file or directory
+shell-init: error retrieving current directory: getcwd: cannot access parent directories: No such file or directory
+chdir: error retrieving current directory: getcwd: cannot access parent directories: No such file or directory
+chdir: error retrieving current directory: getcwd: cannot access parent directories: No such file or directory
+ok   | MENTION 精确匹配（bossy 不吞 boss）
+shell-init: error retrieving current directory: getcwd: cannot access parent directories: No such file or directory
+shell-init: error retrieving current directory: getcwd: cannot access parent directories: No such file or directory
+chdir: error retrieving current directory: getcwd: cannot access parent directories: No such file or directory
+chdir: error retrieving current directory: getcwd: cannot access parent directories: No such file or directory
+chdir: error retrieving current directory: getcwd: cannot access parent directories: No such file or directory
+shell-init: error retrieving current directory: getcwd: cannot access parent directories: No such file or directory
+chdir: error retrieving current directory: getcwd: cannot access parent directories: No such file or directory
+shell-init: error retrieving current directory: getcwd: cannot access parent directories: No such file or directory
+chdir: error retrieving current directory: getcwd: cannot access parent directories: No such file or directory
+ok   | board 显示心跳 age
+===== 身份裁决不冻结（2026-10-20 gt-9f24 事故回归） =====
+ok   | 身份裁决不冻结（后到覆盖同进程生效）
+===== task_create idem 幂等＋注入守卫（全量委托 L1 Task1） =====
+ok   | idem 同 key 重试返回同任务
+ok   | title $(..) 不被求值（守卫）
+ok   | idem 写入 frontmatter
+ok   | 无 IDEM 不写 idem 行
+===== wt 建树＋wt_dir/wt_host＋回填归一（全量委托 L1 Task2） =====
+ok   | WT=1 建树（命名 proj__wt-gt-x__ts）
+ok   | 分支 wt/gt-x 生成
+ok   | frontmatter wt/wt_dir/wt_host
+ok   | 无 WT 不写 wt 字段
+ok   | worktree 路径 verify 回填归一命中
+ok   | 同 IDEM+WT 重试不建第二棵树
+ok   | WT 缺 project_dir 被拒(rc=2)
+===== dispatch 深度默认5＋账本推导＋配额账本化（gt-2845 K3 复审） =====
+ok   | 深度默认5：DEPTH=2(NEXT=3) 放行
+ok   | 深度默认5：DEPTH=3(NEXT=4) 放行
+ok   | 深度默认5：DEPTH=4(NEXT=5) 拒
+ok   | 链派发 E2(dtask=E1) 放行
+ok   | 账本链 NEXT=3 放行（默认5语义）
+ok   | 账本链 NEXT=4 放行
+ok   | 账本推导：env=0 但链深 NEXT=5 拒
+ok   | dispatched 落账含 dispatcher_task
+ok   | 配额账本化：6 活派发（零 .live）拒第 7
+ok   | 终态出集后配额放行
+ok   | 分域：A 域 5/5 满拒 A 第 6（分域措辞）
+ok   | 分域：A 域满不挡 B（B 域 0/30 放行）
+ok   | 总量闸：A5+B1=6 各域未超总和超，拒（总量措辞）
+ok   | .live 分域归属：仅名下 .live 也计域值
+===== dispatch 发射加固＋凭据预写＋wt 免在场优先（全量委托 L1 Task4） =====
+ok   | 假 runtime 秒死→SPAWN_DIED 失败 JSON
+ok   | 恰一次重试（两 EXIT 行）
+ok   | diagnosed 落账含日志尾
+ok   | 凭据预写重写（错内容被覆盖）
+ok   | 凭据内容含 gt-id＋树路径
+ok   | wt 任务免在场优先（spawned）
+ok   | 非 wt 在场优先照旧（notified 对照）
+ok   | 预检失败 SPAWN_PRECHECK
+ok   | 预检失败零落账
+ok   | 树误删自动重建（spawned）
+ok   | 重建树目录存在
+===== verify 两段制＋merged 事件（全量委托 L1 Task5） =====
+ok   | done verify 在 wt_dir 执行（树内标记命中）
+ok   | merged 落账（commit==branch HEAD）
+ok   | merged commit≠HEAD 被拒
+ok   | merged 缺 commit 被拒
+ok   | merged 缺省 branch=project_dir 当前分支
+===== merge.sh 合并闭环（全量委托 L1 Task6） =====
+ok   | ① ff 合并闭环 JSON
+ok   | ① 主仓含合并内容
+ok   | ① merged 落账
+ok   | ① 树已清＋分支已删
+ok   | ② verify FAIL 拒（fail JSON）
+ok   | ② 主支零痕迹（原子回滚）
+ok   | ② blocked→reopened 落账
+ok   | ③ non-ff NOT_FF
+ok   | ③ blocked→reopened
+ok   | ④ 树误删重建后合并
+ok   | ⑤ 幂等补账 JSON
+ok   | ⑤ 无第二次合并痕迹（HEAD 不动＋merged 恰一条）
+ok   | ⑤ 幂等路径也清树
+ok   | ⑥ 同仓链合并 JSON
+ok   | ⑥ 上游树已含下游提交
+ok   | ⑥ 主仓不动
+ok   | ⑦ 脏目标（tracked 修改）拒绝合并
+ok   | ⑧ 非 wt 闭环 merged JSON
+ok   | ⑧ merged 落账 commit=主仓 HEAD
+ok   | ⑧ 非 wt 无树操作
+ok   | ⑧ 重跑幂等（merged 恰一条）
+ok   | ⑧b done 未并入主仓被拒
+ok   | ⑧b 拒后无 merged 落账
+ok   | ⑧c 无 done commit 拒
+ok   | ⑧d 无 claimed 链拒（fail-closed）
+ok   | ⑧d done actor≠claimed actor 拒
+ok   | ⑧e 自由文本伪造 claimed 不放行
+ok   | ⑧e evidence 引 actor:x 不假拒
+ok   | ⑧e 非行尾伪造 actor 不放行
+ok   | ⑧e 末条垃圾 commit 不回退旧锚
+===== poll 补档：重派/孤儿/豁免/GC/host（全量委托 L1 Task7） =====
+ok   | ① done-unmerged→diagnosed
+ok   | ① 上游被恢复性重派
+ok   | ① merged 后不再诊断
+ok   | ①b git 已并＋账本无 merged → 梯子安静（不诊断不重派）
+ok   | ② 3 次重派后第 4 次 escalated（重派 3 次）
+ok   | ③ 孤儿 dispatched→diagnosed＋重派
+ok   | ③ 有 run log 不命中孤儿档
+ok   | ④ 宽限内不删
+ok   | ④ 终态＋宽限尽＋clean→删
+ok   | ④ dirty 树只报告不删
+ok   | ④ 缺任务页树 doctor 报告
+ok   | ④ 缺页树不删
+ok   | ⑤ parent 链挂活子任务→母任务 ×4 豁免（子正常诊断）
+ok   | ⑥ wt_host 异机任务拾取跳过（held）
+ok   | ⑥b 终态（merged）任务 mention 不派发（held）
+ok   | ⑦ .live 滞留→diagnosed（既有档回归）
+ok   | ⑧ 同秒 cancelled+dispatched 平局取终态（不复活）
+ok   | ⑧b 同秒 done+cancelled closer 胜（梯子安静）
+ok   | ⑧c 同秒 reopened+dispatched 追加序胜（孤儿探测在线）
+ok   | ⑨ GC 空壳 stale 注册：prune 后分支删净
+ok   | ⑨b owner 未定显报（wt_branch_kept，B-M7 同口径）
+ok   | ⑨b 空壳收敛（rmdir 无 owner 也清，防永不收敛）
+ok   | ⑨b 分支保守保留（无误删）
+ok   | ⑩ 孤儿未尝试重派记 null
+ok   | R5 smoke 账本扫描全带点分片伴生 glob
+===== BOOT 链式协议＋setup 钩子（全量委托 L1 Task8） =====
+ok   | setup 任务派发 spawned
+ok   | setup: 在树内（spawn 前）执行（侧效文件）
+ok   | setup 失败→SETUP_FAILED
+ok   | setup 失败零落账
+ok   | BOOT 含「装环境」
+ok   | BOOT 含「不自己合并」
+ok   | BOOT 含「恢复性重派」
+ok   | BOOT 含「rebase」
+===== 终审修复批（三分册 B-C1/W1-5 + A-W1/W2 + C-W1/W2 + S1/S3/M2/M5） =====
+ok   | F1 done(未 merged)净树 GC 不删
+ok   | F2 锁超时非零退出无假成功 JSON
+ok   | F3 目标分支漂移被拒
+ok   | F4 last=diagnosed 出集（3 僵尸后第 4 派放行）
+ok   | F5 dispatcher_task 机械推导落账
+ok   | F6 done-unmerged diagnosed 带派单方 mention
+ok   | F7 无票直 post merged 被拒
+ok   | F8 merged 落账含 branch
+ok   | F9 wt_host 异机合并被拒
+ok   | F10 verify 窗口并发推进不被 reset 吞
+ok   | F11 poll 重派透传原链 dispatcher_task
+===== 已知风险批次（B-M3 孤儿判据 / B-M4 重派回报 / B-M7 GC 可见性 / doctor UTF-8） =====
+ok   | R1 诊断后重派仍报孤儿（B-M3）
+ok   | R2 重派失败记 redispatched:false（B-M4）
+ok   | R2 重派成功记 redispatched:true（B-M4）
+ok   | R3 删失败树保留
+ok   | R3 wt_remove_failed 可见（B-M7）
+ok   | R3 gcst 保留下轮重试删净（B-M7）
+ok   | R4 doctor open 全带 errors=replace（UTF-8 容错）
+===== 隐藏分片可见性——点开头项目名（生产行政 hotfix，gt-3ea2 波次根因） =====
+ok   | 点仓 claimed 上板（derive 可见）
+ok   | 点仓 done 后离板
+ok   | 点仓 merged 后梯子安静（poll 可见 merged）
+===== L2 API 通道批（T1 适配器契约 stub 测 / T2 API 派生 / T3 ack 注入 / T4 注入式续跑 / T5 在场 API 化） =====
+ok   | S1a health 通 rc0
+ok   | S1a health 断 rc1
+ok   | S1b create 出 sid
+ok   | S1b create 目录绑定
+ok   | S1f create title 透传
+ok   | S1f create title 缺省 agora
+ok   | S1c inject rc0
+ok   | S1c inject queue 透传
+ok   | S1c inject 断电 rc1
+ok   | S1d alive 命中 rc0
+ok   | S1d alive 不命中 rc1
+ok   | S1e status idle
+ok   | S1e status dead
+ok   | S1g abort 契约 POST /session/{id}/interrupt
+ok   | S2a API 派生输出 channel+session
+ok   | S2a sid 落账 session:ses_*
+ok   | S2e create title 格式 agora: <task> <title截60>
+ok   | S2b health_fail 回落 run
+ok   | S2b 回落零残留＋sid 统一承载（恰一条 dispatched 含 session:ses_*）
+ok   | S2b run 通道 EXIT:1=0
+ok   | S2b run --session 落预生成 sid＋--title 同名（与账本一致）
+ok   | S2c wt 凭据预写不变（API 通道）
+ok   | S2d inject 败 diagnosed 响
+ok   | S2d session 保留（D3 已知极限）
+ok   | S2d run 兜底成功
+ok   | S3a ack 触发 inject（ack 已落账，继续 / queue）
+ok   | S3b inject 败仅 derived 注记不阻塞
+ok   | S3c 同 sid 幂等去重（inject_dedup＋零重注）
+ok   | S3d 开关关零 inject
+ok   | S4a 注入式续跑 mode:injected
+ok   | S4a 续跑 prompt 透传
+ok   | S4a 注入不产生新 dispatched
+ok   | S4b inject 失败回落重派
+ok   | S4b 回落产生新 dispatched
+ok   | S4c 无 session 直接重派
+ok   | S4d 跨机 wt_host 不注入回落重派
+ok   | S5a alive 命中→notified
+ok   | S5a notified 零 dispatched 落账
+ok   | S5b alive 缺席→正常 spawn
+ok   | S5c wt 任务 alive 命中仍无条件 spawn
+ok   | S5d 开关关走 sessions.map 旧路
+ok   | T6 merged 乱序不误诊 done-unmerged
+ok   | T6 cancelled 乱序不误诊 done-unmerged
+ok   | T7 iter_events 产出点分片事件
+ok   | T7 history.sh 点分片任务全链可见（plan/claimed/done）
+
+===== A批 K3（gt-2845）：verify 锚点重建＋task_create 防呆＋BOOT 文案＋MAX_DEPTH5 =====
+ok   | verify 锚点重建：删树后 done 原地重建＋verify 真跑
+ok   | verify 双缺失：VERIFY_FAILED 明确报错（禁回退 project_dir）
+ok   | task_create 防呆：两告警触发＋不阻断
+ok   | task_create 干净输入零 warnings
+ok   | BOOT 文案对齐 delegation §七（删等 ack 30min）
+ok   | create/run title 截 60 码点（70 字输入→恰 60）
+ok   | 无 title 行→CTITLE 回退 agora: <task>（--title 恒非空）
+ok   | MAX_DEPTH 默认5：代码＋规格＋设计＋README 同步一致
+===== 守卫v2批（gt-ae6f）：mention 拾取环断路＋BOOT 心跳 =====
+ok   | 守卫一：done_open 邮件零派发＋held
+ok   | 守卫一：水位照常推进（二轮零重现）
+ok   | 守卫二：一轮双邮件至多一派＋held
+ok   | 守卫四：owner retired 后 done 任务不入 todo（视图与守卫一致）
+ok   | 守卫三：RECHECK→retired→下轮零新派＋held
+ok   | 守卫五：BOOT 文案含认领即 claimed＋每 30min progress 心跳
+ok   | 守卫六：reopened 返工任务可再拾取（不被在飞去重永久压制）
+ok   | 守卫七：心跳在飞（dispatched→progress）回声零派＋held
+
+===== 多仓关联测试场（B批 gt-2153）：跨仓链/删树重建/中途 cancelled/深度边界＋teardown 竞态 =====
+ok   | 测试场远端：file:// bare 经 init.sh AGORA_REMOTE 配置＋push 落 bare
+ok   | 装饰 https URL 被 init.sh 拒绝（rc=1，origin 不动，不实际推送）
+ok   | 同仓链 a→b→c→d→e 四层派发全落账（dtask 链完整）
+ok   | 深度边界：MAX_DEPTH=5 链深 NEXT=5 DEPTH_EXCEEDED（到顶）
+ok   | env 显式 MAX_DEPTH=3：第 4 层（dtask=SC 链深 3）拒
+ok   | 跨仓 b 树随 task_create 建立（wt_dir 登记）
+ok   | 跨仓链 a 派 b 仓任务（child=bmid@repb 机械解析）
+ok   | 跨仓链 b 再派 c 仓任务（child=bleaf@repc）
+ok   | 账本：TB dispatched 含 dispatcher_task:gt-c795＋target:repb
+ok   | 账本：TC dispatched 含 dispatcher_task:gt-4068＋target:repc
+ok   | dispatcher_task 链可重放：账本复算 depth(TC)=2
+ok   | 上游 wt 树删除后 dispatch 锚点重建（spawned＋目录复在）
+ok   | D4：链中途 cancelled→done 自动 @ 上行 borch
+ok   | D4：下游 TC done 自动 @ 上行 bmid（其上游 TB 已 cancelled）
+ok   | 假 runtime EXIT≠0 秒死→恰好一次重试后 spawned
+ok   | 恰好一次重试（EXIT:1=9→EXIT:2=0，恰 2 行）
+ok   | 秒死 diagnosed 恰好 1 条（重试成功不二次诊断）
+ok   | 新会话命名：--title agora: gt-xxxx <title>
+ok   | 验证窗尽仍活=过：1s 窗口派发返回 spawned
+ok   | 竞态窗现形：dispatch 返回后 .live 在＋子会话进程活（旧逻辑此时 rm 即孤儿）
+ok   | teardown 有界轮询：.live 清空＋零孤儿进程
+===== C一期（gt-b5e9）：cancel 自动推导 / redispatch 合一 / GC 窄域清理 =====
+ok   | ① cancel 省略 task 自动取最近无终态已派任务
+ok   | ① cancelled 事件附树状态（无 wt_dir=none）
+ok   | ② 多活跃：取最近且候选列表含全部活跃（其余不误伤）
+ok   | ③ 已终态再取消拒（rc=4）
+===== gt-35b5 遗留三缺陷（① bare 行尾 ② 非参 ⑥ 非 dict 帧） =====
+ok   | ① 行尾 bare task 的 cancelled 可见：拒 ALREADY_TERMINAL(rc=4)
+ok   | ① 对照：尾随 body 的 cancelled 仍拒(rc=4)
+ok   | ①-F3 dispatcher_task 尾段不误判终态（rc=5 非终态拒）
+ok   | ② tools/call arguments 非 dict：isError 且 server 存活
+ok   | ⑥ 顶层非 dict 帧：error frame 且 server 存活
+ok   | ④ MCP agora_cancel 双形态（注册＋自动推导落账）
+ok   | ⑤ escalated 一键回池：reopened＋重派 spawned
+ok   | ⑥ done-unmerged 一键回池：reopened＋重派
+ok   | ⑦ in-flight 重派拒（rc=4）
+ok   | ⑦b redispatch 省略 task 自动取最近 done-unmerged 回池
+ok   | ⑧ 夹具自检：凭据文件在树内且构成 dirty
+ok   | ⑧ 窄域命中：cancelled＋仅凭据 dirty→自动清树＋删分支
+ok   | ⑨ 有业务文件不清（wt_kept_dirty 只报告）
+ok   | ⑩ done 不清（B-C1 回归；窄域仅限 cancelled）
+
+===== C 二期（gt-0a34）：kill 能力——pgid 落盘 / 进程组 kill / pid 复用防线 / abort 契约 =====
+ok   | K1 run 通道 pgid 落盘（.live=761006）
+ok   | K1 组长 cmdline 含任务标识（pid 复用校验锚点）
+ok   | K2 真杀：进程组消失＋.live 清
+ok   | K2 cancelled body 附 kill:pgid=
+ok   | K2 JSON 输出 kill 键
+ok   | K3 pid 复用不误杀：无辜进程仍活＋skipped＋.live 清
+ok   | K4 无 live 正常取消（kill:no-live）
+ok   | K5 API 通道 pgid 落盘（.live=762006）
+ok   | K5 API 返回后 .live 零残留
+
+===== 并发九派风暴测试场（B批 gt-2e4f）：9 路并发 dispatch——账本写完整性＋配额保险丝 TOCTOU =====
+ok   | 并发九派A：9/9 spawned（配额内零错峰全放行）
+ok   | 并发九派A：9 条 dispatched 全落账（零丢行）
+ok   | 并发九派A：dispatch_id（run path）互异
+ok   | 并发九派A：账本分片全量可解析（iter_events 无残缺、seq 连续、idem 无重）
+ok   | 并发九派A：9 个 run log 就位
+ok   | 并发九派A：stub 秒退 EXIT:1=0×9，.live 自清归零
+ok   | 并发九派B：恰 3 spawned（锁内复核先到者占额）
+ok   | 并发九派B：6 个 QUOTA_EXCEEDED（保险丝触发）
+ok   | 并发九派B：被拒 stderr 恒合法 JSON 且 code=QUOTA_EXCEEDED、rc=8；放行 rc=0
+ok   | 并发九派B：被拒 6 任务零 dispatched 落账（QUOTA 前置拒绝零残留）
+ok   | 并发九派B：仅 3 个 run log、.live 归零（被拒者零 log 零 live）
+ok   | 并发九派B：槽位未释放时重派第 7 个拒（账本口径占额，零 .live 也计数）
+ok   | 并发九派B：done 出集后重派第 7 个成功（槽位释放语义）
+ok   | 并发九派B：锁超时 fail-fast（rc3＋QUOTA_LOCK＋零落账零 spawn）
+ok   | 并发九派doctor：场景A 夹具 ALL GREEN
+ok   | 并发九派doctor：场景B 夹具（含 done 终态）ALL GREEN
+
+===== 合同卫生（gt-b9fb）：verify 静态守卫＋任务页机械字段修正通道＋doctor idem 文案一致化 =====
+ok   | 守卫①绝对路径坏合同告警恰一次（不阻断）
+ok   | 守卫①$AGORA_HOME 坏合同告警恰一次
+ok   | 守卫①引号包裹绝对路径同防（告警恰一次）
+ok   | 守卫①好合同（仓内相对路径）零告警
+ok   | ② 前置：dispatched 落 dispatcher 标注
+ok   | ② dispatcher 修正 wt_dir（页 frontmatter 原位改写）
+ok   | ② F1 回归：正文同前缀行不被 amend 改写（frontmatter 锚定）
+ok   | ② amended 事件落账留痕（历史行未改）
+ok   | ② merge.sh 按修正后 wt_dir 走（新值重建→合并→清树）
+ok   | ② 非 dispatcher 被拒（AMEND_FORBIDDEN，页与账本零写入）
+ok   | ② amended 缺 --set 被拒(rc=2)
+ok   | ② 非机械字段（title）被拒
+ok   | ② F3 回归：非 amended 事件带 --set 显式拒
+ok   | ② C-F3 回归：wt_dir 越主仓同级命名域被拒（页零写入）
+ok   | ② C-F2 前置：amend verify 换约落页
+ok   | ② C-F2 回归：done derived 显式标注 verify_amended
+ok   | ② ocr-E：set 值 & 与反斜杠 sed 转义往返无损
+ok   | ② ocr-E：set 值含 | 被拒(rc=2)
+ok   | ② ocr-E：set 空值被拒(rc=2)
+ok   | ② ocr2-H1：wt_dir 指他任务树名被拒（basename 钉死）
+ok   | ② ocr2-H2：project_dir 改名册外目录被拒（锚点不可迁）
+ok   | ② ocr2：project_dir×wt_dir 同次混改被拒（漂移窗）
+ok   | ② MCP agora_post amended（枚举+set 透传）
+ok   | ② MCP amend 改写 verify 合同（修正通道全脸可用）
+ok   | ③ doctor idem 文案与 runbook 一致（标注不删行）
+===== 四缺口红测试批（gt-7ca0）：actor碰撞推导/链目标死循环/配额自锁/idle停转自恢复 =====
+ok   | 场景a：B 派发放行
+ok   | 场景a：同 actor 同项目 claimed 不推导为链（B 不挂 dispatcher_task:A）
+ok   | 场景a对照1：跨项目 claimed 仍推导 dispatcher_task（真链保留）
+ok   | 场景a对照2：同项目 claimed 有链证据仍推导（E 是链上子任务）
+ok   | 场景b1：下游合并闭环
+ok   | 场景b1：合并目标回落 main（上游 tip 已是 main 祖先不锚上游分支）
+ok   | 场景b1：上游分支未被复活/移动（tip 不动）
+ok   | 场景b1：下游产出真实并入 main
+ok   | 场景b2前置：上游合并后分支树已清
+ok   | 场景b2：done 未合并下游补票闭环
+ok   | 场景b2：上游已并（分支已清）时目标回落 main（幂等票落账）
+ok   | 场景b2：上游分支不被锚点重建复活
+ok   | 场景b2：上游树不重建
+ok   | 场景c：X 自身活跃占槽时重派 X 放行（恢复路径豁免自身槽位）
+ok   | 场景c：他任务 Y 仍被拒（豁免仅及自身，闸门不虚开）
+ok   | 场景d首轮：idle 跟踪建档（不提前 kick）
+ok   | 场景d：idle 超阈触发 inject 续跑（report 可见）
+ok   | 场景d：账本可见回执（watchdog diagnosed）
+ok   | 场景d：inject 携续跑指令送达（stub 落证）
+ok   | 场景d：kick 后 cadence 不刷屏（时钟复位）
+ok   | 场景d对照：status=running 不 kick
+ok   | 场景d：kick 超限升级 escalated（不再 inject）
+
+===== T2 扰动演练 drill.sh（四场景 fake runtime 逻辑断言，gt-40cc 后继） =====
+ok   | drill 非法场景 rc2
+ok   | drill 忙碌让行 rc2
+ok   | 忙碌让行零扰动（未建仓未举实体）
+ok   | 忙碌报告 skipped:busy
+ok   | quota 场景 rc0
+ok   | quota 报告 schema
+ok   | quota 场景断言全过
+ok   | quota fail-closed 零账本残留（2 尝试 1 落账）
+ok   | drill EXIT 清场 cancel 落账
+ok   | kill 场景 rc0
+ok   | kill 闭环：初派＋重派 2 派
+ok   | kill 闭环：看门狗滞留诊断
+ok   | kill 闭环：reopened 回池
+ok   | kill 闭环：新会话认领
+ok   | restart 场景 rc0
+ok   | restart 自身 PID 传递排除集
+ok   | restart 钩子运行于脱离会话
+ok   | restart 看门狗唤醒（滞留诊断）
+ok   | wave 场景 rc0
+ok   | wave 3 并发落账完整
+ok   | wave run log 齐全（无孤儿）
+ok   | wave 桩子会话零认领（无双认领基线）
+ok   | wave 首认领无冲突
+ok   | wave 双认领冲突派生
+ok   | all 场景 rc0
+ok   | all 报告含四场景全过
+
+===== 结果: 502 通过, 0 失败 =====
+EXIT=0
