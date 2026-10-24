@@ -502,14 +502,14 @@ echo "===== poll.sh notify 桥探活（gt-edc4） ====="
 MARK="$T/bridge-mock.log"; : > "$MARK"
 BPAT="probe-bridge-$RANDOM-x"   # 探针模式与本机真桥（notify-opencode.sh）互斥，防生产机真桥在场误判
 BPOLL() { AGORA_NOTIFY_BRIDGE=1 AGORA_NOTIFY_BRIDGE_PAT="$BPAT" \
-          AGORA_NOTIFY_BRIDGE_SPAWN="echo spawn >> \"$MARK\"" \
+          AGORA_NOTIFY_BRIDGE_SPAWN="${1:-echo spawn >> \"$MARK\"}" \
           AGORA_POLL_SPAWN=0 AGORA_RUNTIME=true bash "$AGORA_HOME/scripts/poll.sh" 2>/dev/null; }
 # ① 桥缺席→一轮 poll 后拉起被调用（mock 断言）
 BOUT1=$(BPOLL)
 [ "$(wc -l < "$MARK")" -eq 1 ] && grep -q '"state": "spawned"' <<<"$BOUT1" \
   && ok "桥缺席→拉起被调用（mock）" || fail "桥缺席未拉起（lines=$(wc -l < "$MARK") $BOUT1）"
 # ② 桥在场→零拉起（探针进程 cmdline 带模式串＝模拟活桥；`; exit` 复合命令禁 bash -c 隐式 exec——单命令会被 exec 优化替换镜像丢 cmdline）
-bash -c 'sleep 30; exit' "$BPAT" & BPROBE=$!
+bash -c 'sleep 300; exit' "$BPAT" & BPROBE=$!
 sleep 0.2
 pgrep -f "$BPAT" >/dev/null && ok "探针夹具自检可见" || fail "探针夹具不可见（pgrep 形态错）"
 BT0=$(date +%s)
@@ -522,6 +522,10 @@ mkdir -p "$T/fakebin"; printf '#!/bin/sh\nexit 3\n' > "$T/fakebin/pgrep"; chmod 
 BOUT3=$(PATH="$T/fakebin:$PATH" BPOLL); BRC3=$?
 [ "$BRC3" -eq 0 ] && echo "$BOUT3" | python3 -c 'import json,sys; r=json.load(sys.stdin); assert r["poll"]=="ok" and r["bridge"]["state"]=="probe_failed", r' \
   && ok "探活异常→主流程照常完成" || fail "探活异常阻断/未记账（rc=$BRC3 $BOUT3）"
+# ④ 拉起失败→spawn_failed 记账且 report 仍可解析（err 走 text 解码路径，bytes 会炸 json.dumps）
+BOUT4=$(BPOLL 'echo boom >&2; exit 7')
+echo "$BOUT4" | python3 -c 'import json,sys; r=json.load(sys.stdin); assert r["poll"]=="ok" and r["bridge"]["state"]=="spawn_failed" and r["bridge"]["err"]=="boom", r' \
+  && ok "拉起失败→spawn_failed 记账不阻断" || fail "拉起失败污染/阻断 report（$BOUT4）"
 
 echo "===== poll 每日督报（跨日闸门，gt-abcd） ====="
 YDAY=$(date -d yesterday +%F)

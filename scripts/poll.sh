@@ -772,14 +772,24 @@ try:
             if pg.returncode == 0:
                 br = {"state": "alive"}
             elif pg.returncode == 1:
-                cmd = os.environ.get("AGORA_NOTIFY_BRIDGE_SPAWN") or \
-                      f'setsid nohup bash "{bridge}" >/dev/null 2>&1 &'
-                rs = subprocess.run(["bash", "-c", cmd], capture_output=True,
+                spawn_env = os.environ.get("AGORA_NOTIFY_BRIDGE_SPAWN")   # 测试 mock 注入面
+                cmd = spawn_env or f'setsid nohup bash "{bridge}" >/dev/null 2>&1 &'
+                rs = subprocess.run(["bash", "-c", cmd], capture_output=True, text=True,
                                     env={**os.environ, "AGORA_HOME": HOME})
-                br = {"state": "spawned" if rs.returncode == 0 else "spawn_failed"}
                 if rs.returncode != 0:
-                    br["err"] = ((rs.stderr or rs.stdout or "").strip().splitlines()
-                                 or [f"rc={rs.returncode}"])[-1][:120]
+                    br = {"state": "spawn_failed",
+                          "err": ((rs.stderr or rs.stdout or "").strip().splitlines()
+                                  or [f"rc={rs.returncode}"])[-1][:120]}
+                elif spawn_env:
+                    br = {"state": "spawned"}   # mock 面 rc 即语义，不复查
+                else:
+                    # 默认命令 & 收尾 bash -c 恒 rc0（setsid 缺失/桥秒退不可见）——拉起后
+                    # 复查一次：不可见记 spawn_failed，防每 5 分钟静默"成功"重启死桥
+                    time.sleep(1)
+                    if subprocess.run(["pgrep", "-f", pat], capture_output=True).returncode == 0:
+                        br = {"state": "spawned"}
+                    else:
+                        br = {"state": "spawn_failed", "err": "拉起后复查不可见（桥秒退或 setsid 缺失）"}
             else:
                 br = {"state": "probe_failed", "err": f"pgrep rc={pg.returncode}"}
     report["bridge"] = br
