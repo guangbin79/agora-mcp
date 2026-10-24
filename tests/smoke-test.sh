@@ -215,7 +215,7 @@ echo "$OUT" | grep -q '"mode":"spawned"' && ok "他机在场记录被忽略（�
 rm -f "$AGORA_HOME"/raw/dispatches/*.live
 printf '%s tester sess-1 2026-10-14\n' "$(hostname)" > "$AGORA_HOME/scripts/sessions.map"
 OUT=$(AGORA_RUNTIME=true bash "$AGORA_HOME/scripts/dispatch.sh" --actor tester@proj --project "$PROJ" --task "$C" 2>&1)
-echo "$OUT" | grep -q '"mode":"notified"' && ok "本机在场降级为通知" || fail "本机在场降级为通知（$OUT）"
+echo "$OUT" | grep -q '"mode":"spawned"' && ok "本机交互注册（sessions.map）不算在场——直接派生（gt-0ed3）" || fail "本机交互注册应直接派生（$OUT）"
 printf '# <机器名>  <agent名>  <opencode session id>  <登记时间>\n' > "$AGORA_HOME/scripts/sessions.map"
 # SSH 签名
 ssh-keygen -q -t ed25519 -N "" -f "$T/id_ed25519" 2>/dev/null
@@ -1304,7 +1304,7 @@ OUT=$(TITLE="wt任务重试" VERIFY="true" PROJECT_DIR="$PROJ" WT=1 IDEM=wt-a TC
 TITLE="坏wt" WT=1 TC 2>/dev/null; [[ $? -eq 2 ]] && ok "WT 缺 project_dir 被拒(rc=2)" || fail "WT 缺 project_dir 被拒(rc=2)"
 
 echo "===== dispatch 深度默认5＋账本推导＋配额账本化（gt-2845 K3 复审） ====="
-rm -f "$AGORA_HOME/scripts/sessions.map"   # 前序桥段残留会触发在场优先降级 notified
+rm -f "$AGORA_HOME/scripts/sessions.map"   # 前序桥段残留清场（交互注册已不算在场，仅保持净场）
 # 清场：前序段落的活 dispatched（账本口径）全部 cancelled 出集——本段配额计数需净场
 for _t in $(python3 - "$AGORA_HOME" <<'PYEOF'
 import glob, re, sys
@@ -1416,12 +1416,12 @@ cat "$AGORA_HOME"/log/*/*.md | grep -F "task:$G1" | grep "event:diagnosed" | gre
 grep -q "wrong-content" "$WTD1/.omo/agora-delegation/${G1}.md" && fail "凭据预写重写（错内容被覆盖）" || ok "凭据预写重写（错内容被覆盖）"
 grep -q "^gt: $G1$" "$WTD1/.omo/agora-delegation/${G1}.md" && grep -q "^worktree: $WTD1$" "$WTD1/.omo/agora-delegation/${G1}.md" && ok "凭据内容含 gt-id＋树路径" || fail "凭据内容含 gt-id＋树路径"
 POST tester@proj --event cancelled --task "$G1" >/dev/null 2>&1
-# ② wt 免在场优先：sessions.map 在场 → wt 任务仍 spawned；非 wt 对照 notified
+# ② wt 免在场优先：sessions.map 交互注册在场 → 任务一律 spawned（在场仅认委托子会话 gt-0ed3）
 printf '%s tester sess-fake %s\n' "$(hostname)" "$(date +%s)" >> "$AGORA_HOME/scripts/sessions.map"
 G2=$(TID "$(TITLE="在场豁免" VERIFY=true PROJECT_DIR="$PROJ" WT=1 IDEM=t4b TC)")
 DSPRAW --task "$G2" 2>/dev/null | grep -q '"mode":"spawned"' && ok "wt 任务免在场优先（spawned）" || fail "wt 任务免在场优先"
 N1=$(TID "$(TITLE="在场对照" VERIFY=true PROJECT_DIR="$PROJ" TC)")
-DSPRAW --task "$N1" 2>/dev/null | grep -q '"mode":"notified"' && ok "非 wt 在场优先照旧（notified 对照）" || fail "非 wt 在场对照"
+DSPRAW --task "$N1" 2>/dev/null | grep -q '"mode":"spawned"' && ok "非 wt 交互注册占坑直接派生（spawned，gt-0ed3）" || fail "非 wt 交互注册占坑应直接派生"
 # ③ 预检零残留：project_dir 不存在 → SPAWN_PRECHECK 且账本无 dispatched
 N2=$(TID "$(TITLE="预检" VERIFY=true PROJECT_DIR="$PROJ" TC)")
 OUT=$(P="$PROJ/dead" DSPRAW --task "$N2" 2>&1)
@@ -2012,7 +2012,7 @@ case "$M $P" in
   "GET /api/session/active")
     echo '{"data":{"ses_act1":{"type":"running"}}}'; exit 0 ;;
   "GET /api/session/ses_act1")
-    echo "{\"data\":{\"id\":\"ses_act1\",\"location\":{\"directory\":\"$(cat "$FH/active_dir" 2>/dev/null || echo /nonexist)\"}}}"; exit 0 ;;
+    echo "{\"data\":{\"id\":\"ses_act1\",\"title\":\"$(cat "$FH/active_title" 2>/dev/null || echo "")\",\"location\":{\"directory\":\"$(cat "$FH/active_dir" 2>/dev/null || echo /nonexist)\"}}}"; exit 0 ;;
 esac
 case "$P" in
   /api/session/ses_*)
@@ -2055,11 +2055,14 @@ python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); sys.exit(0 if d.get
   && ok "S1c inject queue 透传" || fail "S1c inject queue 透传"
 fake_reset inject_fail
 if FAKE inject ses_fake9 x >/dev/null 2>&1; then fail "S1c inject 断电应 rc1"; else ok "S1c inject 断电 rc1"; fi
-# S1d alive：目录命中/不命中
-echo "$PROJ" > "$FAKE_HOME/active_dir"; fake_reset none
+# S1d alive：目录命中/不命中；delegated 过滤＝目录命中 ∧ title 前缀 "agora: gt-"（委托子会话机械锚 gt-2845②/gt-0ed3）
+echo "$PROJ" > "$FAKE_HOME/active_dir"; : > "$FAKE_HOME/active_title"; fake_reset none
 if FAKE alive "$PROJ" >/dev/null 2>&1; then ok "S1d alive 命中 rc0"; else fail "S1d alive 命中"; fi
+if FAKE alive "$PROJ" delegated >/dev/null 2>&1; then fail "S1d alive delegated 交互会话(title空)应 rc1"; else ok "S1d alive delegated 交互会话(title空) rc1"; fi
+printf 'agora: gt-abc1 标题甲' > "$FAKE_HOME/active_title"
+if FAKE alive "$PROJ" delegated >/dev/null 2>&1; then ok "S1d alive delegated 委托 title 命中 rc0"; else fail "S1d alive delegated 委托 title 命中"; fi
 echo /nonexist > "$FAKE_HOME/active_dir"
-if FAKE alive "$PROJ" >/dev/null 2>&1; then fail "S1d alive 不命中应 rc1"; else ok "S1d alive 不命中 rc1"; fi
+if FAKE alive "$PROJ" delegated >/dev/null 2>&1; then fail "S1d alive delegated 不命中应 rc1"; else ok "S1d alive delegated 不命中 rc1"; fi
 # S1e status：idle/dead 归一
 fake_reset none
 [ "$(FAKE status ses_x 2>/dev/null)" = "idle" ] && ok "S1e status idle" || fail "S1e status idle"
@@ -2210,12 +2213,16 @@ sys.exit(0 if any(e.get("upstream")==tid and e.get("mode")=="spawned" for e in d
   && ! grep -q "session/ses_up3/prompt" "$FAKE_HOME/calls.log" 2>/dev/null \
   && ok "S4d 跨机 wt_host 不注入回落重派" || fail "S4d 跨机判则失效（got: $OUT）"
 
-# ---- T5: 在场 API 化（alive 优先，sessions.map 降回退；wt 无条件 spawn 豁免不动） ----
-T5A=$(TID "$(TITLE="alive在场" VERIFY="true" PROJECT_DIR="$PROJ" TC)")
-echo "$PROJ" > "$FAKE_HOME/active_dir"; fake_reset none
+# ---- T5: 在场 API 化（alive delegated＝仅认委托子会话；交互占坑直接 spawn gt-0ed3；wt 无条件 spawn 豁免不动） ----
+T5A=$(TID "$(TITLE="交互占坑" VERIFY="true" PROJECT_DIR="$PROJ" TC)")
+echo "$PROJ" > "$FAKE_HOME/active_dir"; : > "$FAKE_HOME/active_title"; fake_reset none
 OUT=$(POSTD --task "$T5A")
-echo "$OUT" | grep -q '"mode":"notified"' && ok "S5a alive 命中→notified" || fail "S5a alive 未命中（got: $OUT）"
-[ -z "$(LEV "$T5A" dispatched)" ] && ok "S5a notified 零 dispatched 落账" || fail "S5a notified 却落了 dispatched"
+echo "$OUT" | grep -q '"mode":"spawned"' && ok "S5a 交互会话占坑（title 空）→直接 spawn" || fail "S5a 交互占坑未 spawn（got: $OUT）"
+T5A2=$(TID "$(TITLE="委托占坑" VERIFY="true" PROJECT_DIR="$PROJ" TC)")
+printf 'agora: %s 委托占坑' "$T5A2" > "$FAKE_HOME/active_title"
+OUT=$(POSTD --task "$T5A2")
+echo "$OUT" | grep -q '"mode":"notified"' && ok "S5a2 委托子会话（title agora: gt-）占坑→notified" || fail "S5a2 委托占坑未通知（got: $OUT）"
+[ -z "$(LEV "$T5A2" dispatched)" ] && ok "S5a2 notified 零 dispatched 落账" || fail "S5a2 notified 却落了 dispatched"
 T5B=$(TID "$(TITLE="alive缺席" VERIFY="true" PROJECT_DIR="$PROJ" TC)")
 echo /nonexist > "$FAKE_HOME/active_dir"
 OUT=$(POSTD --task "$T5B")
@@ -2225,10 +2232,10 @@ echo "$PROJ" > "$FAKE_HOME/active_dir"
 OUT=$(POSTD --task "$T5C")
 echo "$OUT" | grep -q '"mode":"spawned"' && [ -f "$WR5C/.omo/agora-delegation/$T5C.md" ] \
   && ok "S5c wt 任务 alive 命中仍无条件 spawn" || fail "S5c wt 在场豁免失效（got: $OUT）"
-T5D=$(TID "$(TITLE="旧路在场" VERIFY="true" PROJECT_DIR="$PROJ" TC)")
+T5D=$(TID "$(TITLE="API关占坑" VERIFY="true" PROJECT_DIR="$PROJ" TC)")
 printf '%s tester ses_legacy %s\n' "$(hostname)" "$(date +%s)" >> "$AGORA_HOME/scripts/sessions.map"
-OUT=$(AGORA_MAX_SPAWN=99 AGORA_RUNTIME_API=0 AGORA_RUNTIME=opencode bash "$AGORA_HOME/scripts/dispatch.sh" --actor tester@proj --project "$PROJ" --task "$T5D")
-echo "$OUT" | grep -q '"mode":"notified"' && ok "S5d 开关关走 sessions.map 旧路" || fail "S5d 旧路失效（got: $OUT）"
+OUT=$(PATH="$FAKEDIR:$PATH" FAKE_HOME="$FAKE_HOME" AGORA_MAX_SPAWN=99 AGORA_RUNTIME_API=0 AGORA_RUNTIME=opencode bash "$AGORA_HOME/scripts/dispatch.sh" --actor tester@proj --project "$PROJ" --task "$T5D")
+echo "$OUT" | grep -q '"mode":"spawned"' && ok "S5d API 关（桥同不可达）sessions.map 不算在场→直接 spawn" || fail "S5d 应直接 spawn（got: $OUT）"
 sed -i "\|$(hostname) tester ses_legacy|d" "$AGORA_HOME/scripts/sessions.map"   # 清场：勿污染后续
 
 # ---- T6: done_open 状态机同日跨分片乱序——按 ts 序重放（gt-db15，gt-caf3 last 同源收口） ----
