@@ -5,3 +5,4 @@
 - 2026-10-22 gt-eefd 批：agora_post actor 三级解析（显式 > dispatch env 反查 child_actor > 进程 ACTOR，run id 反查键）；评审循环 2 轮（终闸三分册 1C1W1S 全修 + 复审零 blocker/high），夹具 env 形状判别教训入库 modules/actor-attribution.md。smoke 169/0。
 - 2026-10-23 gt-db15：done_open 状态机 ts 序重放收口（gt-caf3 last 同源漏网）；「派生态单点重放/同源缺陷一次收全/has 守卫≠正确性」入库 modules/ledger-replay-ordering.md。smoke 302/0。
 - 2026-10-23 gt-2845 K3 批：run 通道预生成 sid＋子会话命名＋MAX_DEPTH 5＋verify 锚点重建（post.lock 同锁收敛两处重建点并发窗）；「opencode 外部 id spike 先行/旗标漂移 smoke 盲区/sed p 位置回归」入库 modules/opencode-external-session-id.md。评审循环 2 轮（终闸三分册＋ocr 8：7修3记录；Round-2 复核 2W1S 全修），smoke 318/0。
+- 2026-10-24 gt-77a8 T3 周报：scripts/runtime/report.sh 只读四数字＋毕业计数 N＋drill 节；口径契约入库 modules/report-metrics-contract.md（缺席→N/A 禁计 0、点分片伴生、env 缝）。smoke 增 golden fixture 段。另发现：dispatch 凭据预写落 wt 树 .omo/agora-delegation/ 而委托闸读主仓同名文件（gt-77a8 实测首次编辑被拦，手工镜像放行）——dispatch/enforcer 侧缺口，待派单核销。
