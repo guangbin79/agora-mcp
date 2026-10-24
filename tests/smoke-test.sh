@@ -24,6 +24,7 @@ check "init 幂等（再跑一次）" bash "$PKG/scripts/init.sh"
 # 测试项目与两个身份（tester=worker, rival=冲突者）
 PROJ="$T/proj"; mkdir -p "$PROJ"; cd "$PROJ" && git init -q . && echo FIXED > app.txt && git add -A && git -c user.name=t -c user.email=t@local commit -qm init
 PROJ2="$T/proj2"; mkdir -p "$PROJ2"; cd "$PROJ2" && git init -q .
+REG="$HOME/agora-smoke-reg-$$"; mkdir -p "$REG/auto" "$REG/late"   # gt-583b：/tmp 族拒自动注册，「可注册域」夹具迁出 mktemp（$HOME 子目录非 git 仓＝可注册）
 mkdir -p "$AGORA_HOME/wiki/entities"
 printf -- '---\nname: tester\ndirs:\n  - %s\ncan_spawn: true\n---\n' "$PROJ" > "$AGORA_HOME/wiki/entities/tester.md"
 printf -- '---\nname: rival\ndirs:\n  - %s\ncan_spawn: false\n---\n' "$PROJ2" > "$AGORA_HOME/wiki/entities/rival.md"
@@ -144,8 +145,8 @@ att = json.loads(r["result"]["content"][0]["text"])
 assert "@" in att["url"] + "@" + att["commit"] and att["ref"].endswith(tid), att
 p.stdin.close()
 PYEOF
-# 可自动注册目录：写工具直接可用且机械建页（2026-10-20 注册去人工闸）；不可注册目录（$HOME）仍拒
-cd "$T" && python3 - "$PKG/server/agora_mcp.py" "$AGORA_HOME" <<'PYEOF' && ok "未注册目录自动注册后可写" || fail "未注册目录自动注册后可写"
+# 可自动注册目录：写工具直接可用且机械建页（2026-10-20 注册去人工闸；gt-583b 起可注册夹具须在 /tmp 族外）；不可注册目录（$HOME）仍拒
+cd "$REG/auto" && python3 - "$PKG/server/agora_mcp.py" "$AGORA_HOME" <<'PYEOF' && ok "未注册目录自动注册后可写" || fail "未注册目录自动注册后可写"
 import json, subprocess, sys, os
 p = subprocess.Popen(["python3", sys.argv[1]], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
 def rpc(m, ps=None, i=1):
@@ -158,6 +159,22 @@ assert txt.get("code") != "NOT_REGISTERED" and txt.get("task","").startswith("gt
 home = sys.argv[2]
 page = os.path.join(home, "wiki", "entities", os.path.basename(os.getcwd()) + ".md")
 assert os.path.isfile(page) and "can_spawn: true" in open(page).read(), page
+p.stdin.close()
+PYEOF
+# gt-583b：/tmp 族与 e2e/fixture 标记域拒自动注册——机械建页不得污染真实名册（dispatch 派生子会话在夹具 cwd 起 server 走同一 adjudicate 路径）
+FIXT="$T/e2e/fixture-proj"; mkdir -p "$FIXT"
+cd "$FIXT" && python3 - "$PKG/server/agora_mcp.py" "$AGORA_HOME" <<'PYEOF' && ok "fixture 域拒注册不污染名册" || fail "fixture 域拒注册不污染名册"
+import json, subprocess, sys, os
+p = subprocess.Popen(["python3", sys.argv[1]], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+def rpc(m, ps=None, i=1):
+    p.stdin.write(json.dumps({"jsonrpc":"2.0","id":i,"method":m,"params":ps or {}})+"\n"); p.stdin.flush()
+    return json.loads(p.stdout.readline())
+rpc("initialize", {})
+r = rpc("tools/call", {"name":"agora_task_create","arguments":{"title":"x"}}, 2)
+txt = json.loads(r["result"]["content"][0]["text"])
+assert txt.get("code") == "NOT_REGISTERED", txt
+ents = os.listdir(os.path.join(sys.argv[2], "wiki", "entities"))
+assert "fixture-proj" not in ents and "e2e" not in ents, ents
 p.stdin.close()
 PYEOF
 cd "$HOME" && python3 - "$PKG/server/agora_mcp.py" <<'PYEOF' && ok "不可注册目录（\$HOME）写仍被拒" || fail "不可注册目录（\$HOME）写仍被拒"
@@ -1321,7 +1338,7 @@ echo "===== 身份裁决不冻结（2026-10-20 gt-9f24 事故回归） ====="
 # server 启动早于实体页覆盖：启动期 auto-register 因同名页 O_EXCL 撞名让位 → 匿名；
 # 旧代码冻结终身（共享 server 08:39 启动早于 10:14 实体页 → 派生会话写路径全拒）；
 # 修后每次工具调用重裁决 → 实体页后到补 dirs，同进程内身份立即生效
-LATE="$T/late"; mkdir -p "$LATE"
+LATE="$REG/late"   # gt-583b：可注册域夹具（/tmp 族已拒注册，原 $T/late 会使 O_EXCL 让位路径失活）
 printf -- '---\nname: late\ndirs:\n  - /nonexistent-late-xyz\ncan_spawn: false\n---\n' > "$AGORA_HOME/wiki/entities/late.md"
 cd "$AGORA_HOME" && git add -A >/dev/null && AGORA_MECHANICAL=1 git commit -qm "late entity" >/dev/null
 python3 - "$PKG/server/agora_mcp.py" "$LATE" "$AGORA_HOME" <<'PYEOF' && ok "身份裁决不冻结（后到覆盖同进程生效）" || fail "身份裁决不冻结（后到覆盖同进程生效）"
@@ -1337,8 +1354,8 @@ rpc("initialize", {})
 def you():
     r = rpc("tools/call", {"name":"agora_who","arguments":{}})
     return json.loads(r["result"]["content"][0]["text"]).get("you")
-# 启动期：late.md dirs 未含 cwd（夹具里 $T 可能已被前序段落 auto-register 覆盖，
-# 故不断言匿名，只断言 late 尚未命中——冻结代码下此值此后不再变化）
+# 启动期：late.md dirs 未含 cwd → 启动期 auto-register 因同名页 O_EXCL 撞名让位 → 匿名
+# （冻结代码下此值此后不再变化）
 you0 = you()
 assert you0 != "late@late", f"夹具应保证 late 覆盖是后到的，实际启动即 {you0}"
 # 实体页后到覆盖 cwd（模拟实体页晚于 server 启动）
@@ -1348,6 +1365,7 @@ open(f, "w").write(txt)
 assert you() == "late@late", f"后到覆盖应立即生效，实际 {you()}"
 p.stdin.close()
 PYEOF
+rm -rf "$REG"   # 可注册夹具域用毕即清（真 $HOME 不留残）
 
 echo "===== task_create idem 幂等＋注入守卫（全量委托 L1 Task1） ====="
 rm -f /tmp/agora-pwn-l1
@@ -3188,7 +3206,7 @@ bash "$AGORA_HOME/scripts/post.sh" --actor tester@proj --project proj --event am
 OUT=$(bash "$AGORA_HOME/scripts/post.sh" --actor tester@proj --project proj --event amended --task "$AM2" --set "wt_dir=$T/proj__wt-gt-9999__0000" 2>&1); RC=$?
 [[ $RC -ne 0 ]] && echo "$OUT" | grep -q "本任务专属" \
   && ok "② ocr2-H1：wt_dir 指他任务树名被拒（basename 钉死）" || fail "② ocr2-H1 未拒（rc=$RC $OUT）"
-UNREG_B9="/tmp/opencode/gt-b9fb-unreg-probe"; mkdir -p "$UNREG_B9"   # 夹具须在 $T 外：$T 本身被「自动注册」用例注册为实体域（covers 前缀）
+UNREG_B9="/tmp/opencode/gt-b9fb-unreg-probe"; mkdir -p "$UNREG_B9"   # gt-583b 后 /tmp 族 server 侧拒注册；此处更双保险断言 post.sh 侧名册外 project_dir 被拒
 OUT=$(bash "$AGORA_HOME/scripts/post.sh" --actor tester@proj --project proj --event amended --task "$AM2" --set "project_dir=$UNREG_B9" 2>&1); RC=$?
 rm -rf "$UNREG_B9"
 [[ $RC -ne 0 ]] && echo "$OUT" | grep -q "名册已注册" \

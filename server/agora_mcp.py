@@ -28,8 +28,12 @@ def _auto_register():
     建实体页（can_spawn 放开；dispatch 深度/配额保险丝照常兜底）。O_CREAT|O_EXCL 原子
     建页：同名页已存在（人工建的他义实体）即让位回匿名。$HOME 本身不自动注册（防家目录
     级广覆盖实体）。worktree cwd 亦不注册（应归属主 repo 实体；主 repo 未注册则保持匿名，
-    gt-ac14）。任何失败静默回退匿名，绝不阻塞 MCP 启动。"""
+    gt-ac14）。/tmp 族与 e2e/fixture 标记域亦拒（gt-583b：测试/临时夹具不机械入册防污染
+    真实名册；e2e 需身份应自行 provision 实体页）。任何失败静默回退匿名，绝不阻塞 MCP 启动。"""
     if lib.main_repo_of(CWD): return None
+    if CWD == "/tmp" or CWD.startswith("/tmp/") or any(
+            seg == "e2e" or "fixture" in seg for seg in CWD.split("/")):
+        return False   # gt-583b：测试/临时域拒注册，保持匿名（读侧可用）
     name = os.path.basename(CWD.rstrip("/"))
     if not name or CWD == os.path.realpath(os.path.expanduser("~")):
         return False
