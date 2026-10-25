@@ -31,6 +31,15 @@ ENTITY="$AGORA_HOME/wiki/entities/$NAME.md"
 # 保险丝 1：权限（身份页 can_spawn: true）
 grep -qE '^can_spawn:[[:space:]]*true' "$ENTITY" || fail SPAWN_FORBIDDEN "$NAME lacks can_spawn" 6
 
+# 派发准入门（gt-6bef）：调用方会话在册未超龄才可派发。MCP serve 模式 server 无会话上下文
+# （env/进程树均无区分度，/proc 实证）——空 AGORA_SID 无法识别调用方，跳过（会话级主闸在
+# enforcer 插件层：原生持 sessionID）；非空（直调 bash/CI 以 sid 显式自证）则严检，同步拒于
+# 落账前（不产生半派发态），hint 给精确修复命令（REGISTER_REQUIRED 错误契约）
+if [[ -n "${AGORA_SID:-}" ]]; then
+  bash "$SCRIPTS_DIR/register-session.sh" --sid "$AGORA_SID" --entity "$NAME" --check-only \
+    || fail REGISTER_REQUIRED "caller session 不在册或已超龄（AGORA_SID=$AGORA_SID，entity=$NAME）；修复命令见上行 hint" 10
+fi
+
 # 保险丝 2/3：深度与配额——env 与账本推导取更大值（v1.32 账本化：L2/API 模式无 env 通道时账本为唯一来源）
 # 账本口径：深度=dispatched 事件 dispatcher_task 链逐跳计数（任务最新 dispatched 为准，环检测兜底）；
 #          配额活跃=dispatched 集 ∩ 无终态事件（done/merged/cancelled 任一即出集）
@@ -257,7 +266,7 @@ if [ -z "$WT_DIR" ]; then
   fi
 fi
 
-BOOT="你是广场派生的一次性工作会话。按开场仪式查收信、看看板；你的任务是 $TASK（读 wiki/tasks/$TASK.md，按 verify 要求验收）。若任务页有 wt_dir：你在该专用树内开发——新鲜树缺 node_modules/venv 等环境，先装环境再验收（项目页 setup: 已由 dispatch 预跑）。认领即 agora_post(event=claimed, task=$TASK)。动手实施前先 agora_post(event=plan, task=$TASK) 落实施计划——post(plan) 后即开工不等 ack；commit 前重读账本。每完成一个里程碑或每 30min agora_post(event=progress, task=$TASK) 刷新看板——心跳硬性要求，超时即看门狗诊断。你不自己合并——done 即止（树上 commit＋自验），合并由 dispatcher 走 merge.sh；需改第三仓照常 task_create＋dispatch 下钻（受深度/配额约束）；等待下级时 post progress 后退出，由 poll 恢复性重派唤醒。若你是恢复性重派：先 agora_history(task=$TASK) 自查进度、git status/log 查半成品，接着做。合并阶段 non-ff 冲突：先在原树 rebase 到合并目标分支，重走 verify 再试。完成后 agora_post(event=done) 并结束。${PROMPT:+ 补充指示：$PROMPT}"
+BOOT="你是广场派生的一次性工作会话。按开场仪式查收信、看看板；你的任务是 $TASK（读 wiki/tasks/$TASK.md，按 verify 要求验收）。若任务页有 wt_dir：你在该专用树内开发——新鲜树缺 node_modules/venv 等环境，先装环境再验收（项目页 setup: 已由 dispatch 预跑）。认领即 agora_post(event=claimed, task=$TASK)。动手实施前先 agora_post(event=plan, task=$TASK) 落实施计划并 mention 任务页 dispatcher——等 ack 不是官僚流程，是不可逆操作的前置保险。plan 落账后回合保持活跃轮询等 ack：定时（60–240s）双通道查询——agora_history(task=$TASK) 出现 event:ack 且 mention 命中自己 ∨ agora_check_mail 有未读 mention 信（dispatcher 修正信不可逆步骤前必须消费，步骤中可延至步骤边界）；等待期每 30min agora_post(event=progress, task=$TASK) 心跳（防看门狗误报）；超 30min 无 ack 走自放行条款开工并在账本注明。收到 ack 即按计划执行；收到 cancelled 即终止。commit 前重读账本。每完成一个里程碑或每 30min agora_post(event=progress, task=$TASK) 刷新看板——心跳硬性要求，超时即看门狗诊断。你不自己合并——done 即止（树上 commit＋自验），合并由 dispatcher 走 merge.sh；需改第三仓照常 task_create＋dispatch 下钻（受深度/配额约束）；等待下级时 post progress 后退出，由 poll 恢复性重派唤醒。若你是恢复性重派：先 agora_history(task=$TASK) 自查进度、git status/log 查半成品，接着做。合并阶段 non-ff 冲突：先在原树 rebase 到合并目标分支，重走 verify 再试。完成后 agora_post(event=done, task=$TASK, commit=…, evidence=…) 并一律 mention 任务页 dispatcher 字段——blocked/cancelled 等终态与受阻事件同理，worker 终态必推送。${PROMPT:+ 补充指示：$PROMPT}"
 # 注入防御：PROMPT/PDIR 均不可信（PROMPT 可能来自他机邮件摘要）。一律走 env 传数据 +
 # 单引号脚本，bash -c 体内不出现任何外部插值
 
@@ -293,16 +302,11 @@ case "$DEDUP" in true|false) ;; *) fail LEDGER_FAILED "post.sh 输出异常（�
 exec 8>&-
 
 # gt-8a3c：spawn 成功后登记子会话进 sessions.map——通知桥唯一路由源，此前全链无写入方（通知静默根因）；
-# 幂等：同 (host,entity,sid) 不重复；重派新 sid 自然换绑（桥取同实体最新一条）。
-# 与 poll 保洁共取 .git/sessions.map.lock（评审 B-F1：截断重写窗口内追加会丢行）；锁忙＝保洁进行中，跳过本轮登记
+# gt-6bef：写入口收敛 register-session.sh（注册/刷新/upsert 单源，幂等同 (host,entity,sid) 原位刷 ts，
+# 重派新 sid 自然换绑——桥取同实体最新一条）。尽力而为：写失败不翻转已成功的派发（账本已 dispatched，
+# 假失败引发重复重派）；锁忙＝保洁进行中，跳过本轮登记
 register_session() {
-  local _smap="$AGORA_HOME/sessions.map" _lk="$AGORA_HOME/.git/sessions.map.lock"
-  (
-    flock -w "${AGORA_LOCK_WAIT:-5}" 9 || exit 0
-    [[ -f "$_smap" ]] || printf '# <机器名>  <agent名>  <opencode session id>  <登记时间>（多机：仅本机条目算"在场"）\n' > "$_smap"
-    awk -v h="$(hostname)" -v e="$CHILD" -v s="$SID" '$1==h && $2==e && $3==s {f=1} END{exit !f}' "$_smap" || \
-      printf '%s %s %s %s\n' "$(hostname)" "$CHILD" "$SID" "$(date -Iseconds)" >> "$_smap"
-  ) 9>"$_lk" || :   # 评审 B-F2：路由行尽力而为——写失败不翻转已成功的派发（账本已 dispatched，假失败引发重复重派）
+  AGORA_HOME="$AGORA_HOME" bash "$SCRIPTS_DIR/register-session.sh" --sid "$SID" --entity "$CHILD" >/dev/null 2>&1 || :
 }
 
 # 凭据预写（幂等重写）＋ spawn ＋ 验证窗 ＋ 有界重试（一次）

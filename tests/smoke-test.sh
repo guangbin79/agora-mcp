@@ -515,6 +515,31 @@ SMR2=$(grep -cE "^$(hostname) $SMCHILD $SMSID2 " "$AGORA_HOME/sessions.map" || t
 [ "$SMR1" -eq 1 ] && [ "$SMR2" -eq 1 ] && [ -z "$(sort "$AGORA_HOME/sessions.map" | uniq -d)" ] \
   && ok "重派换绑＋同 (host,entity,sid) 零重复行（gt-8a3c 幂等）" || fail "sid 行数 $SMR1/$SMR2 或有重复行（幂等失效）"
 
+# gt-6bef：派发准入门——AGORA_SID 显式通道严检（不在册拒＋指引文案＋落账零残留）；空跳过（既有全部 dispatch 用例即该分支）
+GTT=$(TITLE="准入门拒" TC); GTT=$(echo "$GTT" | sed -n 's/.*"task":"\(gt-[0-9a-f]*\)".*/\1/p')
+GATE_OUT=$(AGORA_RUNTIME=true AGORA_SID=sess-unregistered bash "$PKG/scripts/dispatch.sh" --actor tester@proj --project "$PROJ" --task "$GTT" 2>&1)
+echo "$GATE_OUT" | grep -q "REGISTER_REQUIRED" && echo "$GATE_OUT" | grep -q "register-session.sh" \
+  && ok "不在册 dispatch 拒绝＋指引文案（gt-6bef）" || fail "不在册 dispatch 应拒＋指引（$GATE_OUT）"
+cat "$AGORA_HOME"/log/*/*.md 2>/dev/null | grep "task:$GTT" | grep -q "event:dispatched" \
+  && fail "准入拒绝应落账零残留（$GTT 有 dispatched）" || ok "准入拒绝落账零残留（gt-6bef）"
+bash "$PKG/scripts/register-session.sh" --sid sess-gate-ok --entity tester >/dev/null
+GATE_OUT2=$(AGORA_RUNTIME=true AGORA_SID=sess-gate-ok bash "$PKG/scripts/dispatch.sh" --actor tester@proj --project "$PROJ" --task "$GTT" 2>&1)
+echo "$GATE_OUT2" | grep -q '"mode":"spawned"' && ok "在册 sid 准入放行（gt-6bef）" || fail "在册 sid 应放行（$GATE_OUT2）"
+rm -f "$AGORA_HOME"/raw/dispatches/*.live
+# gt-6bef：掉册自愈——删行后 upsert 补登，幂等单行
+grep -v "^$(hostname) tester sess-gate-ok " "$AGORA_HOME/sessions.map" > "$AGORA_HOME/sessions.map.tmp" && mv "$AGORA_HOME/sessions.map.tmp" "$AGORA_HOME/sessions.map"
+bash "$PKG/scripts/register-session.sh" --sid sess-gate-ok --entity tester >/dev/null
+bash "$PKG/scripts/register-session.sh" --sid sess-gate-ok --entity tester >/dev/null
+RG1=$(grep -cE "^$(hostname) tester sess-gate-ok " "$AGORA_HOME/sessions.map" || true)
+[ "$RG1" = "1" ] && ok "掉册自愈补登记＋幂等单行（gt-6bef）" || fail "掉册自愈行数 $RG1（应 1）"
+# gt-6bef：BOOT 文案——轮询语义（双通道查 ack＋心跳＋自放行）取代死锁文案；终态 mention dispatcher
+grep -q "即开工不等 ack" "$PKG/scripts/dispatch.sh" \
+  && fail "BOOT 死锁文案残留（即开工不等 ack）" || ok "BOOT 死锁文案已移除（gt-6bef）"
+grep -q "轮询等 ack" "$PKG/scripts/dispatch.sh" && grep -q "agora_check_mail" "$PKG/scripts/dispatch.sh" && grep -q "自放行" "$PKG/scripts/dispatch.sh" \
+  && ok "BOOT 轮询语义文案（双通道＋心跳＋自放行）" || fail "BOOT 轮询文案缺失"
+grep -q "mention 任务页 dispatcher" "$PKG/scripts/dispatch.sh" \
+  && ok "BOOT 终态 mention dispatcher 文案（done 推送闭环）" || fail "BOOT 终态 mention 文案缺失"
+
 echo "===== poll 本地保洁 ====="
 # sessions.map TTL：过期本机条目剔除；他机条目与新本机条目保留
 H=$(hostname)
@@ -553,6 +578,18 @@ echo "$POLL_OUT5" | python3 -c "import json,sys; r=json.loads(sys.stdin.read());
   && grep -q "ses-epoch-new" "$AGORA_HOME/sessions.map" \
   && grep -q "ses-f" "$AGORA_HOME/sessions.map" \
   && ok "TTL epoch 兼容回收明细（旧 epoch/ISO 清、新 epoch/他机留）" || fail "TTL epoch 兼容回收明细不符"
+
+# gt-6bef：idle 刷新→TTL 顺延——register-session.sh upsert 原位刷 ts＝「保洁按最后刷新算」；
+# 双行同种 25h 前（已过 24h 线），刷新行复活、未刷新行剔（长活主会话不超龄的活性语义）
+OLD_TS=$(date -d "-25 hours" -Iseconds)
+printf '%s tester ses-refresh %s\n%s tester ses-stale %s\n' "$H" "$OLD_TS" "$H" "$OLD_TS" > "$AGORA_HOME/sessions.map"
+cd "$AGORA_HOME" && git add -A >/dev/null && AGORA_MECHANICAL=1 git commit -qm "seed ttl refresh" >/dev/null
+bash "$PKG/scripts/register-session.sh" --sid ses-refresh --entity tester >/dev/null
+POLL_OUT6=$(AGORA_RUNTIME=true bash "$PKG/scripts/poll.sh")
+echo "$POLL_OUT6" | python3 -c "import json,sys; r=json.loads(sys.stdin.read()); assert r['sessions_reaped']==1, r" \
+  && ok "idle 刷新 TTL 顺延：刷新行活、未刷新行剔（gt-6bef）" || fail "刷新 TTL 计数（$POLL_OUT6）"
+grep -q "ses-refresh" "$AGORA_HOME/sessions.map" && ! grep -q "ses-stale" "$AGORA_HOME/sessions.map" \
+  && ok "刷新行原位保留、超龄行回收明细（gt-6bef）" || fail "刷新/回收明细不符"
 
 echo "===== poll.sh notify 桥探活（gt-edc4） ====="
 MARK="$T/bridge-mock.log"; : > "$MARK"
@@ -2488,12 +2525,12 @@ TIDW=$(echo "$OUT" | sed -n 's/.*"task":"\(gt-[0-9a-f]*\)".*/\1/p')
   && ok "task_create 防呆：两告警触发＋不阻断" || fail "task_create 防呆（rc=$RC out=$OUT）"
 OUT=$(TITLE="足够长的正常标题" VERIFY="true" PROJECT_DIR="$T/fk" TC)
 echo "$OUT" | grep -q 'warnings' && fail "task_create 防呆误触发（$OUT）" || ok "task_create 干净输入零 warnings"
-# ⑥ BOOT 文案：删「等 dispatcher ack 30min」，改「post(plan) 后即开工不等 ack；commit 前重读账本」
+# ⑥ BOOT 文案（gt-6bef 轮询语义）：plan 落账后回合保持活跃轮询等 ack（双通道＋心跳＋自放行），「即开工不等 ack」死锁文案删除
 B1=$(TID "$(TITLE="BOOT文案任务标题够长" VERIFY=true PROJECT_DIR="$PROJ" TC)")
 BOUT=$(AGORA_RUNTIME=echo AGORA_MAX_SPAWN=99 bash "$PKG/scripts/dispatch.sh" --actor tester@proj --project "$PROJ" --task "$B1")
 RLOG="$AGORA_HOME/$(echo "$BOUT" | sed -n 's/.*"run":"\([^"]*\)".*/\1/p')"
-grep -q "post(plan) 后即开工不等 ack" "$RLOG" && grep -q "commit 前重读账本" "$RLOG" && ! grep -q "等 dispatcher ack" "$RLOG" \
-  && ok "BOOT 文案对齐 delegation §七（删等 ack 30min）" || fail "BOOT 文案未对齐（$RLOG, out=$BOUT）"
+grep -q "轮询等 ack" "$RLOG" && grep -q "agora_check_mail" "$RLOG" && grep -q "自放行" "$RLOG" && grep -q "commit 前重读账本" "$RLOG" && ! grep -q "即开工不等 ack" "$RLOG" \
+  && ok "BOOT 文案对齐 gt-6bef 轮询语义（等 ack＝不可逆前置保险）" || fail "BOOT 文案未对齐（$RLOG, out=$BOUT)"
 # ⑧ 截断触达＋无 title 行回退（评审 ocr-8：[:60] 此前从未被超长输入触达）
 T70=$(printf '甲%.0s' $(seq 1 70))
 L1=$(TID "$(TITLE="$T70" VERIFY=true PROJECT_DIR="$PROJ" TC)")
