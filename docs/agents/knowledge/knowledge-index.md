@@ -24,3 +24,4 @@
 - [cron-direct-exec-contract.md](modules/cron-direct-exec-contract.md) — cron 直执接线双合同：执行位 git mode 100755（diff 不可见，遗漏=126 静默潜伏）＋CLI 形态实测（字面速记 vs 实 usage，verify/grep 须逐字对齐）；实弹射击验收手法（systemd-run 等价脱附） (2026-10-24, gt-5f59)
 - [shared-state-second-writer.md](modules/shared-state-second-writer.md) — 共享可变状态第二写者契约：新增写者与既有截断重写者共锁（lost-update 窗口周期性存在）、set -e 下尽力而为副写入显式吸收失败（防假失败重复重派）、共享夹具断言按 key 禁全表计数 (2026-10-24, gt-8a3c)
 - [adjudicate-fixture-refusal.md](modules/adjudicate-fixture-refusal.md) — 自动注册域判据契约：/tmp 物理根（realpath）＋e2e/fixture 标记段拒注册保持匿名、拒 vs ephemeral 取舍（建页本身即污染）、可注册夹具域=$HOME 子目录非 worktree（HOME=worktree 须探针降级）、真 $HOME 夹具 trap EXIT、负向断言用页级 isfile 禁 listdir 成员判断 (2026-10-24, gt-583b)
+- [agora-home-default-contract.md](modules/agora-home-default-contract.md) — AGORA_HOME env 契约：脚本零静默缺省（:? fail-fast＋server 注入分层）、缺省值=隐藏消费点（grep 盘点须含 `:-$HOME` fallback）、套件裸调用测试 HOME 沙箱＋timeout 双坑、翻旧断言先问哲学 (2026-10-25, gt-ca34)
