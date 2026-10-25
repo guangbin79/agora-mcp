@@ -54,8 +54,8 @@ fi
 if [ -z "$WTD" ]; then
   # B-1（gt-7117 评审）：find 空时裸 cat $(find) 吞调用方 stdin/挂起——post.sh T1 同款硬化；
   # LC_ALL=C 钉分片序（R1 评审 C-F2：collation 漂移会改「首个 claimed」判定）
-  # gt-e5cc：glob 双态补点分片——FNM_PERIOD 使 *.md 漏 .dotfiles.md 等点开头分片
-  #（.dotfiles 实体分片名即点开头：代发 done/verify_failed 重发链全数不可见；gt-3ea2/gt-6fef 同根第三处）
+  # gt-e5cc（R1 勘误）：双态 glob 为跨 find 实现保险——GNU find -name 本已匹配点分片（4.8.0 实测），
+  # gt-3ea2/gt-6fef 的点分片盲在 python glob/bash glob 层，与此处无关；BSD/busybox find 语义不一，显式覆盖防漂移
   LEDCAT() { find "$AGORA_HOME/log" -mindepth 2 \( -name "*.md" -o -name ".*.md" \) -type f -print0 2>/dev/null | LC_ALL=C sort -z | xargs -0 -r cat 2>/dev/null || true; }
   # R1 评审（ocr/B-F2/C-F1）：结构字段双侧定界锚——自由文本（禁 | 但可含字段形 token）不得伪造 event:/actor:/commit: 信号；
   # R2 评审（ocr-F1/F2/F3）：actor sed 左锚升结构位 [|] actor:（右锚可由后续字段供给）；DONEC/DONEA 同源 LASTDONE 快照防异源行配对
@@ -67,10 +67,12 @@ if [ -z "$WTD" ]; then
     | awk '{ if (match($0, /[|] ts:[0-9T:+-]+/)) { t = substr($0, RSTART+5, RLENGTH-5); if (t >= mt) { mt = t; best = $0 } } } END { if (mt != "") print best }' \
     || true)
   # gt-e5cc：commit 值容错——复合值「repo@branch:hex,hex + repo2@master:hex」不以 hex 起头（gt-236a 实形），
-  # 取字段值内（下一 | 前截断，防垃圾 commit 被后续字段 hex 误赎回）首个 7+ hex run；无 run 仍空 → fail-closed
-  #（末条垃圾 commit 不回退旧锚语义保持）
+  # 取字段值内（下一 | 前截断，防垃圾 commit 被后续字段 hex 误赎回）全部 7+ hex run 为候选。
+  # R1（B 册 B1）：分支名段可含 7+ hex run（worktree 命名 wt-…-10222158 实态），单候提取误取分支名段致假阴性
+  # 复发——候选是否真锚交由下方祖先判据逐个裁决，此处只提取不裁决（无 run 仍空 → 下方 fail-closed，
+  # 末条垃圾 commit 不回退旧锚语义保持）
   DONEC=$(printf '%s\n' "$LASTDONE" \
-    | awk '{ if (!match($0, /[|] commit:/)) next; rest = substr($0, RSTART+9); p = index(rest, "|"); v = (p ? substr(rest, 1, p-1) : rest); if (match(v, /[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]+/)) print substr(v, RSTART, RLENGTH) }' \
+    | awk '{ if (!match($0, /[|] commit:/)) next; rest = substr($0, RSTART+9); p = index(rest, "|"); v = (p ? substr(rest, 1, p-1) : rest); while (match(v, /[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]+/)) { print substr(v, RSTART, RLENGTH); v = substr(v, RSTART+RLENGTH) } }' \
     || true)
   [ -n "$DONEC" ] || fail VALIDATION_FAILED "task $TASK 账本无 done commit（非 wt 闭环缺锚点）"
   # C-1（gt-7117 评审）actor 链闸：无锚制品时 claimed→done 链＝wt 路径「锚制品仅派发链可造」的替代闸，fail-closed；
@@ -90,8 +92,19 @@ if [ -z "$WTD" ]; then
   done
   [ -n "$DEFBR" ] || fail VALIDATION_FAILED "目标分支不可解析: $MAIN（默认分支缺失）"
   TARG=$(git -C "$MAIN" rev-parse --verify --quiet "$DEFBR") || fail VALIDATION_FAILED "目标分支不可解析: $MAIN@$DEFBR"
-  git -C "$MAIN" merge-base --is-ancestor "$DONEC" "$TARG" 2>/dev/null \
-    || fail NOT_IN_TARGET "done commit $DONEC 不在 $MAIN:$DEFBR——非 wt 任务无可合并动作，产出先落主支再闭环" 4
+  # gt-e5cc（R1 B1）：候选逐个验祖先，首个在默认分支者胜——误取的分支名段 hex 自然落空，真锚胜出。
+  # 分类 fail-closed：有候选全落空→NOT_IN_TARGET（产出未落主支）；零候选→VALIDATION_FAILED（无 done 锚）。
+  # DONEC 为换行分隔 hex run（无 IFS 字符），词切分安全
+  ANCH=""
+  for _d in $DONEC; do
+    if git -C "$MAIN" merge-base --is-ancestor "$_d" "$TARG" 2>/dev/null; then ANCH="$_d"; break; fi
+  done
+  if [ -z "$ANCH" ]; then
+    if [ -z "$DONEC" ]; then
+      fail VALIDATION_FAILED "task $TASK 账本无 done commit（非 wt 闭环缺锚点）"
+    fi
+    fail NOT_IN_TARGET "done commit $(printf '%s' "$DONEC" | head -1) 不在 $MAIN:$DEFBR——非 wt 任务无可合并动作，产出先落主支再闭环" 4
+  fi
   mkdir -p "$AGORA_HOME/.git/merge-tickets"
   : > "$AGORA_HOME/.git/merge-tickets/$TASK"
   bash "$SCRIPTS_DIR/post.sh" --actor "$ACTOR" --project "$(basename "$MAIN")" --event merged \
