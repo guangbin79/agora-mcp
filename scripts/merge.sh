@@ -54,14 +54,23 @@ fi
 if [ -z "$WTD" ]; then
   # B-1（gt-7117 评审）：find 空时裸 cat $(find) 吞调用方 stdin/挂起——post.sh T1 同款硬化；
   # LC_ALL=C 钉分片序（R1 评审 C-F2：collation 漂移会改「首个 claimed」判定）
-  LEDCAT() { find "$AGORA_HOME/log" -mindepth 2 -name "*.md" -type f -print0 2>/dev/null | LC_ALL=C sort -z | xargs -0 -r cat 2>/dev/null || true; }
+  # gt-e5cc：glob 双态补点分片——FNM_PERIOD 使 *.md 漏 .dotfiles.md 等点开头分片
+  #（.dotfiles 实体分片名即点开头：代发 done/verify_failed 重发链全数不可见；gt-3ea2/gt-6fef 同根第三处）
+  LEDCAT() { find "$AGORA_HOME/log" -mindepth 2 \( -name "*.md" -o -name ".*.md" \) -type f -print0 2>/dev/null | LC_ALL=C sort -z | xargs -0 -r cat 2>/dev/null || true; }
   # R1 评审（ocr/B-F2/C-F1）：结构字段双侧定界锚——自由文本（禁 | 但可含字段形 token）不得伪造 event:/actor:/commit: 信号；
   # R2 评审（ocr-F1/F2/F3）：actor sed 左锚升结构位 [|] actor:（右锚可由后续字段供给）；DONEC/DONEA 同源 LASTDONE 快照防异源行配对
   TASKL=$(LEDCAT | grep -E "(^|[|] )task:$TASK( |$)" || true)
   DONEL=$(printf '%s\n' "$TASKL" | grep -E "[|] event:done( |$)" || true)
-  LASTDONE=$(printf '%s\n' "$DONEL" | tail -1 || true)
+  # gt-e5cc：多 done 分落多分片（代发 done＋重发 done）时 tail -1 是分片路径序非事件序——
+  # 按行内 ts: 字段取最大者；shortcut: ts 字典序跨时区偏移不可比，现全分片同偏移，出现跨时区实体再升级
+  LASTDONE=$(printf '%s\n' "$DONEL" \
+    | awk '{ if (match($0, /[|] ts:[0-9T:+-]+/)) { t = substr($0, RSTART+5, RLENGTH-5); if (t >= mt) { mt = t; best = $0 } } } END { if (mt != "") print best }' \
+    || true)
+  # gt-e5cc：commit 值容错——复合值「repo@branch:hex,hex + repo2@master:hex」不以 hex 起头（gt-236a 实形），
+  # 取字段值内（下一 | 前截断，防垃圾 commit 被后续字段 hex 误赎回）首个 7+ hex run；无 run 仍空 → fail-closed
+  #（末条垃圾 commit 不回退旧锚语义保持）
   DONEC=$(printf '%s\n' "$LASTDONE" \
-    | awk '{ if (match($0, /[|] commit:[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]+/)) print substr($0, RSTART+9, RLENGTH-9) }' \
+    | awk '{ if (!match($0, /[|] commit:/)) next; rest = substr($0, RSTART+9); p = index(rest, "|"); v = (p ? substr(rest, 1, p-1) : rest); if (match(v, /[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]+/)) print substr(v, RSTART, RLENGTH) }' \
     || true)
   [ -n "$DONEC" ] || fail VALIDATION_FAILED "task $TASK 账本无 done commit（非 wt 闭环缺锚点）"
   # C-1（gt-7117 评审）actor 链闸：无锚制品时 claimed→done 链＝wt 路径「锚制品仅派发链可造」的替代闸，fail-closed；
@@ -71,17 +80,25 @@ if [ -z "$WTD" ]; then
     | sed -n 's/.*[|] actor:\([^ |]*\) [|].*/\1/p' || true)
   [ -n "$CLAIMA" ] || fail VALIDATION_FAILED "task $TASK 账本无 claimed 事件（无认领链拒，fail-closed）"
   [ "$DONEA" = "$CLAIMA" ] || fail DONE_ACTOR_MISMATCH "done actor ${DONEA:-∅} ≠ 首个 claimed actor $CLAIMA" 4
-  TBRANCH=$(git -C "$MAIN" symbolic-ref -q --short HEAD 2>/dev/null || echo HEAD)
-  TARG=$(git -C "$MAIN" rev-parse --verify --quiet "$TBRANCH") || fail VALIDATION_FAILED "目标分支不可解析: $MAIN@$TBRANCH"
+  # gt-e5cc（gt-762a 跨任务错乱根因）：非 wt 闭环目标＝仓库默认分支，非主仓当前检出 HEAD——
+  # 共享检出 HEAD 随 worker verify 窗口漂移（checkout 切支），漂移期出票把任务分支记成合并目标
+  #（实证：六连票 branch:gt-762a-alive-running、gt-762a 票 branch:gt-236a-two-layer-routing）。
+  # 该路径无树操作只做已含补票，默认分支即语义目标（「产出先落主支」）；基点探针同下方重建段
+  DEFBR=""
+  for _c in "$(git -C "$MAIN" config --get init.defaultBranch 2>/dev/null)" main master; do
+    [ -n "$_c" ] && git -C "$MAIN" show-ref --verify --quiet "refs/heads/$_c" && { DEFBR="$_c"; break; }
+  done
+  [ -n "$DEFBR" ] || fail VALIDATION_FAILED "目标分支不可解析: $MAIN（默认分支缺失）"
+  TARG=$(git -C "$MAIN" rev-parse --verify --quiet "$DEFBR") || fail VALIDATION_FAILED "目标分支不可解析: $MAIN@$DEFBR"
   git -C "$MAIN" merge-base --is-ancestor "$DONEC" "$TARG" 2>/dev/null \
-    || fail NOT_IN_TARGET "done commit $DONEC 不在 $MAIN:$TBRANCH——非 wt 任务无可合并动作，产出先落主支再闭环" 4
+    || fail NOT_IN_TARGET "done commit $DONEC 不在 $MAIN:$DEFBR——非 wt 任务无可合并动作，产出先落主支再闭环" 4
   mkdir -p "$AGORA_HOME/.git/merge-tickets"
   : > "$AGORA_HOME/.git/merge-tickets/$TASK"
   bash "$SCRIPTS_DIR/post.sh" --actor "$ACTOR" --project "$(basename "$MAIN")" --event merged \
-    --task "$TASK" --commit "$TARG" --branch "$TBRANCH" >/dev/null \
+    --task "$TASK" --commit "$TARG" --branch "$DEFBR" >/dev/null \
     || { rm -f "$AGORA_HOME/.git/merge-tickets/$TASK"; fail LEDGER_FAILED "merged 补账失败（post.sh 详见 stderr）" 4; }
   rm -f "$AGORA_HOME/.git/merge-tickets/$TASK"
-  printf '{"result":"merged","task":"%s","branch":"%s","commit":"%s","nonwt":true}\n' "$TASK" "$TBRANCH" "$TARG"
+  printf '{"result":"merged","task":"%s","branch":"%s","commit":"%s","nonwt":true}\n' "$TASK" "$DEFBR" "$TARG"
   exit 0
 fi
 

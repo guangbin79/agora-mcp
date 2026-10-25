@@ -2015,6 +2015,36 @@ POST tester@proj --event claimed --task "$N8I" >/dev/null
 POST tester@proj --event done --task "$N8I" --commit "$(git -C "$PROJ" rev-parse HEAD)" --evidence ok >/dev/null
 POST tester@proj --event done --task "$N8I" --commit HEAD --evidence 重跑 >/dev/null
 MERGE "$N8I" 2>&1 | grep -q VALIDATION_FAILED && ok "⑧e 末条垃圾 commit 不回退旧锚" || fail "⑧e 末条垃圾 commit 不回退旧锚"
+# ⑧f（gt-e5cc）：done 锚点三盲区——点分片可见＋多 done 按 ts 取末条＋复合 commit 值容错＋漂移 HEAD 不吃票（gt-762a 回归）
+SHDIR="$AGORA_HOME/log/$(date +%Y-%m-%d)"; mkdir -p "$SHDIR"
+DOTLINE() { printf -- '- seq:1 | ts:%s | actor:tester@proj | event:done | idem:%s | task:%s | commit:%s | evidence:fixture\n' "$1" "$2" "$3" "$4"; }
+# ⑧f-1 正例（gt-236a 实形）：早 done（垃圾 commit）落 .dsm1.md，晚 done（复合值，6 位 hex 红鲱鱼在分支名）落 .dsm2.md——
+#   老代码 glob 盲点分片＋tail -1 取路径序均取不到真锚；新代码 ts 末条＋值内首 hex run 命中
+N8J=$(TID "$(TITLE="非wt点分片done" VERIFY=true PROJECT_DIR="$PROJ" TC)")
+POST tester@proj --event claimed --task "$N8J" >/dev/null
+C8J=$(git -C "$PROJ" rev-parse HEAD)
+DOTLINE "2026-10-26T00:00:00+08:00" dsm1 "$N8J" "HEAD" > "$SHDIR/.dsm1.md"
+DOTLINE "2026-10-26T00:00:01+08:00" dsm2 "$N8J" "proj@gt-a1b2c3-fixture:$C8J + other@master:$C8J" > "$SHDIR/.dsm2.md"
+MERGE "$N8J" 2>/dev/null | grep -q '"result":"merged"' && ok "⑧f 点分片 done 可见＋ts 末条＋复合 commit 容错" || fail "⑧f 点分片/ts 序/复合 commit 锚点"
+# ⑧f-2 负例：ts 末条垃圾 commit 必拒——老 tail -1 按路径序取 .dsm3.md（. < 字母）的真锚会误过；新语义不回退旧锚
+N8K=$(TID "$(TITLE="非wt末条垃圾ts序" VERIFY=true PROJECT_DIR="$PROJ" TC)")
+POST tester@proj --event claimed --task "$N8K" >/dev/null
+DOTLINE "2026-10-26T00:00:00+08:00" dsm3 "$N8K" "$C8J" > "$SHDIR/.dsm3.md"
+DOTLINE "2026-10-26T00:00:01+08:00" dsm4 "$N8K" "HEAD" > "$SHDIR/.dsm4.md"
+MERGE "$N8K" 2>&1 | grep -q VALIDATION_FAILED && ok "⑧f 多 done 取 ts 末条：末条垃圾 commit 拒（不回退旧锚）" || fail "⑧f ts 末条语义"
+# ⑧f-3 漂移 HEAD 不吃票（gt-762a 跨任务错乱回归）：检出切到任务分支时非 wt 目标仍＝默认分支
+N8L=$(TID "$(TITLE="非wt漂移目标" VERIFY=true PROJECT_DIR="$PROJ" TC)")
+POST tester@proj --event claimed --task "$N8L" >/dev/null
+DEFA=$(git -C "$PROJ" symbolic-ref --short HEAD)
+git -C "$PROJ" checkout -q -b drift8f3
+echo drift > "$PROJ/drift8f3.txt"; git -C "$PROJ" add -A; git -C "$PROJ" -c user.name=t -c user.email=t@local commit -qm drift8f3
+DX=$(git -C "$PROJ" rev-parse HEAD)
+POST tester@proj --event done --task "$N8L" --commit "$DX" --evidence ok >/dev/null
+MERGE "$N8L" 2>&1 | grep -q NOT_IN_TARGET && ok "⑧f 检出漂移期 done 不在默认分支被拒（gt-762a 回归）" || fail "⑧f 漂移期 NOT_IN_TARGET"
+git -C "$PROJ" update-ref "refs/heads/$DEFA" "$DX"   # 产出落主支（ff 语义）
+MERGE "$N8L" 2>/dev/null | grep -q '"result":"merged"' && ok "⑧f 产出落主支后补票" || fail "⑧f 产出落主支补票"
+LEDEV "$N8L" merged | grep -q "branch:$DEFA" && ok "⑧f 票面 branch=默认分支（非漂移检出）" || fail "⑧f 票面 branch=默认分支"
+git -C "$PROJ" checkout -q "$DEFA"; git -C "$PROJ" branch -q -D drift8f3
 
 # ⑨ 跨仓 wt 形态显式拒（gt-78da A3）：wt_dir 属他仓→CROSS_REPO_WT＋拆分指引；零合并零落账零碰他仓树
 git init -q "$T/other" && git -C "$T/other" -c user.name=t -c user.email=t@l commit -q --allow-empty -m init
