@@ -980,6 +980,30 @@ REGS --sid ses-rr --entity rtt --role worker >/dev/null \
   && ok "register-session --role 写入/保留/覆写＋--deregister 幂等（gt-236a⑨）" || fail "gt-236a⑨ 注册面不符"
 REGS --sid ses-rr2 --entity rtt --role badrole >/dev/null 2>&1; [[ $? -eq 2 ]] \
   && ok "register-session 非法 role 拒绝 rc2（gt-236a⑨b）" || fail "gt-236a⑨b 校验不符"
+# ⑩ 精准层 routed sid 白名单硬闸（R1 C 册实弹闭合：../ 形态写侧放行→消费端拦截落兜底）
+map_add rt4 ses-rf "2027-01-01T00:00:00+08:00"
+printf '%s' '{"data":{"title":"rf"}}' > "$NB_HOME/who/ses-rf.json"
+bash "$PKG/scripts/task-routing.sh" upsert gt-236e dispatcher rt4 '../evil' >/dev/null
+msg_add_ev rt4 done gt-236e
+rt_reset rt4; NB
+[[ $(grep -cE 'api/session/(\.\.|evil)' "$NB_HOME/calls.log") == 0 \
+    && $(grep -c "sid=\.\./evil skip bad-sid routed" "$DBGLOG") == 1 \
+    && $(grep -c "sid=ses-rf inject-ok.*kind=F" "$DBGLOG") == 1 ]] \
+  && ok "精准层 routed sid 白名单拦截＋落兜底（gt-236a⑩）" || fail "gt-236a⑩ 白名单闸不符"
+# ⑪ 无 summary 行信件：不误判 progress 静默吞（R1 B 册空针修复——丢不得契约）
+map_add ns1 ses-ns "2027-01-01T00:00:00+08:00"
+printf '%s' '{"data":{"title":"ns"}}' > "$NB_HOME/who/ses-ns.json"
+mkdir -p "$AGORA_HOME/inbox/ns1"; echo "- from:x | ts:y | ref:r236ns" > "$AGORA_HOME/inbox/ns1/$(date +%s%N)-ns1.md"
+rt_reset ns1; NB
+[[ $(nb_calls) == 1 && -f "$AGORA_HOME/.git/notify-wm/ns1" ]] \
+  && ok "无 summary 信件照常注入不静默吞（gt-236a⑪）" || fail "gt-236a⑪ 空事件不符（$(nb_calls)）"
+# ⑫ AGORA_SESSION_TTL_H 非数字：sanitize 保 daemon 不死＋回落 24（R1 B 册 set -u 炸桥修复）
+map_add_ts st2 ses-st2 "2020-01-01T00:00:00+08:00"
+msg_add_ev st2 done gt-236d
+rt_reset st2
+AGORA_SESSION_TTL_H=abc NB; RC236=$?
+[[ $RC236 -eq 0 && $(grep -c "sid=ses-st2 skip stale ts=2020" "$DBGLOG") == 1 ]] \
+  && ok "TTL_H 非数字 sanitize 不炸桥＋回落缺省（gt-236a⑫）" || fail "gt-236a⑫ sanitize 不符（rc=$RC236）"
 
 echo "===== 项目注册表（wiki/projects） ====="
 # 注册项目页（tester 注册 $PROJ，带默认 verify）

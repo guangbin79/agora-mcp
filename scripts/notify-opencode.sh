@@ -44,7 +44,7 @@ bump_fail() { # $1=entity——失败计数累加；读值 sanitize（gt-893a �
   echo $(( n + 1 )) > "$WM_DIR/$1.fail"
 }
 
-evt_in() { [[ " $1 " == *" $2 "* ]]; }   # $1=事件清单 $2=事件
+evt_in() { [[ -n "${2:-}" && " $1 " == *" $2 "* ]]; }   # $1=事件清单 $2=事件；空事件恒假（B 册空针修复：无 summary 信不误判 progress 静默吞）
 
 notify() { # $1=entity $2=ref $3=event $4=task → rc0=投递成功/设计内跳过；rc1=投递失败（scan 不推进水位）
   local ent="$1" ref="$2" ev="${3:-}" task="${4:-}"
@@ -64,6 +64,12 @@ notify() { # $1=entity $2=ref $3=event $4=task → rc0=投递成功/设计内跳
     if evt_in "$DISPATCHER_EVENTS" "$ev"; then rrole=dispatcher
     elif evt_in "$WORKER_EVENTS" "$ev"; then rrole=worker; fi
     [[ -n "$rrole" ]] && routed=$(bash "$SCRIPTS_DIR/task-routing.sh" get "$task" "$rrole" 2>/dev/null || true)
+    # 精准层同过消费端白名单硬闸（C 册实弹：写侧完整性校验放行 / 与点段，routed sid 逐字进
+    # API URL 与 debounce 文件路径——../ 层数加深可落点任意；与兜底层同一闸同一口径）
+    if [[ -n "$routed" && ( ! "$routed" =~ ^[A-Za-z0-9._-]+$ || "$routed" =~ ^\.\.?$ ) ]]; then
+      dbg "$ent" "$routed" "skip bad-sid routed"
+      routed=""
+    fi
   fi
   # 兜底层候选：sid 白名单硬闸（gt-893a 评审 C1：map 是不可信共享可变文本——sid 逐字进 API URL
   # 路径且经 for 展开，glob/路径形态可静默换注入目标）；TTL/角色/who 过滤在循环内逐行判
@@ -75,6 +81,7 @@ notify() { # $1=entity $2=ref $3=event $4=task → rc0=投递成功/设计内跳
       "$AGORA_HOME/sessions.map" 2>/dev/null | sort -u | tr "\n" ",")
   [[ -n "$bad" ]] && dbg "$ent" "${bad%,}" "skip bad-sid"
   local ttl_h="${AGORA_SESSION_TTL_H:-24}" cutoff=0
+  [[ "$ttl_h" =~ ^[0-9]+$ ]] || ttl_h=24   # sanitize（gt-893a B1 同类：非数字 env 不得经 set -u/算术展开错杀 daemon）
   (( ttl_h > 0 )) && cutoff=$(( now - ttl_h * 3600 ))
   declare -A seen=()
   local try_list=""

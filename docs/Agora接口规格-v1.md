@@ -310,6 +310,7 @@ v1.17（2026-10-14）——编排鲁棒性批：§8.1 通知桥落地（scripts/
 - v1.31（2026-10-21）——gt-4ea1 批：§4.4 看板 in-progress 行显示心跳 age（`进展（Nmin前）: body`；跨机钟漂钳零、旧 cache 兼容、畸形 ts 静默）；项目仓新增 `.githooks/pre-push` 全量冒烟钩（`git config core.hooksPath .githooks` 启用；AGORA_SKIP_SMOKE=1 绕过；600s 超时+PID 日志）；post.sh 读取侧收口（gt-4ea1 F）：dispatcher 自动 @ 块前移到写入前（fail=零写入契约恢复完整）、idem 先行计算（哈希不含自动追加 MENTION——幂等语义与 v1.30 前一致）、坏名校验补反斜杠、MENTION 精确匹配（逗号逐项+trim+空值 guard，防子串误吞/空白漏配/set -u fatal）。delegation.md 补 verify 指向约定（project_dir MUST=子会话实际工作区）与 merged 闭环 ack（done ≠ merged）。测试套件 168 项断言（+4：坏名含反斜杠拒 done/零写入无 shard 残留/MENTION 精确匹配/board 心跳 age）。
 
 - v1.39（2026-10-25）——在场优先 done 残留收窄（gt-762a，红测试先行；四笔 notified 死信实证 575d/8fe1/7cd9/e96d——worker done 退场后持久会话记录 title 不变，`alive delegated` 按 title 前缀残留命中 → dispatch 降级 notified 投给已退场会话）：①§4.7 在场语义再收窄：alive delegated 过滤加 status=running——同次 GET session 响应内判定 outcome∈{failed,interrupted,succeeded}∨time.idle 不算在场（仅 running 算在场，零额外调用；status 三态复用 status 契约口径）；逐 sid GET 异常退回尽力在场宁 notified 不重复 spawn（893a 同口径）；裸 `alive <dir>` 与 gt-0ed3 交互占坑语义不动②dispatch.sh 在场注释同步③测试：S1d ＋done 残留断言（delegated title 命中＋outcome=succeeded → rc1）、T5 ＋S5a3 委托占坑 done 残留 → spawned（对照 S5a2 running → notified），假 opencode 增 active_outcome 夹具。
+- v1.40（2026-10-25）——§8.1 通知桥两层路由（gt-236a，2508 done 投错会话实证）：①精准层 task-routing（`.git/task-routing` 本机状态域，行 `task role entity sid ts` 按 (task,role) upsert 原位刷新；写入单源 scripts/task-routing.sh，采集＝enforcer 三点（dispatch 准入顺带/task_create after 解析输出 id/agora_post 事件方向表——方向表即「谁消费谁接管」自动化）＋dispatch spawn 顺带 worker 行）定向注入任务亲和 sid，命中单点不广播；定向失败（缺行/sid 白名单拒/who dead·delegated/inject 失败）逐级落兜底广播同实体全部 ts 新鲜活行（双收）②角色订阅：sessions.map 第 5 列可选 role（register-session --role，upsert 覆写/缺省保留），兜底层行级过滤（worker=派发/修正类、dispatcher=终态/计划类、legacy 全收不劣化），progress 心跳全层零注入③去抖改 (entity,sid) 粒度＋桥侧 TTL 活性闸（AGORA_SESSION_TTL_H 同源 sanitize）＋退出注销（register-session --deregister 幂等＋enforcer 订阅 session.deleted，无事件形态 TTL 保洁兜底）④安全收口：精准层 routed sid 同过消费端白名单硬闸（评审 C 册路径逃逸实弹闭合）。测试套件 593 项断言（桥段 +12 组）。
 - v1.38（2026-10-24）——在场优先委托子会话收窄（gt-0ed3，红测试先行；实狗粮 d-dc64196f/d-4255f3e3 交互占坑双双降级 notified 被迫 wt 重派）：①§4.7 在场语义改版：presence＝目标项目有可消费任务的「委托子会话」——runtime alive 契约加可选 `delegated` 参（目录命中 ∧ 会话 title 前缀 `agora: gt-`，dispatch 两 spawn 通道统一命名 gt-2845②；同次 GET 会话响应取 title 零额外调用；裸 `alive <dir>` 旧语义不变）；交互会话占坑不再降级 notified，直接派生②删 sessions.map 降回退：交互注册面≠委托在场，且 API 不通时通知桥同依赖 `opencode api` 无法触达、notified 纯滞留——与既有「无法触达不算在场」原则一致，API 关＝总是 spawn③通知桥本体不动（按实体 sessions.map 找注入 sid，与在场判定正交）④方向取舍：滞留升级（通知未消费超阈值→mention/派生）不做——需新周期检查器＋消费判定＋阈值调参，其兜的「委托占坑信滞留」残留已由 watchdog（心跳超时 diagnosed→重派）覆盖，委托占坑 notified 现滞留实据再立⑤测试：S1d +delegated 三态、S5a 交互占坑→spawned、+S5a2 委托占坑→notified 零 dispatched、S5d API 关→spawned、机器隔离批本机注册与非 wt 对照改口径，先红后绿。
 - v1.37（2026-10-24）——四缺口修复批（gt-7ca0，红测试先行；实证 gt-2b25 补票三连 NOT_FF／QUOTA_EXCEEDED 自锁×2／idle 停转手工注入×2）：①§4.7 dispatcher_task 推导加 actor 碰撞排除——同名 actor 的主会话与派生子会话共享身份，claimed 目标与本派发同项目（`main_repo_of` 归一后比对）且该 claimed 无自身链证据（根任务工人）时不推导为链；跨项目 claimed 与同项目但有链证据保留（真链不断）②merge.sh 同仓链祖先检查：上游分支已清（并后清理）或 tip 已并入目标仓默认分支 → 合并目标回落默认分支＋幂等票落账，不再锚点重建复活上游分支；零提交新鲜上游分支（tip 天然祖先）同归回落 ③§4.7 配额恢复豁免：目标任务自身活跃占槽时重派豁免自身槽位（分域/总量/锁内 TOCTOU 复核三处同口径；扫描退化分支不豁免；他任务照拒）④poll 新档 idle 停转自恢复（`AGORA_IDLE_KICK_MIN` 默认 15）：在飞且尾派发后零子会话活动（`post_disp` 空集，watchdog 机械回执不计）且 runtime status=idle → inject 续跑指令＋watchdog diagnosed 账本回执，回执即复位时钟 cadence 不刷屏；running 不扰、dead 走孤儿档、超 `AGORA_REDISPATCH_MAX` escalated、wt_host≠本机跳过 ⑤测试套件 +22 断言（四场景 B 批夹具 stub 离线，先红后绿）。
 - v1.36（2026-10-24）——配额分域双闸（gt-8c5b，根治跨会话互顶）：①§4.7 配额保险丝改双闸：分域闸（本 actor 名下活跃＝账本 dispatched∩无终态∩非僵尸按 actor 归组 与该 actor `.live` 计数取大，≥`AGORA_MAX_SPAWN` 默认 3→30 拒——他人域占满不挡本 actor）；总量闸（新增 `AGORA_MAX_SPAWN_GLOBAL` 默认 60＝2×单 actor 满载，全机活跃总和超即拒——各域未超而总和超亦拒，防多会话叠加失控）；`QUOTA_EXCEEDED` 错误信息两档措辞（分域满/总量满）②跨机口径定案：域键＝账本 `actor` 字符串全局聚合不细分 host（单账本单事实源；actor+host 精细分域依赖 host 落账，M2 族 backlog）③扫描器单遍增辅：dispatched 行 `actor:`/`run:` 字段捕获，`.live` 按 run 路径归属 actor；扫描失败退化 `.live` 总数兜底总量闸（分域漏检可容忍、总量不失守）④smoke +3 分域断言（A 域满拒第6/A 满不挡 B/总和超拒）＋既有配额断言钉 env 回归；套件级 `AGORA_MAX_SPAWN_GLOBAL=9999` 防长跑累积误触。设计依据：配额防并发堆积、风暴防线在拾取守卫（gt-ae6f），放大配额无风暴回归风险。测试套件 +3 断言，先红后绿。
@@ -324,7 +325,7 @@ v1.17（2026-10-14）——编排鲁棒性批：§8.1 通知桥落地（scripts/
 
 **原理**：opencode 的 TUI/web 是本地 HTTP server 的客户端，外部进程可经其 REST API 向**运行中的会话**注入消息。适配器不加载进运行时、不依赖插件 API——它只是一个外部脚本。**实测基线：opencode v2（2.0.29）serve API——`POST /api/session/<sid>/prompt`，body `{"text": "...", "delivery": "queue"}`，HTTP Basic 认证（用户名默认 `opencode`，密码取 `OPENCODE_SERVER_PASSWORD`；桥侧环境 `AGORA_OPENCODE_URL/USERNAME/PASSWORD` 可覆盖）。** v2 serve 未显式设密码时会生成随机密码打印于启动日志，桥无法获知，注入 401 静默跳过——使用本桥 MUST 显式设置 `OPENCODE_SERVER_PASSWORD` 并让桥进程继承。`delivery: "queue"` 不打断进行中的回合，空闲会话入队即唤起（v2 实测确认）。
 
-**运行形态**：常驻（`nohup bash notify-opencode.sh &` 或 systemd --user），有 inotifywait 用 inotify 监听、否则退化为 `AGORA_NOTIFY_POLL_S`（默认 5s）轮询；`--once` 扫一轮即退（测试/调试）。环境：`AGORA_OPENCODE_URL`（默认 `http://127.0.0.1:4096`）、`AGORA_NOTIFY_DEBOUNCE_S`（默认 60，去抖记录持久化于 `.git/notify-wm/`，重启不重置）、`AGORA_NOTIFY_MODE=opencode|desktop`（desktop = notify-send 兜底）。sessions.map 同一实体多次登记时**取最新一条**（重新登记即换绑）。
+**运行形态**：常驻（`nohup bash notify-opencode.sh &` 或 systemd --user），有 inotifywait 用 inotify 监听、否则退化为 `AGORA_NOTIFY_POLL_S`（默认 5s）轮询；`--once` 扫一轮即退（测试/调试）。环境：`AGORA_OPENCODE_URL`（默认 `http://127.0.0.1:4096`）、`AGORA_NOTIFY_DEBOUNCE_S`（默认 60，去抖记录持久化于 `.git/notify-wm/`，重启不重置，粒度为 (entity,sid)——v1.40）、`AGORA_NOTIFY_MODE=opencode|desktop`（desktop = notify-send 兜底）。同实体多会话投递＝**两层路由（v1.40，gt-236a）**：精准层查 `.git/task-routing`（`task role entity sid ts` 行，(task,role) upsert；采集＝enforcer dispatch 准入/task_create after/agora_post 事件方向表＋dispatch spawn 顺带 worker 行）定向注入 task 亲和 sid（单点不广播）；定向失败（缺行/sid 白名单拒/who dead·delegated/inject 失败）逐级落兜底广播同实体全部 ts 新鲜活行（who 鉴别 skip delegated/dead——懒注册污染行不投）。progress 心跳零注入（落箱不推醒）。
 
 **数据流**：
 
@@ -338,11 +339,12 @@ post.sh 落账含 @提及 的事件
   → agent 在会话中收到提醒，自行收信
 ```
 
-**`scripts/sessions.map` 格式**（纯文本，每行一条，# 为注释；实现行为为准——含主机名前缀四列）：
+**`scripts/sessions.map` 格式**（纯文本，每行一条，# 为注释；实现行为为准——含主机名前缀，第 5 列可选 role（v1.40，gt-236a）：worker 仅收派发/修正类信（dispatched/ack/amended/reopened），dispatcher 仅收终态/计划类（claimed/plan/done/blocked/cancelled/diagnosed/escalated/proposal），无 role 列 legacy 行全收）：
 
 ```
-# <主机名>  <agent名>  <opencode session id>  <登记时间>
+# <主机名>  <agent名>  <opencode session id>  <登记时间>  [role]
 myhost      blog-01    ses_abc123             2026-10-14T10:00:00+08:00
+myhost      blog-01    ses_def456             2026-10-14T11:00:00+08:00 worker
 ```
 
 会话 id 的登记由 agent 在开场仪式中完成（运行时环境变量或 TUI 界面可读）；适配器对查不到映射的 agent MUST 静默跳过，不得报错。
@@ -350,7 +352,7 @@ myhost      blog-01    ses_abc123             2026-10-14T10:00:00+08:00
 **行为契约**：
 
 - 只递**提醒**，不递内容——消息体只含 ref 指针，正文仍由 agent 主动 `agora_check_mail` 拉取（协议语义不被适配器绕过）；
-- 注入频率 MUST 去抖：同一 agent 60 秒内多条新邮件只注入一条；
+- 注入频率 MUST 去抖：同一 (agent, 会话) 60 秒内多条新邮件只注入一条（v1.40 起按 (entity,sid) 粒度，精准 sid 失败不堵兜底行）；
 - HTTP 不可达或认证失败（opencode 未在运行、密码缺失等）MUST 静默跳过，不得阻塞、不得重试风暴；
 - 零开发兜底形态：适配器可配置为只执行 `notify-send` 桌面通知，由人转达。
 
