@@ -244,8 +244,12 @@ PYEOF
 
 # 11. 账本面 dirty 审计（gt-2508：enforcer 拦工具写，但 bash 子进程盲区——python heredoc 直写 wiki/tasks 两次实证）。
 #     机械写即 commit（post.sh git add -A 全收），未提交改动=绕过工具直写痕迹。报告器语义：只报告不回滚不置 FAIL
-LEDGER_DIRTY=$(git -C "$AGORA_HOME" status --porcelain -- log board wiki inbox raw 2>/dev/null || true)
+LEDGER_DIRTY=""
+{
+  flock -w "${AGORA_LOCK_WAIT:-5}" 9 || true   # 锁内读与 post.sh 线性化点互斥：防把机械写中窗误报为绕写（评审环 R1-B-F3）
+  LEDGER_DIRTY=$(git -C "$AGORA_HOME" status --porcelain -- log board wiki inbox raw 2>/dev/null || true)
+} 9>"$AGORA_HOME/.git/post.lock"
 [[ -z "$LEDGER_DIRTY" ]] && ok "账本面（无绕写直改痕迹）" \
-  || warn "账本面 dirty——绕过工具直写痕迹（bash 盲区），git 可回滚: $(echo "$LEDGER_DIRTY" | head -5 | tr '\n' '；')（人工核查后 git checkout -- 处置）"
+  || warn "账本面 dirty——绕过工具直写痕迹（bash 盲区），git 可回滚: $(echo "$LEDGER_DIRTY" | head -5 | tr '\n' '；')（先复核非 post 写入中窗再 git checkout -- 处置）"
 
 [[ $FAIL -eq 0 ]] && echo "== doctor: ALL GREEN ==" || { echo "== doctor: FAILURES PRESENT =="; exit 1; }
