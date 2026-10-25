@@ -1217,9 +1217,10 @@ import json,sys
 evs=[e['event'] for e in json.load(sys.stdin)['events']]
 assert evs==['claimed','done'], evs
 " && ok "尾引号标量 verify 类 done 过门（成对剥离后原样透传）" || fail "尾引号标量 verify 类 done 未过门（verify_failed）"
-# ⑤ history.sh 免导出 AGORA_HOME：shell 直调方（无 server env）不再 KeyError
-env -u AGORA_HOME HOME="$H4" TASK="$XT" bash "$PKG/scripts/history.sh" | python3 -c "import json,sys; d=json.load(sys.stdin); assert d['count']>0, d" \
-  && ok "history.sh 未导出 AGORA_HOME 仍出合法 JSON（默认导出）" || fail "history.sh 未导出 AGORA_HOME 时 KeyError"
+# ⑤ history.sh 裸调用 fail-fast（gt-ca34 翻转 r1 合同：静默缺省=改名后静默错路径根因，未设必报错指名 AGORA_HOME）
+_BH=$(env -u AGORA_HOME HOME="$H4" TASK="$XT" bash "$PKG/scripts/history.sh" 2>&1) && _BRC=0 || _BRC=$?
+[[ "$_BRC" -ne 0 && "$_BH" == *AGORA_HOME* ]] \
+  && ok "history.sh 裸调用 fail-fast（env 未设报错指名 AGORA_HOME，gt-ca34）" || fail "history.sh 裸调用未 fail-fast 或报错未指名 AGORA_HOME（rc=$_BRC，gt-ca34）"
 # ⑥ 同任务双派生双审计行：dispatch_id 纳秒哈希天然唯一 → run 不同 → dispatched idem 不同（重派/reopened 链路审计行不被连续窗口吞）
 AGORA_RUNTIME=echo AGORA_HOME="$AH4" bash "$PKG/scripts/dispatch.sh" --actor orch@orch --project "$TARGET" --task "$XT" >/dev/null 2>&1
 N=$(cat "$AH4"/log/*/*.md 2>/dev/null | grep -F "task:$XT" | grep -c "event:dispatched")
@@ -3691,6 +3692,21 @@ done
 [ "$(DLEV "$DWID" dispatched | grep -c 'actor:drill-wave@')" -eq 3 ] || ISO=1
 [ "$ISO" -eq 0 ] && ok "场景分域隔离（独立 actor/仓/实体页，wave 3 派全在 wave 域）" || fail "场景未隔离（gt-f8ed 根因2）"
 rm -rf "$DH"
+
+echo
+echo "===== AGORA_HOME 缺省治理（gt-ca34：裸调用 fail-fast） ====="
+# 静默缺省致静默错路径（~/agora→~/plaza 改名两层遗漏实证）：15 脚本删缺省改 :? 报错——
+# env 未设必非零退出且 stderr 指名 AGORA_HOME，禁再读任何隐式路径。
+# HOME 同步沙箱＋timeout 包裹：红阶段（guard 未加）init.sh 不得污真 HOME，notify 守护不得挂死套件
+mkdir -p "$T/barehome"
+BAF=0
+for BF in attach cancel dispatch doctor history init install-hooks merge notify-opencode post redispatch sync task-create wiki-write; do
+  env -u AGORA_HOME HOME="$T/barehome" timeout 10 bash "$PKG/scripts/$BF.sh" >/dev/null 2>&1 && BAF=1
+  env -u AGORA_HOME HOME="$T/barehome" timeout 10 bash "$PKG/scripts/$BF.sh" 2>&1 | grep -q AGORA_HOME || BAF=1
+done
+env -u AGORA_HOME HOME="$T/barehome" timeout 10 bash "$PKG/scripts/runtime/drill.sh" >/dev/null 2>&1 && BAF=1
+env -u AGORA_HOME HOME="$T/barehome" timeout 10 bash "$PKG/scripts/runtime/drill.sh" 2>&1 | grep -q AGORA_HOME || BAF=1
+[ "$BAF" -eq 0 ] && ok "15 脚本裸调用 fail-fast（env 未设非零＋stderr 含 AGORA_HOME）" || fail "裸调用未 fail-fast（gt-ca34 缺省残留）"
 
 echo
 echo "===== 结果: $PASS 通过, $FAIL 失败 ====="

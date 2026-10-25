@@ -8,7 +8,7 @@
 #   AGORA_REQUIRE_SIGN 1 时无签名密钥 = 失败
 set -euo pipefail
 export AGORA_MECHANICAL=1   # 自举即机械层：本脚本的全部提交都过 pre-commit 防线
-AGORA_HOME="${AGORA_HOME:-$HOME/agora}"
+AGORA_HOME="${AGORA_HOME:?AGORA_HOME 未设置——裸调用已禁用（静默错路径教训 gt-ca34）：export AGORA_HOME=$HOME/plaza 后重试，或经 MCP server env 注入}"
 AGORA_PKG="${AGORA_PKG:-$(cd "$(dirname "$0")/.." && pwd)}"
 
 # 骨架各项幂等：脚本不进 AGORA_HOME（单源在产品包 _PKG/scripts，自定位调用，gt-f6e4）

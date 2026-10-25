@@ -3,7 +3,7 @@
 # 用法: doctor.sh [--fix]；退出码 0=全绿 1=有 fail
 set -euo pipefail
 SCRIPTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"   # 单源自定位：兄弟脚本/库一律本仓 scripts（gt-f6e4）
-AGORA_HOME="${AGORA_HOME:-$HOME/agora}"; export AGORA_HOME   # heredoc python 经 os.environ 读取——裸调用不再 KeyError（与 wiki-write r1 修法同类）
+AGORA_HOME="${AGORA_HOME:?AGORA_HOME 未设置——裸调用已禁用（静默错路径教训 gt-ca34）：export AGORA_HOME=$HOME/plaza 后重试，或经 MCP server env 注入}"; export AGORA_HOME   # heredoc python 经 os.environ 读取——裸调用不再 KeyError（与 wiki-write r1 修法同类）
 FIX="${1:-}"
 FAIL=0
 

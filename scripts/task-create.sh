@@ -12,7 +12,7 @@
 # 失败：JSON → stderr，exit 2 参数校验 / 5 引用不存在
 set -u
 SCRIPTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"   # 单源自定位：兄弟脚本/库一律本仓 scripts（gt-f6e4）
-AGORA_HOME="${AGORA_HOME:-$HOME/agora}"
+AGORA_HOME="${AGORA_HOME:?AGORA_HOME 未设置——裸调用已禁用（静默错路径教训 gt-ca34）：export AGORA_HOME=$HOME/plaza 后重试，或经 MCP server env 注入}"
 
 [ -z "${TITLE:-}" ] && { echo '{"error":"TITLE_REQUIRED","hint":"需要 TITLE"}' >&2; exit 2; }
 # frontmatter 单行字段禁止换行/回车（否则撕裂 yaml 头，甚至注入伪字段）

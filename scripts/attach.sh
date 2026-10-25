@@ -11,7 +11,7 @@
 # 输出：{"task","ref","url","commit"}；失败 JSON → stderr，exit 2 校验 / 5 任务不存在
 set -u
 SCRIPTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"   # 单源自定位：兄弟脚本/库一律本仓 scripts（gt-f6e4）
-AGORA_HOME="${AGORA_HOME:-$HOME/agora}"
+AGORA_HOME="${AGORA_HOME:?AGORA_HOME 未设置——裸调用已禁用（静默错路径教训 gt-ca34）：export AGORA_HOME=$HOME/plaza 后重试，或经 MCP server env 注入}"
 PROJECT_DIR="${PROJECT_DIR:-$PWD}"
 
 fail() { python3 -c 'import json,sys; print(json.dumps({"error":sys.argv[1],"hint":sys.argv[2]}, ensure_ascii=False), file=sys.stderr)' "$1" "$2"; exit "${3:-2}"; }   # 嵌值含引号亦合法（评审 MINOR：错误通道 JSON）

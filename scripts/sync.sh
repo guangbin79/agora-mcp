@@ -7,7 +7,7 @@
 #   - AGORA_SYNC_REQUIRED=1 时任何同步失败 = 硬失败（exit 8）
 # 输出：JSON 一行到 stdout（{"sync":"ok|warn:...|off"}），供调用方并入 derived
 set -u
-AGORA_HOME="${AGORA_HOME:-$HOME/agora}"
+AGORA_HOME="${AGORA_HOME:?AGORA_HOME 未设置——裸调用已禁用（静默错路径教训 gt-ca34）：export AGORA_HOME=$HOME/plaza 后重试，或经 MCP server env 注入}"
 MODE="${1:-}"
 cd "$AGORA_HOME" 2>/dev/null || { echo '{"sync":"off"}'; exit 0; }
 

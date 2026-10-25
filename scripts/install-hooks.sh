@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # install-hooks.sh —— 安装防御纵深 hook（hooks 不进版本控制，需此脚本显式安装）
 set -euo pipefail
-AGORA_HOME="${AGORA_HOME:-$HOME/agora}"
+AGORA_HOME="${AGORA_HOME:?AGORA_HOME 未设置——裸调用已禁用（静默错路径教训 gt-ca34）：export AGORA_HOME=$HOME/plaza 后重试，或经 MCP server env 注入}"
 HOOK="$AGORA_HOME/.git/hooks/pre-commit"
 cat > "$HOOK" <<'EOF'
 #!/usr/bin/env bash

@@ -4,7 +4,7 @@
 # 输出：{"task":"gt-xxxx","count":N,"events":[...事件...]}
 # 顺序保证：shard 文件名（日期）排序 + shard 内物理行序 = 权威顺序
 set -u
-AGORA_HOME="${AGORA_HOME:-$HOME/agora}"; export AGORA_HOME
+AGORA_HOME="${AGORA_HOME:?AGORA_HOME 未设置——裸调用已禁用（静默错路径教训 gt-ca34）：export AGORA_HOME=$HOME/plaza 后重试，或经 MCP server env 注入}"; export AGORA_HOME
 [ -z "${TASK:-}" ] && { echo '{"error":"TASK_REQUIRED"}' >&2; exit 2; }
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"   # cd 前捕获：scripts 目录内相对调用亦能定位 agora_lib

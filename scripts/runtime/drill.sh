@@ -18,7 +18,7 @@
 # 用法：drill.sh --scenario <restart|kill|quota|wave|all>
 # shortcut: restart 真实执行未实证（T5）；API 通道子会话死亡无滞留档，kill/restart/wave 强制 run 通道建模
 set -u
-AGORA_HOME="${AGORA_HOME:-$HOME/agora}"
+AGORA_HOME="${AGORA_HOME:?AGORA_HOME 未设置——裸调用已禁用（静默错路径教训 gt-ca34）：export AGORA_HOME=$HOME/plaza 后重试，或经 MCP server env 注入}"
 RUNTIME="${AGORA_RUNTIME:-opencode}"
 RESTART_CMD="${AGORA_DRILL_RESTART_CMD:-opencode service restart}"
 DRILL_STATE="${AGORA_DRILL_STATE:-$HOME/.local/state/agora-drill}"

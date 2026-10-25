@@ -5,7 +5,7 @@
 set -euo pipefail
 SCRIPTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"   # 单源自定位：兄弟脚本/库一律本仓 scripts（gt-f6e4）
 
-AGORA_HOME="${AGORA_HOME:-$HOME/agora}"
+AGORA_HOME="${AGORA_HOME:?AGORA_HOME 未设置——裸调用已禁用（静默错路径教训 gt-ca34）：export AGORA_HOME=$HOME/plaza 后重试，或经 MCP server env 注入}"
 LOCK_WAIT="${AGORA_LOCK_WAIT:-5}"
 
 # 机械层确定性：跨分片检索/glob 序不受宿主 locale 影响（collation 硬化，T1 存量发现）

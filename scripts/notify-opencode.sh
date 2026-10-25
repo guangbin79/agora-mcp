@@ -13,7 +13,7 @@
 #   - runtime 注入失败静默跳过，不阻塞、不重试风暴
 #   - 投递方式 delivery=queue：不打断正在跑的回合，空闲会话入队即唤起
 set -uo pipefail
-AGORA_HOME="${AGORA_HOME:-$HOME/agora}"
+AGORA_HOME="${AGORA_HOME:?AGORA_HOME 未设置——裸调用已禁用（静默错路径教训 gt-ca34）：export AGORA_HOME=$HOME/plaza 后重试，或经 MCP server env 注入}"
 SCRIPTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"   # 单源自定位：兄弟脚本/库一律本仓 scripts（gt-f6e4）
 DEBOUNCE="${AGORA_NOTIFY_DEBOUNCE_S:-60}"
 POLL_S="${AGORA_NOTIFY_POLL_S:-5}"
