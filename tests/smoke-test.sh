@@ -2037,7 +2037,7 @@ MERGE "$N8K" 2>&1 | grep -q VALIDATION_FAILED && ok "⑧f 多 done 取 ts 末条
 # ⑧f-3 漂移 HEAD 不吃票（gt-762a 跨任务错乱回归）：检出切到任务分支时非 wt 目标仍＝默认分支
 N8L=$(TID "$(TITLE="非wt漂移目标" VERIFY=true PROJECT_DIR="$PROJ" TC)")
 POST tester@proj --event claimed --task "$N8L" >/dev/null
-DEFA=$(git -C "$PROJ" symbolic-ref --short HEAD)
+DEFA=$(git -C "$PROJ" symbolic-ref --short HEAD); PRE8F=$(git -C "$PROJ" rev-parse HEAD)
 git -C "$PROJ" checkout -q -b drift8f3
 echo drift > "$PROJ/drift8f3.txt"; git -C "$PROJ" add -A; git -C "$PROJ" -c user.name=t -c user.email=t@local commit -qm drift8f3
 DX=$(git -C "$PROJ" rev-parse HEAD)
@@ -2046,6 +2046,8 @@ MERGE "$N8L" 2>&1 | grep -q NOT_IN_TARGET && ok "⑧f 检出漂移期 done 不�
 git -C "$PROJ" update-ref "refs/heads/$DEFA" "$DX"   # 产出落主支（ff 语义）
 MERGE "$N8L" 2>/dev/null | grep -q '"result":"merged"' && ok "⑧f 产出落主支后补票" || fail "⑧f 产出落主支补票"
 LEDEV "$N8L" merged | grep -q "branch:$DEFA" && ok "⑧f 票面 branch=默认分支（非漂移检出）" || fail "⑧f 票面 branch=默认分支"
+# R2（ocr-5）：夹具自清——主支指针复位漂移前基点，防 drift8f3 提交泄漏进后续段落的夹具基线（账本行保留无妨）
+git -C "$PROJ" update-ref "refs/heads/$DEFA" "$PRE8F"
 git -C "$PROJ" checkout -q "$DEFA"; git -C "$PROJ" branch -q -D drift8f3
 
 # ⑨ 跨仓 wt 形态显式拒（gt-78da A3）：wt_dir 属他仓→CROSS_REPO_WT＋拆分指引；零合并零落账零碰他仓树

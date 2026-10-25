@@ -63,8 +63,9 @@ if [ -z "$WTD" ]; then
   DONEL=$(printf '%s\n' "$TASKL" | grep -E "[|] event:done( |$)" || true)
   # gt-e5cc：多 done 分落多分片（代发 done＋重发 done）时 tail -1 是分片路径序非事件序——
   # 按行内 ts: 字段取最大者；shortcut: ts 字典序跨时区偏移不可比，现全分片同偏移，出现跨时区实体再升级
+  # R2（ocr-4）：全部 done 行无 ts 字段（前 ts 代账本/外来分片）时回落末行——保旧 tail -1 兼容语义
   LASTDONE=$(printf '%s\n' "$DONEL" \
-    | awk '{ if (match($0, /[|] ts:[0-9T:+-]+/)) { t = substr($0, RSTART+5, RLENGTH-5); if (t >= mt) { mt = t; best = $0 } } } END { if (mt != "") print best }' \
+    | awk '{ last = $0; if (match($0, /[|] ts:[0-9T:+-]+/)) { t = substr($0, RSTART+5, RLENGTH-5); if (t >= mt) { mt = t; best = $0 } } } END { if (mt != "") print best; else print last }' \
     || true)
   # gt-e5cc：commit 值容错——复合值「repo@branch:hex,hex + repo2@master:hex」不以 hex 起头（gt-236a 实形），
   # 取字段值内（下一 | 前截断，防垃圾 commit 被后续字段 hex 误赎回）全部 7+ hex run 为候选。
@@ -74,7 +75,7 @@ if [ -z "$WTD" ]; then
   DONEC=$(printf '%s\n' "$LASTDONE" \
     | awk '{ if (!match($0, /[|] commit:/)) next; rest = substr($0, RSTART+9); p = index(rest, "|"); v = (p ? substr(rest, 1, p-1) : rest); while (match(v, /[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]+/)) { print substr(v, RSTART, RLENGTH); v = substr(v, RSTART+RLENGTH) } }' \
     || true)
-  [ -n "$DONEC" ] || fail VALIDATION_FAILED "task $TASK 账本无 done commit（非 wt 闭环缺锚点）"
+  # R2（ocr-1）：零候选分类统一在锚点裁决处（下方 ANCHOR 段），此处不设早门—— actor 链闸先行
   # C-1（gt-7117 评审）actor 链闸：无锚制品时 claimed→done 链＝wt 路径「锚制品仅派发链可造」的替代闸，fail-closed；
   # sed 双侧结构锚（值禁 |，「| actor:x |」字面序自由文本不可得）
   DONEA=$(printf '%s\n' "$LASTDONE" | sed -n 's/.*[|] actor:\([^ |]*\) [|].*/\1/p' || true)
@@ -86,8 +87,10 @@ if [ -z "$WTD" ]; then
   # 共享检出 HEAD 随 worker verify 窗口漂移（checkout 切支），漂移期出票把任务分支记成合并目标
   #（实证：六连票 branch:gt-762a-alive-running、gt-762a 票 branch:gt-236a-two-layer-routing）。
   # 该路径无树操作只做已含补票，默认分支即语义目标（「产出先落主支」）；基点探针同下方重建段
+  # R2（ocr-3）：origin/HEAD 是克隆时记录的仓库默认分支事实，优先于宿主/全局 init.defaultBranch 启发——
+  # 防 main↔master 迁移窗口双支并存时绑错目标（票面 branch 与祖先判据同源错）。无远端/分离 HEAD 自然跳过
   DEFBR=""
-  for _c in "$(git -C "$MAIN" config --get init.defaultBranch 2>/dev/null)" main master; do
+  for _c in "$(git -C "$MAIN" symbolic-ref -q --short refs/remotes/origin/HEAD 2>/dev/null | sed 's|^origin/||')" "$(git -C "$MAIN" config --get init.defaultBranch 2>/dev/null)" main master; do
     [ -n "$_c" ] && git -C "$MAIN" show-ref --verify --quiet "refs/heads/$_c" && { DEFBR="$_c"; break; }
   done
   [ -n "$DEFBR" ] || fail VALIDATION_FAILED "目标分支不可解析: $MAIN（默认分支缺失）"
