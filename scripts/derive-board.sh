@@ -46,10 +46,10 @@ wm, stats = {}, {"incr": 0, "full": 0}
 
 cache = None
 try:
-    # v4（gt-5a59）：merged 已入状态机——v3 缓存水位下的 merged 曾被当 no-op 消费，
-    # 旧缓存必须作废全量重放补账，否则修复合入后看板滞留不自愈
+    # v5（gt-8fe1 C1）：done 出列权威化（先于 retired 盲化＋owner 放宽 None）——v4 缓存水位下的
+    # done 曾被 retired 盲化吞掉，旧缓存必须作废全量重放补账，否则 done 任务 todo 永驻不自愈
     c = json.load(open(CACHE_F))
-    if c.get("v") == 4 and c.get("task_ids") == task_ids and isinstance(c.get("watermark"), dict):
+    if c.get("v") == 5 and c.get("task_ids") == task_ids and isinstance(c.get("watermark"), dict):
         cache = c
 except Exception: pass
 
@@ -73,14 +73,6 @@ if cache:
         last_progress = dict(cache.get("last_progress", {}))
 
 def apply(shard, i, actor, event, f):
-    name = actor.split("@")[0]
-    if event == "retired":
-        retired.add(actor)
-        for t in tasks.values():
-            # gt-ae6f：done 只能经 reopened/merged/cancelled 离场——retired 把 done 任务
-            # 踢回 todo 曾造 gt-bb0b 拾取风暴（视图与 mention 守卫 done_open 口径对齐）
-            if t["owner"] == actor and t["state"] != "done": t.update(state="todo", owner=None)
-        return
     tid = f.get("task")
     if event == "merged" and tid in tasks:
         # gt-5a59：merged＝机械簿记终态（merge.sh 机械票背书，非 actor 的任务主张）——先于 retired 过滤：
@@ -89,14 +81,29 @@ def apply(shard, i, actor, event, f):
         # merge.sh 实操链对 cancelled 任务不发 merged，此形态仅手工/raw 落账可达）
         tasks[tid].update(state="done")
         return
+    if event == "done" and tid in tasks and tasks[tid]["owner"] in (None, actor):
+        # gt-8fe1 C1：done＝出列权威主张（post.sh verify 两段机械真跑背书），先于 retired 盲化——
+        # 活跃 actor 发 wave 让行型 retired 被误盲化后（agora-mcp/dotfiles-orch 实证入 retired 集），
+        # 其 claimed/done 全遭忽略：claimed 丢→owner 恒 None→done 的 owner==actor 判不过→
+        # done 任务永驻 todo（当日 41 条 todo 污染根因）。owner 放宽 None＝未认领任务的 done
+        # （收编代发/直发）同判离板，与 cancelled 的 (None, actor) 口径对齐。
+        # 只修出列：入列面（claimed 对 retired 的盲化）语义不动。
+        tasks[tid].update(state="done")
+        return
+    name = actor.split("@")[0]
+    if event == "retired":
+        retired.add(actor)
+        for t in tasks.values():
+            # gt-ae6f：done 只能经 reopened/merged/cancelled 离场——retired 把 done 任务
+            # 踢回 todo 曾造 gt-bb0b 拾取风暴（视图与 mention 守卫 done_open 口径对齐）
+            if t["owner"] == actor and t["state"] != "done": t.update(state="todo", owner=None)
+        return
     if actor in retired: return
     if event == "claimed" and tid in tasks:
         if tasks[tid]["owner"] is None and tasks[tid]["state"] == "todo":
             tasks[tid].update(state="in-progress", owner=actor)
         elif tasks[tid]["owner"] != actor:
             conflicts.append(f"{tid}: {actor} vs owner {tasks[tid]['owner']} ({shard}:{i})")
-    elif event == "done" and tid in tasks and tasks[tid]["owner"] == actor:
-        tasks[tid].update(state="done")
     elif event == "cancelled" and tid in tasks:
         # 认领者可取消自己的任务；未认领任务任何人可取消（终态，除非 reopened）
         if tasks[tid]["owner"] in (None, actor) and tasks[tid]["state"] != "done":
@@ -225,7 +232,7 @@ _write_optional("cancelled", "Cancelled",
                 [tid for tid in sorted(tasks) if tasks[tid]["state"] == "cancelled"])
 
 os.makedirs(os.path.dirname(CACHE_F), exist_ok=True)
-json.dump({"v": 4, "watermark": wm, "tasks": tasks, "retired": sorted(retired),
+json.dump({"v": 5, "watermark": wm, "tasks": tasks, "retired": sorted(retired),
            "conflicts": conflicts, "last_progress": last_progress,
            "task_ids": task_ids, "stats": stats},
           open(CACHE_F, "w"))

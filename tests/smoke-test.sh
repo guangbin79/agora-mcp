@@ -1068,7 +1068,7 @@ grep -q "$POLLT2" "$AGORA_HOME/board/conflicts.md" \
   && ok "双清 claim 回放兜底入 conflicts" || fail "双清 claim 回放兜底入 conflicts"
 
 echo "===== 增量推导（derive-cache） ====="
-python3 -c "import json;c=json.load(open('$AGORA_HOME/.git/derive-cache.json'));assert c['v']==4 and c['watermark']" \
+python3 -c "import json;c=json.load(open('$AGORA_HOME/.git/derive-cache.json'));assert c['v']==5 and c['watermark']" \
   && ok "增量缓存已建立" || fail "增量缓存已建立"
 S0=$(python3 -c "import json;print(json.load(open('$AGORA_HOME/.git/derive-cache.json'))['stats']['incr'])")
 bash "$PKG/scripts/derive-board.sh"
@@ -1707,6 +1707,42 @@ grep -q "退场收尾三查" "$PKG/scripts/dispatch.sh" && grep -q "知识积累
   && grep -q "worktree 清理确认" "$PKG/scripts/dispatch.sh" && grep -q "遗留项显式注明" "$PKG/scripts/dispatch.sh" \
   && ok "BOOT done 收尾三查清单在场（知识积累/worktree/遗留项）" || fail "BOOT 收尾清单缺失"
 rm -rf "$H7"
+
+echo "===== gt-8fe1：derive done 出列权威化＋doctor seq 核销 ====="
+H8=$(mktemp -d); AH8="$H8/agora"; REPO8="$H8/repo"
+mkdir -p "$REPO8"; (cd "$REPO8" && git init -q . && git -c user.name=t -c user.email=t@l commit -q --allow-empty -m i)
+AGORA_HOME="$AH8" AGORA_PKG="$PKG" bash "$PKG/scripts/init.sh" >/dev/null 2>&1
+mkdir -p "$AH8/wiki/entities"
+printf -- '---\nname: px\ndirs:\n  - %s\ncan_spawn: true\n---\n' "$REPO8" > "$AH8/wiki/entities/px.md"
+(cd "$AH8" && git add -A && AGORA_MECHANICAL=1 git commit -qm ent >/dev/null)
+P8() { AGORA_HOME="$AH8" bash "$PKG/scripts/post.sh" --actor "$@"; }
+X1=$(TITLE="retired盲化done" VERIFY=true PROJECT_DIR="$REPO8" AGORA_HOME="$AH8" TC)
+X1=$(echo "$X1" | sed -n 's/.*"task":"\(gt-[0-9a-f]*\)".*/\1/p')
+P8 px@repo --project repo --event retired --reason "wave 让行" >/dev/null   # wave 让行型 retired——活跃 actor 被误盲化（当日实证形态）
+P8 px@repo --project repo --event claimed --task "$X1" >/dev/null
+P8 px@repo --project repo --event done --task "$X1" --commit HEAD --evidence x >/dev/null
+AGORA_HOME="$AH8" bash "$PKG/scripts/derive-board.sh" >/dev/null
+grep -q "^- $X1$" "$AH8/board/todo.md" \
+  && fail "C1-a：retired 盲化吞 done，任务滞 todo" || ok "C1-a：retired 盲化下 done 出列（先于盲化，todo 无此任务）"
+X2=$(TITLE="未认领done" VERIFY=true PROJECT_DIR="$REPO8" AGORA_HOME="$AH8" TC)
+X2=$(echo "$X2" | sed -n 's/.*"task":"\(gt-[0-9a-f]*\)".*/\1/p')
+P8 px@repo --project repo --event done --task "$X2" --commit HEAD --evidence x >/dev/null
+AGORA_HOME="$AH8" bash "$PKG/scripts/derive-board.sh" >/dev/null
+grep -q "^- $X2$" "$AH8/board/todo.md" \
+  && fail "C1-b：未认领 done 滞 todo" || ok "C1-b：未认领任务直发 done 出列（owner 放宽 None）"
+# C2：seq 缺口 → doctor 红 rc1 → diagnosed seq-waive 核销 → ok rc0（不删行，runbook §seq）
+FP8="$AH8/log/$(date +%F)/px.md"
+mkdir -p "$(dirname "$FP8")"
+printf -- '- seq:99 | ts:%s | actor:px@repo | event:proposal | idem:seqgapfix8fe1 | seen:repo@1 | body:注入缺口行\n' "$(date -Is)" >> "$FP8"
+OUT=$(AGORA_HOME="$AH8" bash "$PKG/scripts/doctor.sh" 2>&1); RC=$?
+echo "$OUT" | grep -q "seq 断档" && [ "$RC" = 1 ] \
+  && ok "C2：seq 缺口未核销置红 rc1" || fail "C2 缺口应红（rc=$RC $OUT）"
+P8 px@repo --project repo --event diagnosed --task "$X1" \
+  --conclusion "seq-waive=px.md:px@repo 缺口行已人工核对（gt-8fe1 测试注入；不删行留痕口径）" >/dev/null
+OUT=$(AGORA_HOME="$AH8" bash "$PKG/scripts/doctor.sh" 2>&1); RC=$?
+echo "$OUT" | grep -q "已核销" && [ "$RC" = 0 ] \
+  && ok "C2：diagnosed seq-waive 核销后 ok rc0" || fail "C2 核销未生效（rc=$RC $OUT）"
+rm -rf "$H8"
 
 # --- post.sh 读取侧三件 + board 心跳 age（gt-4ea1 F/E）---
 # 坏名（含反斜杠）dispatcher 拒 done + fail 零写入（全新 project 无 shard 残留）
@@ -3039,17 +3075,17 @@ bash "$PKG/scripts/derive-board.sh"
   && ok "② done 后 blocked 不入 blocked 栏（前置守卫）" || fail "② done 被拖进 blocked（gt-40cc，$MB2）"
 ! grep -q "$MB3" "$AGORA_HOME/board/todo.md" \
   && ok "③ reopened→todo→merged 离场（sweep 补账生效）" || fail "③ merged 后永驻 todo（gt-35b5，$MB3）"
-# ⑤ v3→v4 迁移自愈（ocr-R1#6）：毒化 v3 缓存（merged 任务拨回 todo）→ derive 须作废缓存全量重放补账
+# ⑤ v4→v5 迁移自愈（ocr-R1#6 gt-0105 先例；gt-8fe1 起当前版 v5）：毒化 v4 缓存（done 任务拨回 todo）→ derive 须作废缓存全量重放补账
 python3 -c "
 import json
 f = '$AGORA_HOME/.git/derive-cache.json'
 c = json.load(open(f))
-c['v'] = 3; c['tasks']['$MB3']['state'] = 'todo'
+c['v'] = 4; c['tasks']['$MB3']['state'] = 'todo'
 json.dump(c, open(f, 'w'))"
 bash "$PKG/scripts/derive-board.sh"
 ! grep -q "$MB3" "$AGORA_HOME/board/todo.md" \
-  && python3 -c "import json;c=json.load(open('$AGORA_HOME/.git/derive-cache.json'));assert c['v']==4" \
-  && ok "⑤ 毒化 v3 缓存被作废：全量重放自愈＋v4" || fail "⑤ 旧缓存未自愈（$MB3 滞留或版本未翻新）"
+  && python3 -c "import json;c=json.load(open('$AGORA_HOME/.git/derive-cache.json'));assert c['v']==5" \
+  && ok "⑤ 毒化 v4 缓存被作废：全量重放自愈＋v5" || fail "⑤ 旧缓存未自愈（$MB3 滞留或版本未翻新）"
 # ④ retired 盲化回归：收工会话误发 retired 把共享 actor 整体拉黑（真账本实证 126 条），其后的
 # 机械 merged 补账不得被盲——merged 是 merge.sh 机械票终态，非 actor 任务主张
 # 注意：此后本套件 AGORA_HOME 内 agora-mcp@proj 被 derive 永久盲化（retired 不可逆），勿再以该

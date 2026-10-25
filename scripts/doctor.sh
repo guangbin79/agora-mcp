@@ -11,12 +11,24 @@ ok()   { echo "ok   | $1"; }
 warn() { echo "warn | $1"; }
 bad()  { echo "fail | $1 | 恢复: $2"; FAIL=1; }
 
-# 1. seq 对账：每 actor 在每分片内 seq 连续无重号
-SEQ_BAD=$(PYTHONPATH="$(cd "$(dirname "$0")" && pwd)${PYTHONPATH:+:$PYTHONPATH}" python3 - <<'PYEOF'
-import glob, os, collections
+# 1. seq 对账：每 actor 在每分片内 seq 连续无重号。
+#    核销通道（gt-8fe1 C2，runbook §seq「不删行，发 diagnosed 记录」口径）：账本 diagnosed 事件
+#    conclusion 含 seq-waive=<分片名>:<actor> 标注＝该 (分片, actor) 的存量断档/重号已人工核对
+#    git log 定位并留痕——doctor 转 ok（注明已核销）不再置红；未核销的照旧红。
+#    粒度取分片 basename＋actor（date 目录不入键：标注针对该分片文件的存量事实）。
+SEQ_OUT=$(PYTHONPATH="$(cd "$(dirname "$0")" && pwd)${PYTHONPATH:+:$PYTHONPATH}" python3 - <<'PYEOF'
+import glob, os, collections, re, sys
 import agora_lib as lib
 HOME = os.environ["AGORA_HOME"]
-bad = []
+waived = set()
+for f in (glob.glob(f"{HOME}/log/*/*.md") + glob.glob(f"{HOME}/log/*/.*.md")):
+    with open(f, encoding="utf-8", errors="replace") as fh:
+        for line in fh:
+            e = lib.parse_event(line)
+            if e and e["event"] == "diagnosed":
+                for m in re.finditer(r"seq-waive=([^\s:|]+):(\S+)", e.get("conclusion") or ""):
+                    waived.add((m.group(1), m.group(2)))
+bad, waived_n = [], 0
 for f in (glob.glob(f"{HOME}/log/*/*.md") + glob.glob(f"{HOME}/log/*/.*.md")):
     seqs = collections.defaultdict(list)
     with open(f, encoding="utf-8", errors="replace") as fh:
@@ -24,11 +36,19 @@ for f in (glob.glob(f"{HOME}/log/*/*.md") + glob.glob(f"{HOME}/log/*/.*.md")):
             e = lib.parse_event(line)
             if e: seqs[e["actor"]].append(e["seq"])
     for actor, ss in seqs.items():
-        if sorted(ss) != list(range(1, len(ss)+1)): bad.append(f"{f}:{actor}:{ss}")
+        if sorted(ss) != list(range(1, len(ss)+1)):
+            if (os.path.basename(f), actor) in waived: waived_n += 1
+            else: bad.append(f"{f}:{actor}:{ss}")
 print("\n".join(bad))
+print(f"WAIVED_HITS={waived_n}")
 PYEOF
 )
-[[ -z "$SEQ_BAD" ]] && ok "seq 对账" || bad "seq 断档/重号: $SEQ_BAD" "doctor.sh --fix 无法修复时，查 doctor-runbook §seq"
+SEQ_BAD=$(printf '%s\n' "$SEQ_OUT" | grep -v '^WAIVED_HITS=' || true)
+SEQ_WAIVE_N=$(printf '%s\n' "$SEQ_OUT" | sed -n 's/^WAIVED_HITS=//p')
+[[ -z "$SEQ_BAD" ]] && { [[ "${SEQ_WAIVE_N:-0}" -gt 0 ]] \
+  && ok "seq 对账（存量红已核销 ${SEQ_WAIVE_N} 项——diagnosed seq-waive 留痕，runbook §seq）" \
+  || ok "seq 对账"; } \
+  || bad "seq 断档/重号: $SEQ_BAD" "doctor.sh --fix 无法修复时，查 doctor-runbook §seq（核销：diagnosed conclusion 附 seq-waive=<分片名>:<actor>）"
 
 # 2. idem 完整性：同一 (actor, task) 子序列内"连续"重复 idem 才是重试残留异常；
 #    隔着其他事件的相同 idem 是合法状态迁移（如 reopen 后再次 claimed），不算异常
