@@ -25,6 +25,8 @@ while [[ $# -gt 0 ]]; do case "$1" in
 esac; done
 [[ -z "$ROLE" || "$ROLE" == worker || "$ROLE" == dispatcher ]] || { echo '{"code":"VALIDATION_FAILED","message":"--role 须 worker/dispatcher"}' >&2; exit 2; }
 [[ "$CHECK" == 0 || -z "$ROLE" ]] || { echo '{"code":"VALIDATION_FAILED","message":"--check-only 与 --role 互斥"}' >&2; exit 2; }
+[[ "$DEREG" == 0 || "$CHECK" == 0 ]] || { echo '{"code":"VALIDATION_FAILED","message":"--deregister 与 --check-only 互斥"}' >&2; exit 2; }   # R2#5：静默吞旗标＝此仓 ocr 明令禁止的行为类
+[[ "$DEREG" == 0 || -z "$ROLE" ]] || { echo '{"code":"VALIDATION_FAILED","message":"--deregister 与 --role 互斥"}' >&2; exit 2; }
 [[ -n "$SID" && ( -n "$ENT" || -n "$CWD" ) ]] || { echo '{"code":"VALIDATION_FAILED","message":"--sid 与 --cwd/--entity 必填"}' >&2; exit 2; }
 [[ "$SID" =~ ^[^[:space:][:cntrl:]]{1,128}$ ]] || { echo '{"code":"VALIDATION_FAILED","message":"--sid 含空白/控制字符或超 128 字符（sessions.map 行伪造面），拒绝"}' >&2; exit 2; }
 HINT="bash $SCRIPTS_DIR/register-session.sh --sid <会话id> --cwd <项目目录> 注册；或重启会话（注册 hook 自动登记）；或 post(proposal) 自报名"

@@ -44,7 +44,8 @@ PYEOF
     ;;
   get)
     [[ $# -eq 3 ]] || { echo '{"code":"VALIDATION_FAILED","message":"get 需 task role 两参"}' >&2; exit 2; }
-    awk -v t="$TASK" -v r="$ROLE" '!/^#/ && $1==t && $2==r {print $4; exit}' "$RF" 2>/dev/null || true
+    # 输出 entity sid（R2#2：消费端须核行实体==信件收件实体，防跨实体误投）
+    awk -v t="$TASK" -v r="$ROLE" '!/^#/ && $1==t && $2==r {print $3, $4; exit}' "$RF" 2>/dev/null || true
     ;;
   *) echo '{"code":"VALIDATION_FAILED","message":"unknown subcommand（upsert/get）"}' >&2; exit 2 ;;
 esac

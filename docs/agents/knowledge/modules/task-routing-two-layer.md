@@ -9,5 +9,7 @@
 4. **去抖与活性按 (entity,sid) 粒度**：精准 sid 失败不堵兜底行；桥侧 TTL 活性闸（AGORA_SESSION_TTL_H 同源）＋who 鉴别＋poll 保洁三层。同名变量夹具撞车课：smoke 全局 P/REG 早被占用，测试局部赋值污染后续段——新夹具变量须 grep 全文件查重。
 
 ## 边界
-- hook 采集依赖 enforcer 运行（headless 直调/他 harness 不采集→fallback 覆盖不劣化）；session.deleted 退出注销 best-effort（SIGKILL 形态 TTL 兜底）；routing 行 sid 为 hook 自报，伪造面同 sessions.map（消费端白名单＋who 双闸）。
+- hook 采集依赖 enforcer 运行（headless 直调/他 harness 不采集→fallback 覆盖不劣化）；session.deleted 退出注销 best-effort（SIGKILL 形态 TTL 兜底）；routing 行 sid 为 hook 自报，伪造面同 sessions.map（消费端白名单＋who 双闸——精准层 R 行同闸，评审 C 册路径逃逸实弹闭合）。
 - 退出注销/活性刷新基建复用 gt-6fa8（f693786/fe108cc）；注入鉴别/落痕/计数语义沿用 gt-893a 契约（notify-bridge-target-selection 页）。
+- **delegated 排除的边界细化（R2）**：delegated 不投仅约束**兜底广播的实体信**（信箱看门人纪律）；精准层 R 行＝任务亲和定向，delegated worker 会话正是设计投递目标（同 post.sh T3 ack 注入先例），只挡 dead。
+- **订阅面拒收语义（R2）**：角色过滤拒绝＝设计内跳过（推水位 rc0），非投递失败——纯 role-skip 不得挂死 inbox 流水线/涨 fail；stale/dead 等身份或时间恒常过滤仍 fail 可见＋占频。

@@ -44,7 +44,12 @@ bump_fail() { # $1=entity——失败计数累加；读值 sanitize（gt-893a �
   echo $(( n + 1 )) > "$WM_DIR/$1.fail"
 }
 
-evt_in() { [[ -n "${2:-}" && " $1 " == *" $2 "* ]]; }   # $1=事件清单 $2=事件；空事件恒假（B 册空针修复：无 summary 信不误判 progress 静默吞）
+evt_in() { # $1=事件清单 $2=事件；字面比对（R2#3：[[ == ]] 右侧未引号展开＝glob 元字符注入面，信件是不可信共享文本）；空事件恒假
+  local w
+  [[ -n "${2:-}" ]] || return 1
+  for w in $1; do [[ "$w" == "$2" ]] && return 0; done
+  return 1
+}
 
 notify() { # $1=entity $2=ref $3=event $4=task → rc0=投递成功/设计内跳过；rc1=投递失败（scan 不推进水位）
   local ent="$1" ref="$2" ev="${3:-}" task="${4:-}"
@@ -64,6 +69,12 @@ notify() { # $1=entity $2=ref $3=event $4=task → rc0=投递成功/设计内跳
     if evt_in "$DISPATCHER_EVENTS" "$ev"; then rrole=dispatcher
     elif evt_in "$WORKER_EVENTS" "$ev"; then rrole=worker; fi
     [[ -n "$rrole" ]] && routed=$(bash "$SCRIPTS_DIR/task-routing.sh" get "$task" "$rrole" 2>/dev/null || true)
+    # 实体匹配（R2#2）：routing 行 (task,role) 全局唯一，信件收件实体≠行实体（如 watchdog diagnosed
+    # 同时 mention owner,disp）时视为无行——落兜底广播，禁跨实体误投＋禁 kind=R 单点吞掉真收件人
+    if [[ -n "$routed" ]]; then
+      read -r rt_ent routed <<< "$routed"
+      [[ "$rt_ent" == "$ent" ]] || { dbg "$ent" "$rt_ent" "skip routed-entity-mismatch task=$task"; routed=""; }
+    fi
     # 精准层同过消费端白名单硬闸（C 册实弹：写侧完整性校验放行 / 与点段，routed sid 逐字进
     # API URL 与 debounce 文件路径——../ 层数加深可落点任意；与兜底层同一闸同一口径）
     if [[ -n "$routed" && ( ! "$routed" =~ ^[A-Za-z0-9._-]+$ || "$routed" =~ ^\.\.?$ ) ]]; then
@@ -81,28 +92,32 @@ notify() { # $1=entity $2=ref $3=event $4=task → rc0=投递成功/设计内跳
       "$AGORA_HOME/sessions.map" 2>/dev/null | sort -u | tr "\n" ",")
   [[ -n "$bad" ]] && dbg "$ent" "${bad%,}" "skip bad-sid"
   local ttl_h="${AGORA_SESSION_TTL_H:-24}" cutoff=0
-  [[ "$ttl_h" =~ ^[0-9]+$ ]] || ttl_h=24   # sanitize（gt-893a B1 同类：非数字 env 不得经 set -u/算术展开错杀 daemon）
+  [[ "$ttl_h" =~ ^-?[0-9]+$ ]] || ttl_h=24   # sanitize（gt-893a B1 同类）；负数放行由下方 >0 判定＝不限（R2#9 对齐 register/poll「<=0=不清」契约）
   (( ttl_h > 0 )) && cutoff=$(( now - ttl_h * 3600 ))
   declare -A seen=()
-  local try_list=""
+  local try_list="" role_skip=0 hard_skip=0
   [[ -n "$routed" ]] && try_list="R $routed - -"$'\n'
   while read -r ts sid rowrole; do
     [[ -n "$sid" ]] || continue
     [[ -n "${seen[$sid]:-}" ]] && continue
     seen[$sid]=1
-    # 行级角色过滤（兜底广播；精准层由方向表定位，不受此滤）
+    # 行级角色过滤（兜底广播；精准层由方向表定位，不受此滤）。订阅面拒收只置 role_skip 标记
+    # （R2#1：全行拒收＝设计内跳过 rc0 推水位，不得以 fail 挂死整条 inbox 流水线）
     if [[ -n "$rowrole" && "$rowrole" != "-" ]]; then
       if [[ "$rowrole" == worker ]] && ! evt_in "$WORKER_EVENTS" "$ev"; then
-        dbg "$ent" "$sid" "skip role-filter ev=$ev role=$rowrole"; continue
+        dbg "$ent" "$sid" "skip role-filter ev=$ev role=$rowrole"; role_skip=1; continue
       fi
       if [[ "$rowrole" == dispatcher ]] && ! evt_in "$DISPATCHER_EVENTS" "$ev"; then
-        dbg "$ent" "$sid" "skip role-filter ev=$ev role=$rowrole"; continue
+        dbg "$ent" "$sid" "skip role-filter ev=$ev role=$rowrole"; role_skip=1; continue
       fi
     fi
-    # TTL 活性闸：ts 解析失败视为存疑放行（who 鉴别兜底；poll 双失败存疑不动同口径）
+    # TTL 活性闸：ts 解析失败视为存疑放行（who 鉴别兜底；poll 双失败存疑不动同口径）。
+    # stale＝硬过滤（占频：R2#6 全过滤路径去抖防 who 风暴）
     tse=0; [[ -n "$ts" ]] && tse=$(date -d "$ts" +%s 2>/dev/null || echo 0)
     if (( cutoff > 0 && tse > 0 && tse < cutoff )); then
-      dbg "$ent" "$sid" "skip stale ts=$ts"; continue
+      dbg "$ent" "$sid" "skip stale ts=$ts"; hard_skip=1
+      echo "$now" > "$WM_DIR/$ent.$sid.sent" 2>/dev/null || :
+      continue
     fi
     try_list+="F $sid $rowrole $ts"$'\n'
   done <<< "$cands"
@@ -113,9 +128,17 @@ notify() { # $1=entity $2=ref $3=event $4=task → rc0=投递成功/设计内跳
     # 去抖 (entity,sid)：目标粒度占频（精准 sid 失败不堵兜底行）
     sf="$WM_DIR/$ent.$sid.sent"
     last=$(cat "$sf" 2>/dev/null || echo 0)
+    [[ "$last" =~ ^[0-9]+$ ]] || last=0   # sanitize（R2#8：(()) 算术递归展开注入面，同 bump_fail/TTL 先例）
     if (( now - last < DEBOUNCE )); then debounce_hit=1; continue; fi
     if w=$(bash "$SCRIPTS_DIR/runtime/opencode.sh" who "$sid"); then
-      if [[ "$w" == delegated || "$w" == dead ]]; then dbg "$ent" "$sid" "skip $w"; continue; fi
+      # delegated/dead＝身份恒常（title/parentID 与 outcome 持久化）→占频防 who 风暴（R2#6）。
+      # 例外（R2#7）：精准层 R 行＝任务亲和定向（同 post.sh T3 ack 注入先例），delegated worker
+      # 会话正是设计投递目标——只挡 dead；兜底 F 行维持实体信不投 delegated（gt-893a 边界）
+      if [[ "$w" == dead || ( "$w" == delegated && "$kind" == F ) ]]; then
+        dbg "$ent" "$sid" "skip $w kind=$kind"
+        echo "$now" > "$sf" 2>/dev/null || :
+        continue
+      fi
     else
       dbg "$ent" "$sid" "who-unreachable fallback"   # API 不可鉴别（stub/僵死）＝退回旧尽力注入语义
     fi
@@ -152,6 +175,11 @@ notify() { # $1=entity $2=ref $3=event $4=task → rc0=投递成功/设计内跳
   if (( injectable == 0 )); then
     if (( debounce_hit > 0 )); then
       return 1   # 去抖期＝本轮未投，消息保持 pending（下轮重试），不算失败
+    fi
+    if (( role_skip > 0 && hard_skip == 0 )); then
+      # 订阅面拒收＝设计内跳过（R2#1）：角色订阅说「此信非你收」——推水位不挂队列不涨 fail
+      dbg "$ent" "-" "role-skip-silent ev=$ev"
+      return 0
     fi
     dbg "$ent" "-" "fail no-live-interactive"   # 条目在但全被过滤＝失败可见不得静默丢提醒
     bump_fail "$ent"

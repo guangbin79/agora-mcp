@@ -920,12 +920,12 @@ printf '%s' '{"data":{"title":"disp行"}}' > "$NB_HOME/who/ses-df.json"
 msg_add_ev rf1 done gt-236d
 rt_reset rf1; NB
 [[ $(nb_calls) == 0 && $(grep -c "sid=ses-wf skip role-filter ev=done role=worker" "$DBGLOG") == 1 \
-    && "$(cat "$AGORA_HOME/.git/notify-wm/rf1.fail")" == 1 ]] \
-  && ok "worker 行不收终态信（角色过滤，gt-236a③a）" || fail "gt-236a③a worker 过滤不符"
+    && -f "$AGORA_HOME/.git/notify-wm/rf1" && ! -f "$AGORA_HOME/.git/notify-wm/rf1.fail" ]] \
+  && ok "worker 行不收终态信（角色过滤＝设计内跳过推水位，gt-236a③a）" || fail "gt-236a③a worker 过滤不符"
 msg_add_ev rf2 ack gt-236d
 rt_reset rf2; NB
 [[ $(nb_calls) == 0 && $(grep -c "sid=ses-df skip role-filter ev=ack role=dispatcher" "$DBGLOG") == 1 \
-    && "$(cat "$AGORA_HOME/.git/notify-wm/rf2.fail")" == 1 ]] \
+    && -f "$AGORA_HOME/.git/notify-wm/rf2" && ! -f "$AGORA_HOME/.git/notify-wm/rf2.fail" ]] \
   && ok "dispatcher 行不收派发/修正信（角色过滤，gt-236a③b）" || fail "gt-236a③b dispatcher 过滤不符"
 # ⑤ 精准层定向：routing 指向非最新行 sid（2508 场景正解——同实体多活行只投亲和 sid）
 map_add rt1 ses-r1 "2027-01-01T00:00:00+08:00"
@@ -960,9 +960,10 @@ rt_reset rt3; NB
 RT_ADD gt-236c dispatcher rtX sidX; RT_ADD gt-236c dispatcher rtX sidY; RT_ADD gt-236c worker rtX sidW
 [[ $(grep -c '^gt-236c dispatcher ' "$AGORA_HOME/.git/task-routing") == 1 \
     && $(grep -c '^gt-236c worker ' "$AGORA_HOME/.git/task-routing") == 1 \
-    && "$(bash "$PKG/scripts/task-routing.sh" get gt-236c dispatcher)" == sidY \
-    && "$(bash "$PKG/scripts/task-routing.sh" get gt-236c worker)" == sidW ]] \
-  && ok "task-routing upsert 幂等原位刷＋role 分行＋get（gt-236a⑧）" || fail "gt-236a⑧ routing 不符"
+    && "$(bash "$PKG/scripts/task-routing.sh" get gt-236c dispatcher | awk '{print $2}')" == sidY \
+    && "$(bash "$PKG/scripts/task-routing.sh" get gt-236c dispatcher | awk '{print $1}')" == rtX \
+    && "$(bash "$PKG/scripts/task-routing.sh" get gt-236c worker | awk '{print $2}')" == sidW ]] \
+  && ok "task-routing upsert 幂等原位刷＋role 分行＋get 输出 entity sid（gt-236a⑧）" || fail "gt-236a⑧ routing 不符"
 bash "$PKG/scripts/task-routing.sh" upsert bad-id dispatcher e s >/dev/null 2>&1; [[ $? -eq 2 ]] \
   && bash "$PKG/scripts/task-routing.sh" upsert gt-236c badrole e s >/dev/null 2>&1; [[ $? -eq 2 ]] \
   && ok "task-routing 非法形态拒绝 rc2（gt-236a⑧b）" || fail "gt-236a⑧b 校验不符"
@@ -1004,6 +1005,25 @@ rt_reset st2
 AGORA_SESSION_TTL_H=abc NB; RC236=$?
 [[ $RC236 -eq 0 && $(grep -c "sid=ses-st2 skip stale ts=2020" "$DBGLOG") == 1 ]] \
   && ok "TTL_H 非数字 sanitize 不炸桥＋回落缺省（gt-236a⑫）" || fail "gt-236a⑫ sanitize 不符（rc=$RC236）"
+# ⑬ 精准层实体匹配（R2#2）：routing 行属他实体→视为无行落兜底，禁跨实体误投
+map_add mm1 ses-mm "2027-01-01T00:00:00+08:00"
+printf '%s' '{"data":{"title":"mm"}}' > "$NB_HOME/who/ses-mm.json"
+RT_ADD gt-236f dispatcher OTHER-ENT ses-other
+msg_add_ev mm1 done gt-236f
+rt_reset mm1; NB
+[[ $(grep -cE 'api/session/ses-other' "$NB_HOME/calls.log") == 0 \
+    && $(grep -c "skip routed-entity-mismatch task=gt-236f" "$DBGLOG") == 1 \
+    && $(grep -c "sid=ses-mm inject-ok.*kind=F" "$DBGLOG") == 1 ]] \
+  && ok "精准层跨实体拒投落兜底（gt-236a⑬）" || fail "gt-236a⑬ 实体匹配不符"
+# ⑭ 精准层定向 delegated worker 会话照投（R2#7：任务亲和定向同 post.sh T3 ack 注入先例；
+# delegated 排除仅约束兜底广播的实体信），dead 照旧拦截
+map_add wd1 ses-wd "2027-01-01T00:00:00+08:00"
+printf '%s' '{"data":{"parentID":"ses_p","title":"agora: gt-236g worker"}}' > "$NB_HOME/who/ses-wd.json"
+RT_ADD gt-236a7 worker wd1 ses-wd
+msg_add_ev wd1 ack gt-236a7
+rt_reset wd1; NB
+[[ $(nb_calls) == 1 && $(grep -c "sid=ses-wd inject-ok.*kind=R" "$DBGLOG") == 1 ]] \
+  && ok "精准层定向 delegated worker 会话照投（gt-236a⑭）" || fail "gt-236a⑭ 定向 worker 不符"
 
 echo "===== 项目注册表（wiki/projects） ====="
 # 注册项目页（tester 注册 $PROJ，带默认 verify）
