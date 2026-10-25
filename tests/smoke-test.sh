@@ -779,7 +779,9 @@ grep -q '"delivery": "queue"' "$NB_HOME/last_prompt.json" && grep -q "agora_chec
   && ok "通知桥 queue 投递 + 只递提醒" || fail "通知桥 queue 投递 + 只递提醒"
 echo "- from:x | ts:y | ref:log/z.md:2 | summary:ack gt-0000" > "$AGORA_HOME/inbox/tester/$(date +%s%N)n2.md"
 NB
-[[ $(nb_calls) == 1 ]] && ok "通知桥 60s 去抖" || fail "通知桥 60s 去抖"
+# gt-236a：广播语义下同实体他新鲜行可投（双收），但 (entity,sid) 去抖必须保证同 sid 60s 内不重投
+[[ $(grep -c 'PROMPT-OK /api/session/ses-test/prompt' "$NB_HOME/calls.log") == 1 ]] \
+  && ok "通知桥 60s 去抖（(entity,sid) 粒度：同 sid 不重投）" || fail "通知桥 60s 去抖（(entity,sid) 粒度）"
 # 回归哨兵：桥零消费 AGORA_OPENCODE_URL（死变量）；若传输回退 HTTP 且读它，死端口必败、断言必红
 printf '%s tester2 ses-t2 %s\n' "$(hostname)" "$(date -Iseconds)" >> "$AGORA_HOME/sessions.map"
 mkdir -p "$AGORA_HOME/inbox/tester2"
@@ -933,10 +935,10 @@ printf '%s' '{"data":{"title":"r2"}}' > "$NB_HOME/who/ses-r2.json"
 RT_ADD gt-236b dispatcher rt1 ses-r1
 msg_add_ev rt1 done gt-236b
 rt_reset rt1; NB
-P=$(grep -o 'PROMPT-OK /api/session/ses-r[0-9]/prompt' "$NB_HOME/calls.log" | sort -u)
-[[ $(nb_calls) == 1 && "$P" == "PROMPT-OK /api/session/ses-r1/prompt" \
+P236=$(grep -o 'PROMPT-OK /api/session/ses-r[0-9]/prompt' "$NB_HOME/calls.log" | sort -u)
+[[ $(nb_calls) == 1 && "$P236" == "PROMPT-OK /api/session/ses-r1/prompt" \
     && $(grep -c "sid=ses-r1 inject-ok.*kind=R" "$DBGLOG") == 1 ]] \
-  && ok "精准层定向：只投 task-routing 亲和 sid（非最新行，gt-236a⑤）" || fail "gt-236a⑤ 定向不符（$P）"
+  && ok "精准层定向：只投 task-routing 亲和 sid（非最新行，gt-236a⑤）" || fail "gt-236a⑤ 定向不符（$P236）"
 # ⑥ 定向失败 fallback：routing 指 dead sid→落兜底广播活行
 map_add rt2 ses-r3 "2027-01-01T00:00:00+08:00"
 printf '%s' '{"data":{"title":"r3"}}' > "$NB_HOME/who/ses-r3.json"
@@ -965,18 +967,18 @@ bash "$PKG/scripts/task-routing.sh" upsert bad-id dispatcher e s >/dev/null 2>&1
   && bash "$PKG/scripts/task-routing.sh" upsert gt-236c badrole e s >/dev/null 2>&1; [[ $? -eq 2 ]] \
   && ok "task-routing 非法形态拒绝 rc2（gt-236a⑧b）" || fail "gt-236a⑧b 校验不符"
 # ⑨ register-session --role 写入/保留/覆写＋--deregister 幂等
-REG() { bash "$PKG/scripts/register-session.sh" "$@"; }
-REG --sid ses-rr --entity rtt --role worker >/dev/null \
+REGS() { bash "$PKG/scripts/register-session.sh" "$@"; }
+REGS --sid ses-rr --entity rtt --role worker >/dev/null \
   && [[ $(awk '$3=="ses-rr" {print $5}' "$AGORA_HOME/sessions.map") == worker ]] \
-  && REG --sid ses-rr --entity rtt >/dev/null \
+  && REGS --sid ses-rr --entity rtt >/dev/null \
   && [[ $(awk '$3=="ses-rr" {print $5}' "$AGORA_HOME/sessions.map") == worker ]] \
-  && REG --sid ses-rr --entity rtt --role dispatcher >/dev/null \
+  && REGS --sid ses-rr --entity rtt --role dispatcher >/dev/null \
   && [[ $(awk '$3=="ses-rr" {print $5}' "$AGORA_HOME/sessions.map") == dispatcher ]] \
-  && REG --sid ses-rr --entity rtt --deregister >/dev/null \
+  && REGS --sid ses-rr --entity rtt --deregister >/dev/null \
   && [[ $(awk '$3=="ses-rr"' "$AGORA_HOME/sessions.map" | wc -l) == 0 ]] \
-  && REG --sid ses-rr --entity rtt --deregister >/dev/null \
+  && REGS --sid ses-rr --entity rtt --deregister >/dev/null \
   && ok "register-session --role 写入/保留/覆写＋--deregister 幂等（gt-236a⑨）" || fail "gt-236a⑨ 注册面不符"
-REG --sid ses-rr2 --entity rtt --role badrole >/dev/null 2>&1; [[ $? -eq 2 ]] \
+REGS --sid ses-rr2 --entity rtt --role badrole >/dev/null 2>&1; [[ $? -eq 2 ]] \
   && ok "register-session 非法 role 拒绝 rc2（gt-236a⑨b）" || fail "gt-236a⑨b 校验不符"
 
 echo "===== 项目注册表（wiki/projects） ====="
