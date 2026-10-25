@@ -310,10 +310,13 @@ exec 8>&-
 
 # gt-8a3c：spawn 成功后登记子会话进 sessions.map——通知桥唯一路由源，此前全链无写入方（通知静默根因）；
 # gt-6bef：写入口收敛 register-session.sh（注册/刷新/upsert 单源，幂等同 (host,entity,sid) 原位刷 ts，
-# 重派新 sid 自然换绑——桥取同实体最新一条）。尽力而为：写失败不翻转已成功的派发（账本已 dispatched，
-# 假失败引发重复重派）；锁忙＝保洁进行中，跳过本轮登记
+# 重派新 sid 自然换绑——桥取同实体最新一条）。gt-236a：--role worker（兜底广播行级角色过滤）＋
+# task-routing (task,worker) 亲和行（桥精准层定向；重派 spawn 即刷新——worker 重绑同一写入点）。
+# 尽力而为：写失败不翻转已成功的派发（账本已 dispatched，假失败引发重复重派）；锁忙＝保洁进行中，
+# 跳过本轮登记
 register_session() {
-  AGORA_HOME="$AGORA_HOME" bash "$SCRIPTS_DIR/register-session.sh" --sid "$SID" --entity "$CHILD" >/dev/null 2>&1 || :
+  AGORA_HOME="$AGORA_HOME" bash "$SCRIPTS_DIR/register-session.sh" --sid "$SID" --entity "$CHILD" --role worker >/dev/null 2>&1 || :
+  AGORA_HOME="$AGORA_HOME" bash "$SCRIPTS_DIR/task-routing.sh" upsert "$TASK" worker "$CHILD" "$SID" >/dev/null 2>&1 || :
 }
 
 # 凭据预写（幂等重写）＋ spawn ＋ 验证窗 ＋ 有界重试（一次）

@@ -826,6 +826,8 @@ case "$P" in
     [ "$(cat "$FH/ctrl" 2>/dev/null || echo none)" = inject_fail ] && exit 1
     echo "$D" > "$FH/last_prompt.json"; log "PROMPT-OK $P"; exit 0 ;;
   /api/session/*)
+    WSID=$(basename "${P#/api/session/}")   # gt-236a：per-sid who 覆盖优先，回落全局 who.json
+    [ -f "$FH/who/$WSID.json" ] && { cat "$FH/who/$WSID.json"; exit 0; }
     [ -f "$FH/who.json" ] && { cat "$FH/who.json"; exit 0; }
     echo "not found" >&2; exit 1 ;;
 esac
@@ -879,6 +881,103 @@ NB
     && $(grep -c "entity=worker4 sid=- skip no-map-entry" "$DBGLOG") == 0 \
     && "$(cat "$AGORA_HOME/.git/notify-wm/worker4.fail")" == 1 ]] \
   && ok "污染 sid 白名单拦截＋损坏计数 sanitize（gt-893a④）" || fail "gt-893a④ 白名单/sanitize 不符"
+
+# ─── gt-236a：两层路由＋角色订阅＋退出注销 ───
+# 夹具：who/<sid>.json per-sid 鉴别（stub 已扩）；task-routing 行经产品脚本写入
+RT_ADD() { bash "$PKG/scripts/task-routing.sh" upsert "$@" >/dev/null; }
+map_add_ts() { printf '%s %s %s %s\n' "$(hostname)" "$1" "$2" "$3" >> "$AGORA_HOME/sessions.map"; }
+map_add_role() { printf '%s %s %s %s %s\n' "$(hostname)" "$1" "$2" "2027-01-01T00:00:00+08:00" "$3" >> "$AGORA_HOME/sessions.map"; }
+msg_add_ev() { mkdir -p "$AGORA_HOME/inbox/$1"; echo "- from:x | ts:y | ref:r236 | summary:$2 $3" > "$AGORA_HOME/inbox/$1/$(date +%s%N)-$1-$2.md"; }
+rt_reset() { rm -f "$AGORA_HOME/.git/notify-wm/$1" "$AGORA_HOME/.git/notify-wm/$1".*.sent "$AGORA_HOME/.git/notify-wm/$1".fail; nb_reset none; }
+mkdir -p "$NB_HOME/who"
+# ① 双活会话同实体→双收（无 routing 行＝兜底广播全活行；任务页验收①）
+map_add duo ses-du1 "2027-01-01T00:00:00+08:00"
+map_add duo ses-du2 "2027-01-01T00:00:00+08:00"
+printf '%s' '{"data":{"title":"交互A"}}' > "$NB_HOME/who/ses-du1.json"
+printf '%s' '{"data":{"title":"交互B"}}' > "$NB_HOME/who/ses-du2.json"
+msg_add_ev duo done gt-236d
+rt_reset duo; NB
+[[ $(nb_calls) == 2 ]] \
+  && ok "双活会话同实体双收（兜底广播全活行，gt-236a①）" || fail "gt-236a① 双收不符（$(nb_calls)）"
+# ② 死行不投：TTL 外 ts 行桥侧过滤（验收②）——全候选死→失败可见；保洁删行后→no-map-entry 静默
+map_add_ts st1 ses-st "2020-01-01T00:00:00+08:00"
+msg_add_ev st1 done gt-236d
+rt_reset st1; NB
+[[ $(nb_calls) == 0 && $(grep -c "sid=ses-st skip stale ts=2020" "$DBGLOG") == 1 \
+    && "$(cat "$AGORA_HOME/.git/notify-wm/st1.fail")" == 1 && ! -f "$AGORA_HOME/.git/notify-wm/st1" ]] \
+  && ok "TTL 外死行不投＋失败可见（gt-236a②）" || fail "gt-236a② 死行过滤不符"
+grep -v " ses-st " "$AGORA_HOME/sessions.map" > "$AGORA_HOME/sessions.map.tmp" && mv "$AGORA_HOME/sessions.map.tmp" "$AGORA_HOME/sessions.map"
+NB   # 原 mail 水位未推进（②失败路径）→ 自动重扫，行已清＝no-map-entry 静默且 wm 推进
+[[ $(nb_calls) == 0 && $(grep -c "entity=st1 sid=- skip no-map-entry" "$DBGLOG") == 1 && -f "$AGORA_HOME/.git/notify-wm/st1" ]] \
+  && ok "保洁清行后不投（no-map-entry 静默，gt-236a④）" || fail "gt-236a④ 清行后不符"
+# ③ 角色过滤：worker 行不收终态信／dispatcher 行不收派发信（验收③）
+map_add_role rf1 ses-wf worker
+map_add_role rf2 ses-df dispatcher
+printf '%s' '{"data":{"title":"worker行"}}' > "$NB_HOME/who/ses-wf.json"
+printf '%s' '{"data":{"title":"disp行"}}' > "$NB_HOME/who/ses-df.json"
+msg_add_ev rf1 done gt-236d
+rt_reset rf1; NB
+[[ $(nb_calls) == 0 && $(grep -c "sid=ses-wf skip role-filter ev=done role=worker" "$DBGLOG") == 1 \
+    && "$(cat "$AGORA_HOME/.git/notify-wm/rf1.fail")" == 1 ]] \
+  && ok "worker 行不收终态信（角色过滤，gt-236a③a）" || fail "gt-236a③a worker 过滤不符"
+msg_add_ev rf2 ack gt-236d
+rt_reset rf2; NB
+[[ $(nb_calls) == 0 && $(grep -c "sid=ses-df skip role-filter ev=ack role=dispatcher" "$DBGLOG") == 1 \
+    && "$(cat "$AGORA_HOME/.git/notify-wm/rf2.fail")" == 1 ]] \
+  && ok "dispatcher 行不收派发/修正信（角色过滤，gt-236a③b）" || fail "gt-236a③b dispatcher 过滤不符"
+# ⑤ 精准层定向：routing 指向非最新行 sid（2508 场景正解——同实体多活行只投亲和 sid）
+map_add rt1 ses-r1 "2027-01-01T00:00:00+08:00"
+map_add rt1 ses-r2 "2027-01-01T00:00:00+08:00"
+printf '%s' '{"data":{"title":"r1"}}' > "$NB_HOME/who/ses-r1.json"
+printf '%s' '{"data":{"title":"r2"}}' > "$NB_HOME/who/ses-r2.json"
+RT_ADD gt-236b dispatcher rt1 ses-r1
+msg_add_ev rt1 done gt-236b
+rt_reset rt1; NB
+P=$(grep -o 'PROMPT-OK /api/session/ses-r[0-9]/prompt' "$NB_HOME/calls.log" | sort -u)
+[[ $(nb_calls) == 1 && "$P" == "PROMPT-OK /api/session/ses-r1/prompt" \
+    && $(grep -c "sid=ses-r1 inject-ok.*kind=R" "$DBGLOG") == 1 ]] \
+  && ok "精准层定向：只投 task-routing 亲和 sid（非最新行，gt-236a⑤）" || fail "gt-236a⑤ 定向不符（$P）"
+# ⑥ 定向失败 fallback：routing 指 dead sid→落兜底广播活行
+map_add rt2 ses-r3 "2027-01-01T00:00:00+08:00"
+printf '%s' '{"data":{"title":"r3"}}' > "$NB_HOME/who/ses-r3.json"
+printf '%s' '{"data":{"outcome":"failed"}}' > "$NB_HOME/who/ses-dead9.json"
+RT_ADD gt-236b dispatcher rt2 ses-dead9
+msg_add_ev rt2 done gt-236b
+rt_reset rt2; NB
+[[ $(nb_calls) -ge 1 && $(grep -c "sid=ses-dead9 skip dead" "$DBGLOG") == 1 \
+    && $(grep -c "sid=ses-r3 inject-ok.*kind=F" "$DBGLOG") == 1 ]] \
+  && ok "定向失败落兜底广播（dead sid 跳过，gt-236a⑥）" || fail "gt-236a⑥ fallback 不符"
+# ⑦ progress 心跳零注入＋水位推进（设计内不注入）
+map_add rt3 ses-r4 "2027-01-01T00:00:00+08:00"
+printf '%s' '{"data":{"title":"r4"}}' > "$NB_HOME/who/ses-r4.json"
+msg_add_ev rt3 progress gt-236b
+rt_reset rt3; NB
+[[ $(nb_calls) == 0 && $(grep -c "entity=rt3 sid=- progress-silent" "$DBGLOG") == 1 && -f "$AGORA_HOME/.git/notify-wm/rt3" ]] \
+  && ok "progress 心跳零注入＋水位推进（gt-236a⑦）" || fail "gt-236a⑦ progress 不符"
+# ⑧ task-routing.sh：upsert 幂等原位刷＋role 分行＋校验拒
+RT_ADD gt-236c dispatcher rtX sidX; RT_ADD gt-236c dispatcher rtX sidY; RT_ADD gt-236c worker rtX sidW
+[[ $(grep -c '^gt-236c dispatcher ' "$AGORA_HOME/.git/task-routing") == 1 \
+    && $(grep -c '^gt-236c worker ' "$AGORA_HOME/.git/task-routing") == 1 \
+    && "$(bash "$PKG/scripts/task-routing.sh" get gt-236c dispatcher)" == sidY \
+    && "$(bash "$PKG/scripts/task-routing.sh" get gt-236c worker)" == sidW ]] \
+  && ok "task-routing upsert 幂等原位刷＋role 分行＋get（gt-236a⑧）" || fail "gt-236a⑧ routing 不符"
+bash "$PKG/scripts/task-routing.sh" upsert bad-id dispatcher e s >/dev/null 2>&1; [[ $? -eq 2 ]] \
+  && bash "$PKG/scripts/task-routing.sh" upsert gt-236c badrole e s >/dev/null 2>&1; [[ $? -eq 2 ]] \
+  && ok "task-routing 非法形态拒绝 rc2（gt-236a⑧b）" || fail "gt-236a⑧b 校验不符"
+# ⑨ register-session --role 写入/保留/覆写＋--deregister 幂等
+REG() { bash "$PKG/scripts/register-session.sh" "$@"; }
+REG --sid ses-rr --entity rtt --role worker >/dev/null \
+  && [[ $(awk '$3=="ses-rr" {print $5}' "$AGORA_HOME/sessions.map") == worker ]] \
+  && REG --sid ses-rr --entity rtt >/dev/null \
+  && [[ $(awk '$3=="ses-rr" {print $5}' "$AGORA_HOME/sessions.map") == worker ]] \
+  && REG --sid ses-rr --entity rtt --role dispatcher >/dev/null \
+  && [[ $(awk '$3=="ses-rr" {print $5}' "$AGORA_HOME/sessions.map") == dispatcher ]] \
+  && REG --sid ses-rr --entity rtt --deregister >/dev/null \
+  && [[ $(awk '$3=="ses-rr"' "$AGORA_HOME/sessions.map" | wc -l) == 0 ]] \
+  && REG --sid ses-rr --entity rtt --deregister >/dev/null \
+  && ok "register-session --role 写入/保留/覆写＋--deregister 幂等（gt-236a⑨）" || fail "gt-236a⑨ 注册面不符"
+REG --sid ses-rr2 --entity rtt --role badrole >/dev/null 2>&1; [[ $? -eq 2 ]] \
+  && ok "register-session 非法 role 拒绝 rc2（gt-236a⑨b）" || fail "gt-236a⑨b 校验不符"
 
 echo "===== 项目注册表（wiki/projects） ====="
 # 注册项目页（tester 注册 $PROJ，带默认 verify）

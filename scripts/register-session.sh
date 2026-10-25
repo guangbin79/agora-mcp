@@ -1,9 +1,13 @@
 #!/usr/bin/env bash
-# register-session.sh —— sessions.map 单源注册面（gt-6bef）：注册/刷新/校验三合一
-# 用法: register-session.sh --sid ID (--cwd DIR | --entity NAME) [--check-only]
+# register-session.sh —— sessions.map 单源注册面（gt-6bef）：注册/刷新/校验/注销四合一
+# 用法: register-session.sh --sid ID (--cwd DIR | --entity NAME) [--check-only] [--role worker|dispatcher] [--deregister]
 #   注册（缺省）＝幂等 upsert：同 (host,entity,sid) 行原位刷 ts（idle 活性语义——poll 保洁按
 #   最后刷新算，长活会话不超龄），缺行补登（掉册自愈）。实体缺省由 --cwd 经 resolve_entity
 #   裁决（worktree 归一主仓，与 dispatch 同口径）；--entity 显式指定（调用方已持裁决结果时免重解析）。
+#   --role＝sessions.map 第 5 列角色（gt-236a：worker 仅收派发/修正类信，dispatcher 仅收终态/计划类，
+#   无 role 列 legacy 行全收＝现状不劣化）；upsert 带 --role 覆写 col5，不带则保留既有扩展列。
+#   --deregister＝退出注销（gt-236a）：删 (host,entity,sid) 行，幂等（行不在册 rc0）；无钩子形态
+#   （SIGKILL 等）由 poll TTL 保洁兜底。刷新/注销全程持锁＋原子写（gt-e96d 契约）。
 #   --check-only＝只校验在册＋未超龄（AGORA_SESSION_TTL_H，缺省 24，与 poll 同源；<=0＝不设 TTL
 #   在册即新，与 poll「0=不清」同义——两消费点同一契约），不过→
 #   stderr JSON {"code":"REGISTER_REQUIRED","hint":…}，rc=3。
@@ -13,11 +17,14 @@
 set -euo pipefail
 AGORA_HOME="${AGORA_HOME:?AGORA_HOME 未设置——export AGORA_HOME=\$HOME/plaza 后重试，或经 MCP server env 注入}"
 SCRIPTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SID=""; CWD=""; ENT=""; CHECK=0
+SID=""; CWD=""; ENT=""; CHECK=0; ROLE=""; DEREG=0
 while [[ $# -gt 0 ]]; do case "$1" in
   --sid) SID="$2"; shift 2;; --cwd) CWD="$2"; shift 2;; --entity) ENT="$2"; shift 2;; --check-only) CHECK=1; shift;;
+  --role) ROLE="$2"; shift 2;; --deregister) DEREG=1; shift;;
   *) echo '{"code":"VALIDATION_FAILED","message":"unknown arg"}' >&2; exit 2;;
 esac; done
+[[ -z "$ROLE" || "$ROLE" == worker || "$ROLE" == dispatcher ]] || { echo '{"code":"VALIDATION_FAILED","message":"--role 须 worker/dispatcher"}' >&2; exit 2; }
+[[ "$CHECK" == 0 || -z "$ROLE" ]] || { echo '{"code":"VALIDATION_FAILED","message":"--check-only 与 --role 互斥"}' >&2; exit 2; }
 [[ -n "$SID" && ( -n "$ENT" || -n "$CWD" ) ]] || { echo '{"code":"VALIDATION_FAILED","message":"--sid 与 --cwd/--entity 必填"}' >&2; exit 2; }
 [[ "$SID" =~ ^[^[:space:][:cntrl:]]{1,128}$ ]] || { echo '{"code":"VALIDATION_FAILED","message":"--sid 含空白/控制字符或超 128 字符（sessions.map 行伪造面），拒绝"}' >&2; exit 2; }
 HINT="bash $SCRIPTS_DIR/register-session.sh --sid <会话id> --cwd <项目目录> 注册；或重启会话（注册 hook 自动登记）；或 post(proposal) 自报名"
@@ -37,10 +44,10 @@ mkdir -p "$AGORA_HOME/.git" 2>/dev/null || true
 (
   flock -w "${AGORA_LOCK_WAIT:-5}" 9 || { echo '{"code":"LOCK_TIMEOUT","message":"sessions.map 锁忙"}' >&2; exit 4; }
   [[ -f "$SMAP" ]] || printf '# <机器名>  <agent名>  <opencode session id>  <登记时间>（多机：仅本机条目算"在场"）\n' > "$SMAP"
-  PYTHONPATH="$SCRIPTS_DIR" python3 - "$SMAP" "$(hostname)" "$ENT" "$SID" "$CHECK" "${AGORA_SESSION_TTL_H:-24}" "$HINT" <<'PYEOF'
+  PYTHONPATH="$SCRIPTS_DIR" python3 - "$SMAP" "$(hostname)" "$ENT" "$SID" "$CHECK" "${AGORA_SESSION_TTL_H:-24}" "$HINT" "$ROLE" "$DEREG" <<'PYEOF'
 import json, sys, os
 from datetime import datetime
-smap, host, ent, sid, check, ttl_h, hint = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5] == "1", float(sys.argv[6]), sys.argv[7]
+smap, host, ent, sid, check, ttl_h, hint, role, dereg = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5] == "1", float(sys.argv[6]), sys.argv[7], sys.argv[8], sys.argv[9] == "1"
 for v in (sid, ent):   # 消费端语义二次闸（评审R1 W1/W2/W3）：bash [[:class:]] 随调用方 locale 退化——C locale 放行 U+2028/U+3000/无效字节，NBSP 任何 locale 放行而 python split/splitlines 认其为分隔符；isprintable 连带拒控制符/代理字符（无效字节）/零宽
     if not (v.isprintable() and v.split() == [v] and 1 <= len(v) <= 128):
         print(json.dumps({"code": "VALIDATION_FAILED", "message": "sid/entity 含不可打印或空白分隔字符（sessions.map 行伪造面）"}, ensure_ascii=False), file=sys.stderr)
@@ -64,13 +71,24 @@ if check:
         die(f"session 在册但已超龄或时间戳不可解析（TTL={ttl_h:g}h）")
     print(json.dumps({"registered": True, "fresh": True, "entity": ent}, ensure_ascii=False))
     sys.exit(0)
+if dereg:
+    if idx is None:   # 幂等：行不在册＝已注销
+        print(json.dumps({"deregistered": False, "entity": ent}, ensure_ascii=False))
+        sys.exit(0)
+    del lines[idx]
+    tmp = smap + ".tmp"
+    open(tmp, "w", encoding="utf-8").write("\n".join(lines) + "\n")
+    os.replace(tmp, smap)
+    print(json.dumps({"deregistered": True, "entity": ent}, ensure_ascii=False))
+    sys.exit(0)
 now = datetime.now().astimezone().isoformat(timespec="seconds")
 refreshed = idx is not None
 if refreshed:
     p = lines[idx].split()
-    lines[idx] = " ".join([host, ent, sid, now] + p[4:])   # 原位刷 ts，保留扩展列
+    tail = [role] if role else p[4:]   # --role 覆写 col5；不带则保留既有扩展列（gt-236a 角色列）
+    lines[idx] = " ".join([host, ent, sid, now] + tail)
 else:
-    lines.append(f"{host} {ent} {sid} {now}")
+    lines.append(" ".join([host, ent, sid, now] + ([role] if role else [])))
 tmp = smap + ".tmp"   # 原子写（评审R1 W3）：open("w") 先截断后写，写路径任何异常都会放大成全表清零——tmp+replace 使异常只留旧表
 open(tmp, "w", encoding="utf-8").write("\n".join(lines) + "\n")
 os.replace(tmp, smap)
