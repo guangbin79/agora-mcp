@@ -30,3 +30,9 @@
 - 修法口径：推导「最近」按 claimed 行 ts（fromisoformat offset-aware）判新近度，分片文件序＋行序降为破平兜底（＝append-only 写入因果序）；naive/不可解析 ts 不可跨形态比较，一律退扫描序。writer-local 时区不强统（post.sh 落真实时钟），跨机 ts 可比性另立。
 - 夹具形态：构造性跨日分片断言（F5b）——遗留 claimed 旧瞬间 ts 落今日分片＋新 claimed 新瞬间 ts 落昨日分片，推导必须取新 claimed；比时区环境翻转确定性高，不依赖faketime。
 - 残留同型：cancel.sh 自动推导 pick=cands[-1]（文件序尾＝最近派发）同病未治——--kill 语义下翻车即杀错会话进程组，待红后另立任务。
+
+## 收口闭环三（gt-9d09，2026-10-26）
+- cancel.sh:60 与 redispatch.sh 同型 `cands[-1]` 收口（round-2 超集语义，supersede a0fccbb round-1）：新近度按行 ts（offset-aware fromisoformat）判，naive/解析败/缺 ts=floor（epoch）；仅全不可比时破平落扫描序取因果尾。round-1 的 `d.astimezone()` 把 naive 就地本地化——UTC 形 naive 串在 TZ=UTC 宇宙可反超 aware 真最新，floor 语义（naive 恒败）才是与写者时区混写共存的口径。
+- redispatch 的 `mine` 是 set：`cands[-1]` 实为 PYTHONHASHSEED 哈希序随机（探针 6 跑 4 错实证），比文件序更糟——失败数逐跑漂移（rg1 8 败/rg2 2 败）即此签名。凡「最近 N/尾元素」推导从集合容器取材时，先问容器有序性；破平次键必须锚扫描序（first_seen/scan_i），不能借容器迭代序。
+- 整合链语义择优判据：同位冲突不数行数，跑红相断言组定超集——R4(naive floor)/R5(同秒 tie) 五断言面即 49406f7 round-1 与 round-2 的差异检测器（round-1 有 scan_i 破平故 R5 绿，唯 R4 红语义差）。
+- 夹具地雷（C4）：跨日负例日期硬编码（2026-10-25）在 TZ=UTC 宇宙与 `date +%F` 重合日被既有核销键覆盖→负例被吞假绿。跨日夹具日期一律动态取 `date -d yesterday +%F`（同 TZ 宇宙恒≠today，常规宇宙行为不变）；硬编码日期＝埋给下一个跨日窗口的地雷。
