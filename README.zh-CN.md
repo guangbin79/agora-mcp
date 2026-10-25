@@ -38,6 +38,8 @@ tar xzf agora-mcp-v1.27.tar.gz -C ~ && bash ~/agora-mcp/install.sh
 { "mcp": { "agora": { "type": "local", "command": ["python3", "~/agora-mcp/server/agora_mcp.py"], "enabled": true } } }
 ```
 
+> JSON 里的 `~/agora-mcp` 需替换为本机绝对检出路径——部分运行时在 JSON 参数中不展开 `~`。
+
 ### 配置（环境变量，无配置文件）
 
 所有参数都是环境变量，按进程通路分三类：

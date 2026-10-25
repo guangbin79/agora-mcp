@@ -560,7 +560,7 @@ T0OUT=$(AGORA_SESSION_TTL_H=0 bash "$PKG/scripts/register-session.sh" --sid sess
 # ③：门吞错修复——内层 rc2 透传 GATE_ERROR，不再误报 REGISTER_REQUIRED
 GTT2=$(TITLE="准入门透传" TC); GTT2=$(echo "$GTT2" | sed -n 's/.*"task":"\(gt-[0-9a-f]*\)".*/\1/p')
 GATE_OUT3=$(AGORA_RUNTIME=true AGORA_SID="$(printf 'bad\nsid')" bash "$PKG/scripts/dispatch.sh" --actor tester@proj --project "$PROJ" --task "$GTT2" 2>&1)
-grep -q "GATE_ERROR" <<<"$GATE_OUT3" && ! grep -q "REGISTER_REQUIRED" <<<"$GATE_OUT3" \
+grep -q "GATE_ERROR" <<<"$GATE_OUT3" && grep -q "rc=2" <<<"$GATE_OUT3" && ! grep -q "REGISTER_REQUIRED" <<<"$GATE_OUT3" \
   && ok "③门内层 rc2→GATE_ERROR 非 REGISTER_REQUIRED 误报（gt-e96d）" || fail "③退出透传失效（$GATE_OUT3）"
 cat "$AGORA_HOME"/log/*/*.md 2>/dev/null | grep "task:$GTT2" | grep -q "event:dispatched" \
   && fail "③门拒应落账零残留（$GTT2 有 dispatched）" || ok "③门拒零残留（gt-e96d）"
@@ -569,9 +569,18 @@ GATE_OUT4=$(AGORA_RUNTIME=true AGORA_SID=sess-gate-ok bash "$PKG/scripts/dispatc
 echo "$GATE_OUT4" | python3 -c 'import json,sys; r=json.loads(sys.stdin.read()); assert r["mode"]=="spawned", r' \
   && ok "④门放行 stdout 纯单 JSON（泄漏消除，gt-e96d）" || fail "④stdout 混入门 JSON（$GATE_OUT4）"
 rm -f "$AGORA_HOME"/raw/dispatches/*.live
-# ⑤⑥：docs 漏迁清零＋硬编码机器路径清零（bc2609f 批二尾巴）
-! grep -q "~/agora" "$PKG/docs/Agora宣言-v0.19.md" "$PKG/docs/跨仓委托协议-v1.md" \
-  && ok "⑤协议文档 ~/agora 漏迁清零（gt-e96d）" || fail "⑤协议文档仍有 ~/agora 残留"
+# gt-e96d 评审R1：locale 无关二次闸——C locale 无效字节/NBSP 拒绝且 map 零损伤（W2/W3 回归防复发）
+RL_LINES0=$(wc -l < "$AGORA_HOME/sessions.map")
+LC_ALL=C bash "$PKG/scripts/register-session.sh" --sid "$(printf 'a\xffb')" --entity tester >/dev/null 2>&1; R1RC=$?
+RLOUT=$(bash "$PKG/scripts/register-session.sh" --sid "$(printf 'nb\xc2\xa0sp')" --entity tester 2>&1); R1RC2=$?
+[ "$R1RC" = 2 ] && [ "$R1RC2" = 2 ] && grep -q "VALIDATION_FAILED" <<<"$RLOUT" \
+  && [ "$(wc -l < "$AGORA_HOME/sessions.map")" = "$RL_LINES0" ] \
+  && ok "R1 二次闸：无效字节/NBSP 拒绝＋map 零损伤（gt-e96d 评审环）" || fail "R1 二次闸失效（rc=$R1RC/$R1RC2 $RLOUT）"
+# ⑤⑥：docs 漏迁清零＋硬编码机器路径清零（bc2609f 批二尾巴）——目标文件存在性先行（防断言空转化，ocr-R1）＋模式排除 ~/agora-mcp
+E56=1
+for _f in "$PKG/docs/Agora宣言-v0.19.md" "$PKG/docs/跨仓委托协议-v1.md"; do [[ -f "$_f" ]] || E56=0; done
+[ "$E56" = 1 ] && ! grep -qE '~/agora([^_-]|$)' "$PKG/docs/Agora宣言-v0.19.md" "$PKG/docs/跨仓委托协议-v1.md" \
+  && ok "⑤协议文档 ~/agora 漏迁清零（gt-e96d）" || fail "⑤协议文档 ~/agora 残留或检查目标缺失"
 ! grep -q "/home/guangbin" "$PKG/README.md" "$PKG/README.zh-CN.md" "$PKG/scripts/poll.sh" "$PKG/scripts/backup.sh" \
   && ok "⑥硬编码机器路径清零（gt-e96d）" || fail "⑥/home/guangbin 残留"
 

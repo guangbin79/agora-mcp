@@ -19,7 +19,7 @@ while [[ $# -gt 0 ]]; do case "$1" in
   *) echo '{"code":"VALIDATION_FAILED","message":"unknown arg"}' >&2; exit 2;;
 esac; done
 [[ -n "$SID" && ( -n "$ENT" || -n "$CWD" ) ]] || { echo '{"code":"VALIDATION_FAILED","message":"--sid 与 --cwd/--entity 必填"}' >&2; exit 2; }
-[[ "$SID" =~ ^[^[:space:][:cntrl:]]{1,128}$ ]] || { echo '{"code":"VALIDATION_FAILED","message":"--sid 含空白或控制字符（sessions.map 行伪造面），拒绝"}' >&2; exit 2; }
+[[ "$SID" =~ ^[^[:space:][:cntrl:]]{1,128}$ ]] || { echo '{"code":"VALIDATION_FAILED","message":"--sid 含空白/控制字符或超 128 字符（sessions.map 行伪造面），拒绝"}' >&2; exit 2; }
 HINT="bash $SCRIPTS_DIR/register-session.sh --sid <会话id> --cwd <项目目录> 注册；或重启会话（注册 hook 自动登记）；或 post(proposal) 自报名"
 req() { python3 -c 'import json,sys; print(json.dumps({"code":"REGISTER_REQUIRED","hint":sys.argv[1]},ensure_ascii=False),file=sys.stderr)' "$1"; exit 3; }
 if [[ -z "$ENT" ]]; then
@@ -31,7 +31,7 @@ PYEOF
 )
   [[ -n "$ENT" ]] || req "caller not in roster（无实体覆盖 $CWD）：$HINT"
 fi
-[[ "$ENT" =~ ^[^[:space:][:cntrl:]]{1,128}$ ]] || { echo '{"code":"VALIDATION_FAILED","message":"--entity 含空白或控制字符（sessions.map 行伪造面），拒绝"}' >&2; exit 2; }
+[[ "$ENT" =~ ^[^[:space:][:cntrl:]]{1,128}$ ]] || { echo '{"code":"VALIDATION_FAILED","message":"--entity 含空白/控制字符或超 128 字符（sessions.map 行伪造面），拒绝"}' >&2; exit 2; }
 SMAP="$AGORA_HOME/sessions.map"
 mkdir -p "$AGORA_HOME/.git" 2>/dev/null || true
 (
@@ -41,6 +41,10 @@ mkdir -p "$AGORA_HOME/.git" 2>/dev/null || true
 import json, sys, os
 from datetime import datetime
 smap, host, ent, sid, check, ttl_h, hint = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5] == "1", float(sys.argv[6]), sys.argv[7]
+for v in (sid, ent):   # 消费端语义二次闸（评审R1 W1/W2/W3）：bash [[:class:]] 随调用方 locale 退化——C locale 放行 U+2028/U+3000/无效字节，NBSP 任何 locale 放行而 python split/splitlines 认其为分隔符；isprintable 连带拒控制符/代理字符（无效字节）/零宽
+    if not (v.isprintable() and v.split() == [v] and 1 <= len(v) <= 128):
+        print(json.dumps({"code": "VALIDATION_FAILED", "message": "sid/entity 含不可打印或空白分隔字符（sessions.map 行伪造面）"}, ensure_ascii=False), file=sys.stderr)
+        sys.exit(2)
 def die(reason):
     print(json.dumps({"code": "REGISTER_REQUIRED", "reason": reason, "hint": hint}, ensure_ascii=False), file=sys.stderr)
     sys.exit(3)
@@ -67,7 +71,9 @@ if refreshed:
     lines[idx] = " ".join([host, ent, sid, now] + p[4:])   # 原位刷 ts，保留扩展列
 else:
     lines.append(f"{host} {ent} {sid} {now}")
-open(smap, "w", encoding="utf-8").write("\n".join(lines) + "\n")
+tmp = smap + ".tmp"   # 原子写（评审R1 W3）：open("w") 先截断后写，写路径任何异常都会放大成全表清零——tmp+replace 使异常只留旧表
+open(tmp, "w", encoding="utf-8").write("\n".join(lines) + "\n")
+os.replace(tmp, smap)
 print(json.dumps({"registered": True, "refreshed": refreshed, "entity": ent}, ensure_ascii=False))
 PYEOF
 ) 9>"$AGORA_HOME/.git/sessions.map.lock"

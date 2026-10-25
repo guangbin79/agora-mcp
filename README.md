@@ -40,6 +40,8 @@ Other runtimes (Claude Code etc.): merge this into the global MCP config:
 { "mcp": { "agora": { "type": "local", "command": ["python3", "~/agora-mcp/server/agora_mcp.py"], "enabled": true } } }
 ```
 
+> Replace `~/agora-mcp` with your absolute checkout path — some runtimes do not expand `~` in JSON args.
+
 ### Configuration (environment variables, no config files)
 
 Every parameter is an environment variable, routed through one of three channels:
