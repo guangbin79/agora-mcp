@@ -803,6 +803,69 @@ NB
 [[ $(nb_calls) == 0 ]] \
   && ok "无映射实体静默跳过" || fail "无映射实体静默跳过"
 
+# gt-893a：目标鉴别＋失败可见化。假 CLI 扩展 /api/session/<sid> 端点（who 探测），
+# 夹具经 $NB_HOME/who.json 控制响应形态（全 sid 同形——单候选实体隔离测试）
+cat > "$NBDIR/opencode" <<'NBSTUB'
+#!/usr/bin/env bash
+set -u
+FH="${NB_HOME:?NB_HOME required}"
+case "${1:-}" in
+  api) ;;
+  *) echo "bad subcommand" >&2; exit 2 ;;
+esac
+shift
+M=""; P=""; D=""
+while [ $# -gt 0 ]; do case "$1" in
+  -d) D="$2"; shift 2 ;;
+  *) if [ -z "$M" ]; then M="$1"; elif [ -z "$P" ]; then P="$1"; fi; shift ;;
+esac; done
+log() { printf '%s\n' "$*" >> "$FH/calls.log"; }
+log "api $M $P"
+case "$P" in
+  */prompt)
+    [ "$(cat "$FH/ctrl" 2>/dev/null || echo none)" = inject_fail ] && exit 1
+    echo "$D" > "$FH/last_prompt.json"; log "PROMPT-OK $P"; exit 0 ;;
+  /api/session/*)
+    [ -f "$FH/who.json" ] && { cat "$FH/who.json"; exit 0; }
+    echo "not found" >&2; exit 1 ;;
+esac
+echo "not found" >&2; exit 1
+NBSTUB
+chmod +x "$NBDIR/opencode"
+DBGLOG="$AGORA_HOME/.git/notify-debug.log"
+map_add() { printf '%s %s %s\n' "$(hostname)" "$1" "$2" >> "$AGORA_HOME/sessions.map"; }
+msg_add() { mkdir -p "$AGORA_HOME/inbox/$1"; echo "- from:x | ts:y | ref:r893 | summary:ack gt-0000" > "$AGORA_HOME/inbox/$1/$(date +%s%N)-$1.md"; }
+# ① 同实体 worker 会话（dispatch 派生 title 前缀形态）：跳过且失败可见化——零注入＋落痕＋计数＋水位不推进
+map_add worker1 ses-w1 "2027-01-01T00:00:00+08:00"
+msg_add worker1
+printf '%s' '{"data":{"title":"agora: gt-9999 派生worker"}}' > "$NB_HOME/who.json"
+nb_reset none
+NB
+[[ $(nb_calls) == 0 && $(grep -c "entity=worker1 sid=ses-w1 skip delegated-worker" "$DBGLOG") == 1 \
+    && $(grep -c "entity=worker1 sid=- fail no-live-interactive" "$DBGLOG") == 1 \
+    && "$(cat "$AGORA_HOME/.git/notify-wm/worker1.fail" 2>/dev/null)" == 1 \
+    && ! -f "$AGORA_HOME/.git/notify-wm/worker1" ]] \
+  && ok "worker 会话鉴别跳过＋失败落痕计数＋水位不推进（gt-893a①）" || fail "gt-893a① 鉴别/落痕/计数/水位不符"
+# ② dead 顶层会话（outcome=failed，如崩溃旧 TUI）：同上跳过路径
+map_add worker2 ses-d1 "2027-01-01T00:00:00+08:00"
+msg_add worker2
+printf '%s' '{"data":{"outcome":"failed"}}' > "$NB_HOME/who.json"
+NB
+[[ $(nb_calls) == 0 && $(grep -c "entity=worker2 sid=ses-d1 skip dead" "$DBGLOG") == 1 \
+    && "$(cat "$AGORA_HOME/.git/notify-wm/worker2.fail" 2>/dev/null)" == 1 ]] \
+  && ok "dead 会话跳过且失败可见化（gt-893a②）" || fail "gt-893a② dead 跳过/落痕不符"
+# ③ interactive 顶层会话：注入成功＋计数清零＋水位推进
+map_add worker3 ses-t3 "2027-01-01T00:00:00+08:00"
+msg_add worker3
+printf '%s' '{"data":{"title":"用户主会话"}}' > "$NB_HOME/who.json"
+nb_reset none
+NB
+grep -q "PROMPT-OK /api/session/ses-t3/prompt" "$NB_HOME/calls.log" \
+  && grep -q "entity=worker3 sid=ses-t3 inject-ok" "$DBGLOG" \
+  && [[ ! -f "$AGORA_HOME/.git/notify-wm/worker3.fail" && -f "$AGORA_HOME/.git/notify-wm/worker3" ]] \
+  && ok "interactive 会话注入成功＋计数清零＋水位推进（gt-893a③）" || fail "gt-893a③ 成功路径回归不符"
+rm -f "$NB_HOME/who.json"
+
 echo "===== 项目注册表（wiki/projects） ====="
 # 注册项目页（tester 注册 $PROJ，带默认 verify）
 cd "$PROJ" && python3 - "$PKG/server/agora_mcp.py" "$PROJ" <<'PYEOF' && ok "项目页注册" || fail "项目页注册"
@@ -1793,6 +1856,14 @@ POST tester@proj --event claimed --task "$N8I" >/dev/null
 POST tester@proj --event done --task "$N8I" --commit "$(git -C "$PROJ" rev-parse HEAD)" --evidence ok >/dev/null
 POST tester@proj --event done --task "$N8I" --commit HEAD --evidence 重跑 >/dev/null
 MERGE "$N8I" 2>&1 | grep -q VALIDATION_FAILED && ok "⑧e 末条垃圾 commit 不回退旧锚" || fail "⑧e 末条垃圾 commit 不回退旧锚"
+
+# ⑨ 跨仓 wt 形态显式拒（gt-78da A3）：wt_dir 属他仓→CROSS_REPO_WT＋拆分指引；零合并零落账零碰他仓树
+git init -q "$T/other" && git -C "$T/other" -c user.name=t -c user.email=t@l commit -q --allow-empty -m init
+git -C "$T/other" worktree add -q "$T/other-wt" -b wt9
+printf -- '---\nwt_dir: %s/other-wt\nproject_dir: %s\nverify: "true"\n---\n' "$T" "$PROJ" > "$AGORA_HOME/wiki/tasks/gt-c999.md"
+MERGE gt-c999 2>&1 | grep -q CROSS_REPO_WT && ok "⑨ 跨仓 wt 显式拒" || fail "⑨ 跨仓 wt 显式拒"
+[ -z "$(LEDEV gt-c999 merged)" ] && ok "⑨ 拒后无 merged 落账" || fail "⑨ 拒后无 merged 落账"
+[ -d "$T/other-wt" ] && ok "⑨ 他仓树不被触碰" || fail "⑨ 他仓树不被触碰"
 
 echo "===== poll 补档：重派/孤儿/豁免/GC/host（全量委托 L1 Task7） ====="
 rm -f "$AGORA_HOME/sessions.map"

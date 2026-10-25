@@ -37,6 +37,17 @@ WHOST="$(FM wt_host)"
 MAIN=$(PYTHONPATH="$SCRIPTS_DIR" python3 -c 'import sys, agora_lib
 p = sys.argv[1]; m = agora_lib.main_repo_of(p); print(m or p)' "$(realpath "$PD")")
 
+# ---- gt-78da A3：跨仓 wt 形态显式拒（6bef 反向合并实证）——wt_dir 树属他仓时下方
+#      目标二分/锚点重建/清树全部错乱（wt/<task> 分支名两仓同名互撞）。正道＝按仓拆分：
+#      task_create(project_dir=<B 仓>, verify=…) → dispatch → 各自 merge 闭环。
+#      shortcut: 树缺失时 [-d] 短路放行到既有锚点重建路径（重建会落在 MAIN 域——跨仓且
+#      树被清的残余窗口，when: 出现该形态实证再补路径域预判）。
+if [ -n "$WTD" ] && [ -d "$WTD" ]; then
+  WTD_MAIN=$(PYTHONPATH="$SCRIPTS_DIR" python3 -c 'import sys, agora_lib
+p = sys.argv[1]; m = agora_lib.main_repo_of(p); print(m or p)' "$(realpath "$WTD")")
+  [ "$WTD_MAIN" = "$MAIN" ] || fail CROSS_REPO_WT "wt_dir $WTD 属他仓（主仓 $WTD_MAIN ≠ 任务主仓 $MAIN）——跨仓 wt 合并不支持：按仓拆分为独立任务（task_create project_dir=$WTD_MAIN → dispatch → 各自 merge）" 4
+fi
+
 # ---- gt-7117 非 wt 闭环：页无 wt_dir＝直改仓任务（无树可清）。done 已由 post.sh
 # 机械 verify 锚 project_dir 真跑背书；此处验 done commit 已被主仓默认分支包含
 # 即出票补 merged——对齐 wt 幂等路径「已含→只补账不重验」（无可合并新状态）。
