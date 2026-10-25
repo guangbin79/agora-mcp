@@ -2357,7 +2357,8 @@ case "$M $P" in
   "GET /api/session/active")
     echo '{"data":{"ses_act1":{"type":"running"}}}'; exit 0 ;;
   "GET /api/session/ses_act1")
-    echo "{\"data\":{\"id\":\"ses_act1\",\"title\":\"$(cat "$FH/active_title" 2>/dev/null || echo "")\",\"location\":{\"directory\":\"$(cat "$FH/active_dir" 2>/dev/null || echo /nonexist)\"}}}"; exit 0 ;;
+    O=""; [ -f "$FH/active_outcome" ] && O=",\"outcome\":\"$(cat "$FH/active_outcome")\",\"time\":{\"created\":1,\"idle\":2}"   # gt-762a：done 残留形态（outcome+idle → status 归一 idle）
+    echo "{\"data\":{\"id\":\"ses_act1\",\"title\":\"$(cat "$FH/active_title" 2>/dev/null || echo "")\",\"location\":{\"directory\":\"$(cat "$FH/active_dir" 2>/dev/null || echo /nonexist)\"}$O}}"; exit 0 ;;
 esac
 case "$P" in
   /api/session/ses_*)
@@ -2408,6 +2409,10 @@ printf 'agora: gt-abc1 标题甲' > "$FAKE_HOME/active_title"
 if FAKE alive "$PROJ" delegated >/dev/null 2>&1; then ok "S1d alive delegated 委托 title 命中 rc0"; else fail "S1d alive delegated 委托 title 命中"; fi
 echo /nonexist > "$FAKE_HOME/active_dir"
 if FAKE alive "$PROJ" delegated >/dev/null 2>&1; then fail "S1d alive delegated 不命中应 rc1"; else ok "S1d alive delegated 不命中 rc1"; fi
+# S1d done 残留（gt-762a）：delegated title 命中但 outcome=succeeded → 不在场（worker 退场残留不算）
+echo "$PROJ" > "$FAKE_HOME/active_dir"; echo succeeded > "$FAKE_HOME/active_outcome"
+if FAKE alive "$PROJ" delegated >/dev/null 2>&1; then fail "S1d alive delegated done残留(outcome=succeeded)应 rc1"; else ok "S1d alive delegated done残留 rc1"; fi
+rm -f "$FAKE_HOME/active_outcome"; echo /nonexist > "$FAKE_HOME/active_dir"   # 清场回「不命中」形态
 # S1e status：idle/dead 归一
 fake_reset none
 [ "$(FAKE status ses_x 2>/dev/null)" = "idle" ] && ok "S1e status idle" || fail "S1e status idle"
@@ -2568,6 +2573,11 @@ printf 'agora: %s 委托占坑' "$T5A2" > "$FAKE_HOME/active_title"
 OUT=$(POSTD --task "$T5A2")
 echo "$OUT" | grep -q '"mode":"notified"' && ok "S5a2 委托子会话（title agora: gt-）占坑→notified" || fail "S5a2 委托占坑未通知（got: $OUT）"
 [ -z "$(LEV "$T5A2" dispatched)" ] && ok "S5a2 notified 零 dispatched 落账" || fail "S5a2 notified 却落了 dispatched"
+T5A3=$(TID "$(TITLE="done残留占坑" VERIFY="true" PROJECT_DIR="$PROJ" TC)")
+echo succeeded > "$FAKE_HOME/active_outcome"   # gt-762a：done 残留形态（title 不变＋outcome=succeeded）
+OUT=$(POSTD --task "$T5A3")
+echo "$OUT" | grep -q '"mode":"spawned"' && ok "S5a3 委托占坑 done 残留（outcome=succeeded）→spawn" || fail "S5a3 done 残留未 spawn（got: $OUT）"
+rm -f "$FAKE_HOME/active_outcome"
 T5B=$(TID "$(TITLE="alive缺席" VERIFY="true" PROJECT_DIR="$PROJ" TC)")
 echo /nonexist > "$FAKE_HOME/active_dir"
 OUT=$(POSTD --task "$T5B")

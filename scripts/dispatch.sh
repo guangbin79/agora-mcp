@@ -261,6 +261,7 @@ fi
 # 在场优先：目标项目已有「委托子会话」在场 → 只通知不派生（wt 任务豁免——在场会话无树凭据，notified 必死）
 # gt-0ed3：alive 带 delegated 过滤（title 前缀 "agora: gt-"，两 spawn 通道统一命名 gt-2845②）——
 # 用户交互会话占坑不算在场（通知信消费绑定交互会话下一回合 check_mail，异步任务必滞留；实狗粮 d-dc64196f/d-4255f3e3）。
+# gt-762a：delegated 在场再收窄 status=running——worker done 退场后持久会话 title 不变，残留命中把 notified 投给已退场会话（575d/8fe1/7cd9/e96d 四笔死信实证）。
 # API 不通＝通知桥同依赖 API、无法触达——不算在场，总是 spawn（旧 sessions.map 回退删除：交互注册面≠委托在场）；
 # 他机会话本就无法被本机桥触达；跨机派活走 task_create + mention 异步路径
 if [ -z "$WT_DIR" ]; then
