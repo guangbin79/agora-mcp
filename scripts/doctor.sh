@@ -242,4 +242,10 @@ PYEOF
 )
 [[ -z "$ROSTER_BAD" ]] && ok "名册卫生（dirs 存在且非 /tmp）" || warn "名册卫生异常（只报告不删）: $ROSTER_BAD（人工确认后归档 wiki/entities/archived/）"
 
+# 11. 账本面 dirty 审计（gt-2508：enforcer 拦工具写，但 bash 子进程盲区——python heredoc 直写 wiki/tasks 两次实证）。
+#     机械写即 commit（post.sh git add -A 全收），未提交改动=绕过工具直写痕迹。报告器语义：只报告不回滚不置 FAIL
+LEDGER_DIRTY=$(git -C "$AGORA_HOME" status --porcelain -- log board wiki inbox raw 2>/dev/null || true)
+[[ -z "$LEDGER_DIRTY" ]] && ok "账本面（无绕写直改痕迹）" \
+  || warn "账本面 dirty——绕过工具直写痕迹（bash 盲区），git 可回滚: $(echo "$LEDGER_DIRTY" | head -5 | tr '\n' '；')（人工核查后 git checkout -- 处置）"
+
 [[ $FAIL -eq 0 ]] && echo "== doctor: ALL GREEN ==" || { echo "== doctor: FAILURES PRESENT =="; exit 1; }

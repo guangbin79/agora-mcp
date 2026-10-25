@@ -3302,6 +3302,10 @@ rm -rf "$UNREG_B9"
 OUT=$(bash "$PKG/scripts/post.sh" --actor tester@proj --project proj --event amended --task "$AM2" --set "project_dir=$PROJ" --set "wt_dir=$NEWWT" 2>&1); RC=$?
 [[ $RC -ne 0 ]] && echo "$OUT" | grep -q "混改" \
   && ok "② ocr2：project_dir×wt_dir 同次混改被拒（漂移窗）" || fail "② ocr2 混改未拒（rc=$RC $OUT）"
+# gt-2508 分流：wt_dir 指主仓本体→拒且 hint 附凭据文件路由；专属树错名照旧走命名规范（ocr2-H1 已断）
+OUT=$(bash "$PKG/scripts/post.sh" --actor tester@proj --project proj --event amended --task "$AM2" --set "wt_dir=$PROJ" 2>&1); RC=$?
+[[ $RC -ne 0 ]] && echo "$OUT" | grep -q "主仓本体" && echo "$OUT" | grep -q "agora-delegation" \
+  && ok "② 分流：wt_dir 指主仓本体被拒＋hint 附凭据文件路由（gt-2508）" || fail "② 分流 hint 缺失（rc=$RC $OUT）"
 # MCP 面：amended 经 agora_post 工具（枚举＋set 透传）——dispatcher 修正 verify 合同
 cd "$PROJ" && python3 - "$PKG/server/agora_mcp.py" "$AM2" <<'PYEOF' && ok "② MCP agora_post amended（枚举+set 透传）" || fail "② MCP amended 未通"
 import json, subprocess, sys
@@ -3327,6 +3331,13 @@ OUT=$(bash "$PKG/scripts/doctor.sh" 2>&1)
 echo "$OUT" | grep -q "发 diagnosed 标注无效行 ref" && echo "$OUT" | grep -q "doctor-runbook §idem" \
   && ! echo "$OUT" | grep -q "删除后续行" \
   && ok "③ doctor idem 文案与 runbook 一致（标注不删行）" || fail "③ doctor idem 文案（$(echo "$OUT" | grep "idem" | head -2)）"
+
+# gt-2508：账本面 dirty 审计——机械写即 commit（post.sh git add -A），未提交改动=绕写痕迹（python 直写实证的 bash 盲区）
+printf '\nbypass-trace: direct-write\n' >> "$AGORA_HOME/wiki/tasks/$AM2.md"
+OUT=$(bash "$PKG/scripts/doctor.sh" 2>&1)
+echo "$OUT" | grep -q "绕过工具直写痕迹" && echo "$OUT" | grep -q "git 可回滚" && echo "$OUT" | grep -q "wiki/tasks/$AM2.md" \
+  && ok "③ doctor 账本面 dirty 审计（绕写痕迹 warn 指名道姓）" || fail "③ doctor dirty 审计缺失（$(echo "$OUT" | grep -c "绕过工具直写痕迹")）"
+git -C "$AGORA_HOME" checkout -q -- "wiki/tasks/$AM2.md"   # 夹具还原，防污染后续断言
 
 echo "===== 四缺口红测试批（gt-7ca0）：actor碰撞推导/链目标死循环/配额自锁/idle停转自恢复 ====="
 # 独立夹具（B批模式）：每场景独立 AGORA_HOME（mktemp 隔离，不触主测试账本）；stub runtime 离线

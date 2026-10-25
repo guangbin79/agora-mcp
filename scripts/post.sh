@@ -89,6 +89,7 @@ p = sys.argv[1]; m = agora_lib.main_repo_of(p); print(m or p)' "${_pd:-/nonexist
   [[ "$_vd" == "$(dirname "$_mr")" ]] || fail VALIDATION_FAILED "wt_dir 须为主仓同级命名域（../<REPO>__wt-*）: $_v"
   case "$(basename "$_v")" in
     "$(basename "$_mr")"__wt-"${TASK}"__*) ;;
+    "$(basename "$_mr")") fail VALIDATION_FAILED "wt_dir 拒指主仓本体（自指）——目标=主仓本体属跨仓直改授权场景: 勿用 wt_dir，凭据文件 .omo/agora-delegation/${TASK}.md（worktree=目标）即可，enforcer 凭据优先放行；目标=专属树则须 <REPO>__wt-${TASK}__* 命名: $_v" ;;
     *) fail VALIDATION_FAILED "wt_dir 须为 <REPO>__wt-${TASK}__* 本任务专属命名（防指他任务树/主仓本体）: $_v" ;;
   esac
 }
