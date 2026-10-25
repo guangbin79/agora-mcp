@@ -67,10 +67,12 @@ def _norm(p):   # worktree 路径归一主仓后 realpath（actor 碰撞同项�
     except Exception: return m
 cur = _norm(pdir)
 disp, terminal, last_alive, claimed, dact, runs, tproj = {}, set(), {}, {}, {}, {}, {}
+scan_i = 0   # gt-6769：全局扫描序（文件序×行序＝append-only 写入因果序），ts 同秒并列时的确定性次键
 for f in sorted((glob.glob(f"{home}/log/*/*.md") + glob.glob(f"{home}/log/*/.*.md"))):
     try: lines = open(f, encoding="utf-8", errors="replace").read().splitlines()
     except OSError: continue
     for line in lines:
+        scan_i += 1
         if "event:" not in line: continue
         m = re.search(r"task:(gt-[0-9a-f]{4,})", line)
         if not m: continue
@@ -87,7 +89,7 @@ for f in sorted((glob.glob(f"{home}/log/*/*.md") + glob.glob(f"{home}/log/*/.*.m
         elif "event:claimed" in line:
             am = re.search(r'\| actor:(\S+)', line)
             tmz = re.search(r"\| ts:([^|]+)", line)
-            claimed[t] = (am.group(1) if am else "", tmz.group(1).strip() if tmz else "")
+            claimed[t] = (am.group(1) if am else "", tmz.group(1).strip() if tmz else "", scan_i)
             last_alive[t] = True
         elif any(f"event:{e}" in line for e in ("done", "merged", "cancelled")):
             terminal.add(t); claimed.pop(t, None)
@@ -114,10 +116,11 @@ if not dtask and actor:
             return d if d.tzinfo else d.astimezone()
         except Exception:
             return None
-    cands = [t for t, (a, _) in claimed.items()
+    cands = [t for t, (a, _, _) in claimed.items()
              if a == actor and not (cur and _norm(tproj.get(t, "")) == cur and not disp.get(t))]
     if cands:
-        dtask = max(cands, key=lambda t: (_pts(claimed[t][1]) or _pts("1970-01-01T00:00:00+00:00")).timestamp())
+        # 同 ts 并列时以扫描序（写入因果序）破平——append-only 账本后写者更近（gt-6769 同秒并列实证）
+        dtask = max(cands, key=lambda t: ((_pts(claimed[t][1]) or _pts("1970-01-01T00:00:00+00:00")).timestamp(), claimed[t][2]))
 nxt = depth(dtask, frozenset()) + 1 if dtask in disp else 1
 # 配额活跃＝dispatched ∩ 无终态 ∩ 非僵尸（last_alive=False＝已死出集；真活由 .live 计数兜底取 max）
 # 分域口径（gt-8c5b）：活跃按 actor 归组（dispatched 行 actor 字段，claimed 兜底）；.live 按 run 路径归属 actor；

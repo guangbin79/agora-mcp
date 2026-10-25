@@ -3278,7 +3278,7 @@ BDSP --actor borch@repa --project "$REPA" --task "$CA3" >/dev/null 2>&1
 OUT=$(CANCEL --actor borch@repa)
 echo "$OUT" | grep -q "\"task\":\"$CA3\"" && echo "$OUT" | grep -qF "$CA2" \
   && [ -z "$(LEV "$CA2" cancelled)" ] && [ -n "$(LEV "$CA3" cancelled)" ] \
-  && ok "② 多活跃：取最近且候选列表含全部活跃（其余不误伤）" || fail "② 多活跃（$OUT）"
+  && ok "② 多活跃：取最近且候选列表含全部活跃（其余不误伤）" || { fail "② 多活跃（$OUT）"; grep -h "borch@repa" "$AGORA_HOME"/log/*/repa.md 2>/dev/null | grep -E "event:(dispatched|cancelled)" | tail -8 | cut -c1-190; }
 # ③ 已终态再取消拒
 CANCEL --actor borch@repa --task "$CA3" 2>/dev/null
 [[ $? -eq 4 ]] && ok "③ 已终态再取消拒（rc=4）" || fail "③ 终态拒"

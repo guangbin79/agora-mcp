@@ -35,10 +35,12 @@ def _pts(s):
         return None
 disp, terminal, last_alive = {}, set(), {}
 disp_ts, runs, sess = {}, {}, {}
+scan_i = 0   # gt-6769：全局扫描序＝ts 同秒并列的确定性次键（append-only 后写者更近）
 for f in sorted((glob.glob(f"{home}/log/*/*.md") + glob.glob(f"{home}/log/*/.*.md"))):
     try: lines = open(f, encoding="utf-8", errors="replace").read().splitlines()
     except OSError: continue
     for line in lines:
+        scan_i += 1
         if "event:" not in line: continue
         m = re.search(r"task:(gt-[0-9a-f]{4,})", line)
         if not m: continue
@@ -47,7 +49,7 @@ for f in sorted((glob.glob(f"{home}/log/*/*.md") + glob.glob(f"{home}/log/*/.*.m
             am = re.search(r"\| actor:(\S+)", line)
             if am and am.group(1) == actor: disp[t] = True   # 只认本 actor 派的
             tmz = re.search(r"\| ts:([^|]+)", line)
-            if tmz: disp_ts[t] = tmz.group(1).strip()   # gt-6769：pick 按 ts 判「最近」，不按文件/set 序
+            if tmz: disp_ts[t] = (tmz.group(1).strip(), scan_i)   # gt-6769：pick 按 (ts, 扫描序) 判「最近」
             last_alive[t] = True
             rm2 = re.search(r"\| run:(\S+)", line)           # C 二期（gt-0a34）：--kill 定位 live/pgid 用
             if rm2: runs[t] = rm2.group(1)
@@ -66,8 +68,8 @@ if task:
     print(json.dumps({"candidates": [task], "pick": task,
                       "run": runs.get(task, ""), "session": sess.get(task, "")}))
 else:
-    # gt-6769：pick 按 ts 判「最近派发」——文件/set 序在跨 UTC 日期分片分裂时≠时序（F5 三连挂实证）
-    pick = max(cands, key=lambda t: (_pts(disp_ts.get(t, "")) or _pts("1970-01-01T00:00:00+00:00")).timestamp()) if cands else ""
+    # gt-6769：pick 按 (ts, 扫描序) 判「最近派发」——文件/set 序在跨 UTC 日期分片分裂时≠时序（F5 三连挂实证）
+    pick = max(cands, key=lambda t: ((_pts(disp_ts.get(t, ("",))[0]) or _pts("1970-01-01T00:00:00+00:00")).timestamp(), disp_ts.get(t, ("", 0))[1])) if cands else ""
     print(json.dumps({"candidates": cands, "pick": pick,
                       "run": runs.get(pick, ""), "session": sess.get(pick, "")}))
 PYEOF

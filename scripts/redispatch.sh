@@ -28,10 +28,12 @@ def _pts(s):
         return None
 home, actor, task = sys.argv[1], sys.argv[2], (sys.argv[3] if len(sys.argv) > 3 else "")
 rows_by, mine, dts = {}, set(), {}
+scan_i = 0   # gt-6769：全局扫描序＝ts 同秒并列的确定性次键（append-only 后写者更近）, {}
 for f in sorted((glob.glob(f"{home}/log/*/*.md") + glob.glob(f"{home}/log/*/.*.md"))):
     try: lines = open(f, encoding="utf-8", errors="replace").read().splitlines()
     except OSError: continue
     for line in lines:
+        scan_i += 1
         m = re.search(r"task:(gt-[0-9a-f]{4,})", line)
         if not m: continue
         em = re.search(r"event:([a-z_]+)", line)
@@ -43,7 +45,7 @@ for f in sorted((glob.glob(f"{home}/log/*/*.md") + glob.glob(f"{home}/log/*/.*.m
             am = re.search(r"\| actor:(\S+)", line)
             if am and am.group(1) == actor:
                 mine.add(t)
-                dts[t] = ts.group(1)   # gt-6769：pick 按 ts 判「最近可回池」，不按 set 序
+                dts[t] = (ts.group(1).strip(), scan_i)   # gt-6769：pick 按 (ts, 扫描序) 判「最近可回池」
 states = {}
 for t, rows in rows_by.items():
     rows.sort(key=lambda r: r[0])   # ts 序稳定排序（平局保文件序＝因果序，poll.sh scan_tasks 同款；元组全排会被 ev 字典序重排）
@@ -63,8 +65,8 @@ if task:
 else:
     cands = [t for t in mine if t in states and
              (states[t]["last"] == "escalated" or states[t]["done_open"])]
-    # gt-6769：pick 按 ts 判「最近可回池」——文件/set 序在跨 UTC 日期分片分裂时≠时序（F5 三连挂实证）
-    pick = max(cands, key=lambda t: (_pts(dts.get(t, "")) or _pts("1970-01-01T00:00:00+00:00")).timestamp()) if cands else ""
+    # gt-6769：pick 按 (ts, 扫描序) 判「最近可回池」——文件/set 序在跨 UTC 日期分片分裂时≠时序（F5 三连挂实证）
+    pick = max(cands, key=lambda t: ((_pts(dts.get(t, ("",))[0]) or _pts("1970-01-01T00:00:00+00:00")).timestamp(), dts.get(t, ("", 0))[1])) if cands else ""
     print(json.dumps({"candidates": cands, "pick": pick, "state": states.get(pick, {})}))
 PYEOF
 ) || fail INTERNAL "账本重放失败" 4
