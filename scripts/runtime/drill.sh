@@ -25,6 +25,7 @@ DRILL_STATE="${AGORA_DRILL_STATE:-$HOME/.local/state/agora-drill}"
 ACTOR_BASE="${AGORA_DRILL_ACTOR:-drill}"   # 每场景追加 -<scen> 后缀（gt-f8ed 分域隔离）
 ACTOR_NAME="$ACTOR_BASE"; ACTOR_PROJ=""; DREPO=""   # 由 provision(<scen>) 逐场景落定
 PKG_SCRIPTS="$(cd "$(dirname "$0")/.." && pwd)"   # drill 同包 lib：广场 scripts 拷贝滞后时新 drill 必配同版 agora_lib（scan_tasks）
+SERVER_PY="$(cd "$PKG_SCRIPTS/.." && pwd)/server/agora_mcp.py"   # --standalone 覆写用 agora server 绝对路径（同包自洽）
 [[ -d "$AGORA_HOME/.git" ]] || { echo '{"code":"NO_FORUM","message":"AGORA_HOME 无仓库"}' >&2; exit 2; }
 
 SCEN=""
@@ -354,6 +355,34 @@ scen_wave() {
 }
 
 guard
+
+# ---------- --standalone 隔离（gt-7cd9 根因①）：service 模式下子会话工具在常驻服务进程内执行，
+# opencode.json mcp.agora.environment 钉死的 AGORA_HOME 压过 spawn 进程 env——沙箱会话 agora MCP
+# 全指主广场（anon@proj 污染名册十一例实证）。review-loop e2e 先例：--standalone 私有 server＝
+# 独立 env＋独立 MCP；2026-10-26 /proc 实证纯 --standalone 下 config pin 仍胜子会话进程 env，
+# 故并辅 OPENCODE_CONFIG_CONTENT 同键覆写（合成形状 mcp.<name> 实证可覆盖全局 servers 形状）。
+# 只作用于 spawn 面（包装 runtime 交 dispatch）；poll/health 面维持原 RUNTIME。busy 让行先行，零扰动不落盘。
+DRILL_BIN="$DRILL_STATE/bin"; mkdir -p "$DRILL_BIN"
+WRAP="$DRILL_BIN/runtime-standalone.sh"
+cat > "$WRAP" <<EOF
+#!/usr/bin/env bash
+# drill 专用 runtime 包装（gt-7cd9）：run 子命令注入 --standalone（私有 server＝子会话进程 env 生效）
+if [ "\$1" = "run" ]; then shift; exec "$RUNTIME" run --standalone "\$@"; fi
+exec "$RUNTIME" "\$@"
+EOF
+chmod +x "$WRAP"
+export AGORA_RUNTIME="$WRAP"
+if [ -f "$SERVER_PY" ]; then   # server 缺席（畸形安装）时跳过覆写，包装层隔离仍在
+  export OPENCODE_CONFIG_CONTENT="$(RUNTIME="$RUNTIME" AGORA_HOME="$AGORA_HOME" SERVER_PY="$SERVER_PY" python3 -c '
+import json, os, sys
+print(json.dumps({"mcp": {"agora": {
+    "type": "local",
+    "command": ["python3", os.environ["SERVER_PY"]],
+    "environment": {"AGORA_HOME": os.environ["AGORA_HOME"]},
+    "disabled": False,
+}}}))')"
+fi
+
 for SCEN in "${SCENS[@]}"; do
   case "$SCEN" in
     restart) scen_restart;;

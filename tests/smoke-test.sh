@@ -2018,19 +2018,21 @@ MERGE "$N8I" 2>&1 | grep -q VALIDATION_FAILED && ok "⑧e 末条垃圾 commit �
 # ⑧f（gt-e5cc）：done 锚点三盲区——点分片可见＋多 done 按 ts 取末条＋复合 commit 值容错＋漂移 HEAD 不吃票（gt-762a 回归）
 SHDIR="$AGORA_HOME/log/$(date +%Y-%m-%d)"; mkdir -p "$SHDIR"
 DOTLINE() { printf -- '- seq:1 | ts:%s | actor:tester@proj | event:done | idem:%s | task:%s | commit:%s | evidence:fixture\n' "$1" "$2" "$3" "$4"; }
-# ⑧f-1 正例（gt-236a 实形）：早 done（垃圾 commit）落 .dsm1.md，晚 done（复合值，6 位 hex 红鲱鱼在分支名）落 .dsm2.md——
-#   老代码 glob 盲点分片＋tail -1 取路径序均取不到真锚；新代码 ts 末条＋值内首 hex run 命中
+# ⑧f-1 正例（gt-236a 实形＋R1 B1 形态）：ts 晚的真锚（复合值，分支名段含 8 位 hex run 10222158）落 .a8f1.md（路径序在前），
+#   ts 早的垃圾 done 落 .z8f1.md（路径序在后）——老 tail -1 取路径序末行必取垃圾，单候提取必误取 10222158；
+#   新实现 ts 末条＋多候验祖先命中真锚（点分片可见性同段锁定）
 N8J=$(TID "$(TITLE="非wt点分片done" VERIFY=true PROJECT_DIR="$PROJ" TC)")
 POST tester@proj --event claimed --task "$N8J" >/dev/null
 C8J=$(git -C "$PROJ" rev-parse HEAD)
-DOTLINE "2026-10-26T00:00:00+08:00" dsm1 "$N8J" "HEAD" > "$SHDIR/.dsm1.md"
-DOTLINE "2026-10-26T00:00:01+08:00" dsm2 "$N8J" "proj@gt-a1b2c3-fixture:$C8J + other@master:$C8J" > "$SHDIR/.dsm2.md"
-MERGE "$N8J" 2>/dev/null | grep -q '"result":"merged"' && ok "⑧f 点分片 done 可见＋ts 末条＋复合 commit 容错" || fail "⑧f 点分片/ts 序/复合 commit 锚点"
-# ⑧f-2 负例：ts 末条垃圾 commit 必拒——老 tail -1 按路径序取 .dsm3.md（. < 字母）的真锚会误过；新语义不回退旧锚
+DOTLINE "2026-10-26T00:00:01+08:00" a8f1 "$N8J" "proj@wt-fix-10222158:$C8J + other@master:$C8J" > "$SHDIR/.a8f1.md"
+DOTLINE "2026-10-26T00:00:00+08:00" z8f1 "$N8J" "HEAD" > "$SHDIR/.z8f1.md"
+MERGE "$N8J" 2>/dev/null | grep -q '"result":"merged"' && ok "⑧f 点分片可见＋ts 末条胜路径序＋复合值多候验祖先" || fail "⑧f 点分片/ts 序/复合 commit 锚点"
+# ⑧f-2 负例（②判别向）：ts 晚的垃圾 commit 落 .a8f2.md（路径序在前），ts 早的真锚落 .z8f2.md（路径序在后）——
+#   老 tail -1 取路径序末行取到真锚会误并；新 ts 末条＝垃圾 → 零候选 VALIDATION_FAILED（不回退旧锚）
 N8K=$(TID "$(TITLE="非wt末条垃圾ts序" VERIFY=true PROJECT_DIR="$PROJ" TC)")
 POST tester@proj --event claimed --task "$N8K" >/dev/null
-DOTLINE "2026-10-26T00:00:00+08:00" dsm3 "$N8K" "$C8J" > "$SHDIR/.dsm3.md"
-DOTLINE "2026-10-26T00:00:01+08:00" dsm4 "$N8K" "HEAD" > "$SHDIR/.dsm4.md"
+DOTLINE "2026-10-26T00:00:01+08:00" a8f2 "$N8K" "HEAD" > "$SHDIR/.a8f2.md"
+DOTLINE "2026-10-26T00:00:00+08:00" z8f2 "$N8K" "$C8J" > "$SHDIR/.z8f2.md"
 MERGE "$N8K" 2>&1 | grep -q VALIDATION_FAILED && ok "⑧f 多 done 取 ts 末条：末条垃圾 commit 拒（不回退旧锚）" || fail "⑧f ts 末条语义"
 # ⑧f-3 漂移 HEAD 不吃票（gt-762a 跨任务错乱回归）：检出切到任务分支时非 wt 目标仍＝默认分支
 N8L=$(TID "$(TITLE="非wt漂移目标" VERIFY=true PROJECT_DIR="$PROJ" TC)")
@@ -3940,7 +3942,7 @@ cat > "$DFAKE/fakerun.sh" <<'EOF'
 #!/usr/bin/env bash
 case "$1" in
   --version) exit 0 ;;
-  run) shift; sleep "${FAKE_RUN_SLEEP:-60}" ;;
+  run) shift; { printf 'ARGS:%s\n' "$*"; printf 'OCC:%s\n' "${OPENCODE_CONFIG_CONTENT:-none}"; } >> "${FAKE_RUN_LOG:?}" 2>/dev/null; sleep "${FAKE_RUN_SLEEP:-60}" ;;
   *) exit 0 ;;
 esac
 EOF
@@ -3956,6 +3958,7 @@ chmod +x "$DFAKE/restart-hook.sh"
 DDRILL() { AGORA_HOME="$DAH" AGORA_DRILL_STATE="$DSTATE" AGORA_RUNTIME="$DFAKE/fakerun.sh" \
   AGORA_DRILL_RESTART_CMD="$DFAKE/restart-hook.sh" AGORA_VERIFY_WIN=1 AGORA_DRILL_HEALTH_WAIT=5 \
   AGORA_DRILL_CLAIM_WAIT=0 FAKE_RUN_SLEEP=60 AGORA_LOCK_WAIT=30 RESTART_HOOK_OUT="$DH/restart-hook.log" \
+  FAKE_RUN_LOG="$DH/fakerun.log" \
   bash "$PKG/scripts/runtime/drill.sh" "$@"; }
 DLEV() { cat "$DAH"/log/*/*.md "$DAH"/log/*/.*.md 2>/dev/null | grep -E "(^|[|] )task:$1( |$)" | grep "event:$2"; }   # gt-40cc：点分片伴生
 DSchema() { python3 - "$1" <<'PYEOF'
@@ -4053,6 +4056,13 @@ for S in restart kill quota wave; do
 done
 [ "$(DLEV "$DWID" dispatched | grep -c 'actor:drill-wave@')" -eq 3 ] || ISO=1
 [ "$ISO" -eq 0 ] && ok "场景分域隔离（独立 actor/仓/实体页，wave 3 派全在 wave 域）" || fail "场景未隔离（gt-f8ed 根因2）"
+# ⑧ --standalone 隔离（gt-7cd9 根因①）：spawn 面子会话必经包装注入 --standalone（私有 server＝
+# 独立 env＋独立 MCP）＋OPENCODE_CONFIG_CONTENT 沙箱覆写（/proc 实证 config pin 压进程 env，纯
+# --standalone 不够）——漏注入即 spawn 面全数错绑主广场（anon@proj 污染形态）
+SA=0
+grep -q "^ARGS:.*--standalone" "$DH/fakerun.log" 2>/dev/null || SA=1
+grep "^OCC:" "$DH/fakerun.log" 2>/dev/null | grep -qF "$DAH" || SA=1
+[ "$SA" -eq 0 ] && ok "spawn 面 --standalone＋OC_CONTENT 沙箱覆写（gt-7cd9）" || fail "standalone 隔离注入缺失（gt-7cd9 根因①）"
 rm -rf "$DH"
 
 echo
