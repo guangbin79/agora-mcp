@@ -1684,6 +1684,30 @@ echo "$OUT" | grep -q '"mode":"spawned"' && [ "$(ls -d "$H5/repo__wt-${AWT}__"* 
   && ok "已有 wt_dir：不重复建树" || fail "已有 wt_dir 重复建树（$OUT）"
 rm -rf "$H5"
 
+echo "===== gt-575d：重启前挂起盘点＋BOOT done 收尾清单 ====="
+H7=$(mktemp -d); AH7="$H7/agora"; REPO7="$H7/repo"
+mkdir -p "$REPO7"; (cd "$REPO7" && git init -q . && git -c user.name=t -c user.email=t@l commit -q --allow-empty -m i)
+AGORA_HOME="$AH7" AGORA_PKG="$PKG" bash "$PKG/scripts/init.sh" >/dev/null 2>&1
+mkdir -p "$AH7/wiki/entities"
+printf -- '---\nname: pt575\ndirs:\n  - %s\ncan_spawn: true\n---\n' "$REPO7" > "$AH7/wiki/entities/pt575.md"
+(cd "$AH7" && git add -A && AGORA_MECHANICAL=1 git commit -qm ent >/dev/null)
+P575=$(TITLE="盘点任务" VERIFY=true PROJECT_DIR="$REPO7" AGORA_HOME="$AH7" bash "$PKG/scripts/task-create.sh")
+P575=$(echo "$P575" | sed -n 's/.*"task":"\(gt-[0-9a-f]*\)".*/\1/p')
+AGORA_HOME="$AH7" bash "$PKG/scripts/register-session.sh" --sid ses-p575 --entity pt575 >/dev/null
+AGORA_HOME="$AH7" bash "$PKG/scripts/post.sh" --actor pt575@repo --project repo --event dispatched \
+  --task "$P575" --target "$REPO7" --child pt575 --run "raw/dispatches/d-p575.log" --session ses-p575 >/dev/null
+OUT=$(AGORA_HOME="$AH7" bash "$PKG/scripts/pending-sessions.sh")
+echo "$OUT" | grep -q "ses-p575" && echo "$OUT" | grep -q "$P575" \
+  && ok "盘点：在册＋未终态会话列出（sid＋task 联结）" || fail "盘点缺挂起项（$OUT）"
+AGORA_HOME="$AH7" bash "$PKG/scripts/post.sh" --actor pt575@repo --project repo --event done \
+  --task "$P575" --commit HEAD --evidence x >/dev/null
+OUT=$(AGORA_HOME="$AH7" bash "$PKG/scripts/pending-sessions.sh")
+echo "$OUT" | grep -q "可安全重启" && ok "盘点：终态后出列（可安全重启）" || fail "盘点未出列（$OUT）"
+grep -q "退场收尾三查" "$PKG/scripts/dispatch.sh" && grep -q "知识积累已提交" "$PKG/scripts/dispatch.sh" \
+  && grep -q "worktree 清理确认" "$PKG/scripts/dispatch.sh" && grep -q "遗留项显式注明" "$PKG/scripts/dispatch.sh" \
+  && ok "BOOT done 收尾三查清单在场（知识积累/worktree/遗留项）" || fail "BOOT 收尾清单缺失"
+rm -rf "$H7"
+
 # --- post.sh 读取侧三件 + board 心跳 age（gt-4ea1 F/E）---
 # 坏名（含反斜杠）dispatcher 拒 done + fail 零写入（全新 project 无 shard 残留）
 TF=$(TITLE="毒dispatcher任务" VERIFY="true" PROJECT_DIR="$PROJ" TC | sed -n 's/.*"task":"\(gt-[0-9a-f]*\)".*/\1/p')
@@ -4099,7 +4123,7 @@ echo "===== AGORA_HOME 缺省治理（gt-ca34：裸调用 fail-fast） ====="
 # HOME 同步沙箱＋timeout 包裹：红阶段（guard 未加）init.sh 不得污真 HOME，notify 守护不得挂死套件
 mkdir -p "$T/barehome"
 BAF=0
-for BF in attach cancel dispatch doctor history init install-hooks merge notify-opencode post redispatch sync task-create wiki-write; do
+for BF in attach cancel dispatch doctor history init install-hooks merge notify-opencode pending-sessions post redispatch sync task-create wiki-write; do
   env -u AGORA_HOME HOME="$T/barehome" timeout 10 bash "$PKG/scripts/$BF.sh" >/dev/null 2>&1 && BAF=1
   env -u AGORA_HOME HOME="$T/barehome" timeout 10 bash "$PKG/scripts/$BF.sh" 2>&1 | grep -q AGORA_HOME || BAF=1
 done
