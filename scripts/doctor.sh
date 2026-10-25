@@ -11,23 +11,39 @@ ok()   { echo "ok   | $1"; }
 warn() { echo "warn | $1"; }
 bad()  { echo "fail | $1 | 恢复: $2"; FAIL=1; }
 
-# 1. seq 对账：每 actor 在每分片内 seq 连续无重号。
-#    核销通道（gt-8fe1 C2，runbook §seq「不删行，发 diagnosed 记录」口径）：账本 diagnosed 事件
-#    conclusion 含 seq-waive=<分片名>:<actor> 标注＝该 (分片, actor) 的存量断档/重号已人工核对
-#    git log 定位并留痕——doctor 转 ok（注明已核销）不再置红；未核销的照旧红。
-#    粒度取分片 basename＋actor（date 目录不入键：标注针对该分片文件的存量事实）。
-SEQ_OUT=$(PYTHONPATH="$(cd "$(dirname "$0")" && pwd)${PYTHONPATH:+:$PYTHONPATH}" python3 - <<'PYEOF'
-import glob, os, collections, re, sys
+# 1/2. 账本对账（seq 连续无重号＋idem 无连续重复）。
+#    核销通道（gt-8fe1 C2，runbook §seq/§idem「不删行，发 diagnosed 记录」口径）：diagnosed 事件
+#    conclusion 含 seq-waive=<分片名>:<actor> / idem-waive=<分片名>:<idem> 标注＝该存量异常已
+#    人工核对 git log 定位并留痕——doctor 对命中项转 ok（注明已核销数）不再置红；未核销照旧红。
+#    粒度取分片 basename（date 目录不入键：标注针对该分片文件的存量事实；append-only 下行号稳定
+#    故 idem 键用 idem 值而非行号）。
+WAIVES=$(PYTHONPATH="$(cd "$(dirname "$0")" && pwd)${PYTHONPATH:+:$PYTHONPATH}" python3 - <<'PYEOF'
+import glob, os, re
 import agora_lib as lib
 HOME = os.environ["AGORA_HOME"]
-waived = set()
+out = []
 for f in (glob.glob(f"{HOME}/log/*/*.md") + glob.glob(f"{HOME}/log/*/.*.md")):
     with open(f, encoding="utf-8", errors="replace") as fh:
         for line in fh:
             e = lib.parse_event(line)
             if e and e["event"] == "diagnosed":
-                for m in re.finditer(r"seq-waive=([^\s:|]+):(\S+)", e.get("conclusion") or ""):
-                    waived.add((m.group(1), m.group(2)))
+                c = e.get("conclusion") or ""
+                for m in re.finditer(r"seq-waive=([^\s:|]+):(\S+)", c):
+                    out.append(f"S\t{m.group(1)}\t{m.group(2)}")
+                for m in re.finditer(r"idem-waive=([^\s:|]+):(\S+)", c):
+                    out.append(f"I\t{m.group(1)}\t{m.group(2)}")
+print("\n".join(out))
+PYEOF
+)
+export AGORA_WAIVE_SEQ; export AGORA_WAIVE_IDEM
+AGORA_WAIVE_SEQ=$(printf '%s\n' "$WAIVES" | awk -F'\t' '$1=="S"{print $2"\t"$3}')
+AGORA_WAIVE_IDEM=$(printf '%s\n' "$WAIVES" | awk -F'\t' '$1=="I"{print $2"\t"$3}')
+
+SEQ_OUT=$(PYTHONPATH="$(cd "$(dirname "$0")" && pwd)${PYTHONPATH:+:$PYTHONPATH}" python3 - <<'PYEOF'
+import glob, os, collections, re, sys
+import agora_lib as lib
+HOME = os.environ["AGORA_HOME"]
+waived = {tuple(l.split("\t")) for l in os.environ.get("AGORA_WAIVE_SEQ", "").splitlines() if l.strip()}
 bad, waived_n = [], 0
 for f in (glob.glob(f"{HOME}/log/*/*.md") + glob.glob(f"{HOME}/log/*/.*.md")):
     seqs = collections.defaultdict(list)
@@ -52,11 +68,12 @@ SEQ_WAIVE_N=$(printf '%s\n' "$SEQ_OUT" | sed -n 's/^WAIVED_HITS=//p')
 
 # 2. idem 完整性：同一 (actor, task) 子序列内"连续"重复 idem 才是重试残留异常；
 #    隔着其他事件的相同 idem 是合法状态迁移（如 reopen 后再次 claimed），不算异常
-IDEM_BAD=$(PYTHONPATH="$(cd "$(dirname "$0")" && pwd)${PYTHONPATH:+:$PYTHONPATH}" python3 - <<'PYEOF'
+IDEM_OUT=$(PYTHONPATH="$(cd "$(dirname "$0")" && pwd)${PYTHONPATH:+:$PYTHONPATH}" python3 - <<'PYEOF'
 import os, glob
 import agora_lib as lib
 HOME = os.environ["AGORA_HOME"]
-bad = []
+waived = {tuple(l.split("\t")) for l in os.environ.get("AGORA_WAIVE_IDEM", "").splitlines() if l.strip()}
+bad, waived_n = [], 0
 for f in sorted((glob.glob(f"{HOME}/log/*/*.md") + glob.glob(f"{HOME}/log/*/.*.md"))):
     last = {}  # (actor, task) -> 上一条 idem
     with open(f, encoding="utf-8", errors="replace") as fh:
@@ -65,12 +82,19 @@ for f in sorted((glob.glob(f"{HOME}/log/*/*.md") + glob.glob(f"{HOME}/log/*/.*.m
             if not e: continue
             key = (e["actor"], e.get("task", ""))
             if last.get(key) == e["idem"]:
-                bad.append(f"{f}:{i} idem:{e['idem']}")
+                if (os.path.basename(f), e["idem"]) in waived: waived_n += 1
+                else: bad.append(f"{f}:{i} idem:{e['idem']}")
             last[key] = e["idem"]
 print("\n".join(bad))
+print(f"WAIVED_HITS={waived_n}")
 PYEOF
 )
-[[ -z "$IDEM_BAD" ]] && ok "idem 完整性" || bad "连续重复 idem（重试残留）: $IDEM_BAD" "保留首条，后续行发 diagnosed 标注无效行 ref（doctor-runbook §idem；不删行）"
+IDEM_BAD=$(printf '%s\n' "$IDEM_OUT" | grep -v '^WAIVED_HITS=' || true)
+IDEM_WAIVE_N=$(printf '%s\n' "$IDEM_OUT" | sed -n 's/^WAIVED_HITS=//p')
+[[ -z "$IDEM_BAD" ]] && { [[ "${IDEM_WAIVE_N:-0}" -gt 0 ]] \
+  && ok "idem 完整性（存量红已核销 ${IDEM_WAIVE_N} 项——diagnosed idem-waive 留痕，runbook §idem）" \
+  || ok "idem 完整性"; } \
+  || bad "连续重复 idem（重试残留）: $IDEM_BAD" "保留首条，后续行发 diagnosed 标注无效行 ref＋idem-waive=<分片名>:<idem>（doctor-runbook §idem；不删行）"
 
 # 3. board 对账：cp/推导/diff 全程持 post.lock——对账窗口对写路径完全闭合
 TMP=$(mktemp -d)
