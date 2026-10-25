@@ -1656,6 +1656,32 @@ r = json.loads(rpc("tools/call", {"name":"agora_post","arguments":{"event":"prop
 assert r.get("shard","").endswith("/repo2.md"), r   # fallback：非 worktree basename
 p.stdin.close()
 PYEOF
+# ⑨ gt-85c3：非 wt 任务 spawn 强制树隔离（混分支根治 gt-236a/762a）
+# a) 无 wt_dir 任务 → 自动补建 <REPO>__wt-<task>__<ts>（默认分支基点）＋任务页回填 wt_dir＋分支 wt/<task>
+AWT=$(TITLE="auto-wt 任务" VERIFY="true" PROJECT_DIR="$R5" AGORA_HOME="$AH5" bash "$PKG/scripts/task-create.sh")
+AWT=$(echo "$AWT" | sed -n 's/.*"task":"\(gt-[0-9a-f]*\)".*/\1/p')
+rm -f "$AH5"/raw/dispatches/*.live
+OUT=$(AGORA_RUNTIME=true AGORA_HOME="$AH5" bash "$PKG/scripts/dispatch.sh" --actor tester@repo --project "$R5" --task "$AWT" 2>&1)
+echo "$OUT" | grep -q '"mode":"spawned"' && echo "$OUT" | grep -q '"wt_created"' \
+  && ok "auto-wt：无树任务 spawn 补建＋wt_created 在场" || fail "auto-wt 补建缺失（$OUT）"
+ls -d "$H5/repo__wt-${AWT}__"* >/dev/null 2>&1 && ok "auto-wt：专属树已建（<REPO>__wt-<task>__<ts> 命名域）" || fail "auto-wt 树未建"
+grep -q "^wt_dir:" "$AH5/wiki/tasks/$AWT.md" && ok "auto-wt：任务页 wt_dir 回填（下次派发幂等锚）" || fail "auto-wt 页未回填"
+git -C "$R5" show-ref --verify --quiet "refs/heads/wt/$AWT" && ok "auto-wt：分支 wt/<task> 在场" || fail "auto-wt 分支缺失"
+# b) nowt: true → 豁免不建树＋warn 显式
+NWT=$(TITLE="nowt 豁免任务" VERIFY="true" PROJECT_DIR="$R5" AGORA_HOME="$AH5" bash "$PKG/scripts/task-create.sh")
+NWT=$(echo "$NWT" | sed -n 's/.*"task":"\(gt-[0-9a-f]*\)".*/\1/p')
+sed -i "2,/^---\$/s|^---\$|nowt: true\n---|" "$AH5/wiki/tasks/$NWT.md"
+rm -f "$AH5"/raw/dispatches/*.live
+OUT=$(AGORA_RUNTIME=true AGORA_HOME="$AH5" bash "$PKG/scripts/dispatch.sh" --actor tester@repo --project "$R5" --task "$NWT" 2>&1)
+echo "$OUT" | grep -q '"mode":"spawned"' && echo "$OUT" | grep -q "nowt: true 豁免" \
+  && ok "nowt 豁免：spawn 放行＋warn 显式" || fail "nowt 豁免异常（$OUT）"
+ls -d "$H5/repo__wt-${NWT}__"* >/dev/null 2>&1 && fail "nowt 豁免却建了树" || ok "nowt 豁免：零树隔离跳过"
+# c) 已有 wt_dir → 不重复建（复用 a 的回填页再派）
+NB=$(ls -d "$H5/repo__wt-${AWT}__"* | wc -l)
+rm -f "$AH5"/raw/dispatches/*.live
+OUT=$(AGORA_RUNTIME=true AGORA_HOME="$AH5" bash "$PKG/scripts/dispatch.sh" --actor tester@repo --project "$R5" --task "$AWT" 2>&1)
+echo "$OUT" | grep -q '"mode":"spawned"' && [ "$(ls -d "$H5/repo__wt-${AWT}__"* | wc -l)" = "$NB" ] \
+  && ok "已有 wt_dir：不重复建树" || fail "已有 wt_dir 重复建树（$OUT）"
 rm -rf "$H5"
 
 # --- post.sh 读取侧三件 + board 心跳 age（gt-4ea1 F/E）---
@@ -3166,6 +3192,7 @@ CANCEL() { bash "$PKG/scripts/cancel.sh" "$@"; }
 RDISP()  { AGORA_RUNTIME=echo AGORA_MAX_SPAWN=99 bash "$PKG/scripts/redispatch.sh" "$@"; }
 # ① cancel 省略 task：自动取当前 actor 最近无终态已派任务（dispatched∩无终态口径）＋事件附树状态
 CA1=$(TID "$(TITLE="cancel自动推导用例一" VERIFY=true PROJECT_DIR="$REPA" TC)")
+sed -i "2,/^---\$/s|^---\$|nowt: true\n---|" "$AGORA_HOME/wiki/tasks/$CA1.md"   # gt-85c3 auto-wt 下显式豁免保 non-wt 形态（本断言合同=无树任务 tree:none）
 POST borch@repa --event claimed --task "$CA1" >/dev/null
 BDSP --actor borch@repa --project "$REPA" --task "$CA1" >/dev/null 2>&1
 OUT=$(CANCEL --actor borch@repa)

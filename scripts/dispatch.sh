@@ -177,6 +177,8 @@ fi
 PAGE="$AGORA_HOME/wiki/tasks/$TASK.md"
 WT_DIR=""
 [ -f "$PAGE" ] && WT_DIR=$(sed -n 's/^wt_dir:[[:space:]]*//p' "$PAGE" | head -1)
+NOWT=""
+[ -f "$PAGE" ] && NOWT=$(sed -n 's/^nowt:[[:space:]]*//p' "$PAGE" | head -1)
 WT_MAIN=""
 if [ -n "$WT_DIR" ]; then
   RB_IN=$(realpath "$PDIR" 2>/dev/null) || RB_IN="$PDIR"   # 父链删净时保底裸路径（评审 R2-F1：stderr JSON 契约）
@@ -205,14 +207,93 @@ if [ -f "$PAGE" ]; then
   done
   set +f
 fi
+
+# 预检（落账前，失败零账本残留；SPAWN_PRECHECK 同步可见——失败必须响）
+"$RUNTIME" --version >/dev/null 2>&1 || fail SPAWN_PRECHECK "runtime 不可用: $RUNTIME" 9
+[ -d "$PDIR" ] || fail SPAWN_PRECHECK "project_dir 不存在: $PDIR" 9
+
+# 在场优先：目标项目已有「委托子会话」在场 → 只通知不派生（wt 任务豁免——在场会话无树凭据，notified 必死）
+# gt-0ed3：alive 带 delegated 过滤（title 前缀 "agora: gt-"，两 spawn 通道统一命名 gt-2845②）——
+# 用户交互会话占坑不算在场（通知信消费绑定交互会话下一回合 check_mail，异步任务必滞留；实狗粮 d-dc64196f/d-4255f3e3）。
+# gt-762a：delegated 在场再收窄 status=running——worker done 退场后持久会话 title 不变，残留命中把 notified 投给已退场会话（575d/8fe1/7cd9/e96d 四笔死信实证）。
+# API 不通＝通知桥同依赖 API、无法触达——不算在场，总是 spawn（旧 sessions.map 回退删除：交互注册面≠委托在场）；
+# 他机会话本就无法被本机桥触达；跨机派活走 task_create + mention 异步路径
+VWARN_EXT=""   # set -u：notified 提前出口先置空（warnings 面仅 spawn 路径回填，gt-85c3 次序）
+AW_CREATED=0; AW_EXT=""   # auto-wt 通知面：wt_created 仅自动补建时进 JSON（守卫①严格相等不破，gt-85c3）
+if [ -z "$WT_DIR" ]; then
+  if [ "$API" = 1 ] && timeout "${AGORA_API_TIMEOUT:-15}" bash "$RT" alive "$PDIR" delegated >/dev/null 2>&1; then
+    bash "$SCRIPTS_DIR/post.sh" --actor "$ACTOR" --project "$PROJNAME" --event ack \
+      --body "dispatch $TASK notified via bridge" --mention "$CHILD" >/dev/null
+    echo "{\"dispatch_id\":\"$DID\",\"mode\":\"notified\",\"child_actor\":\"$CHILD@$PROJNAME\"}"
+    exit 0
+  fi
+fi
+
+# gt-85c3：非 wt 任务 spawn 强制树隔离——wt_dir 缺省自动补建（混分支根治：gt-236a 两任务混一条
+# 分支／gt-762a 复合 commit 出票失败实证）。豁免：nowt: true（纯文档/知识积累/单文件微改）＋
+# 非 git 仓／unborn HEAD（无从建树，降级 warn）。在场优先判定先行——notified 不占树。
+if [ -z "$WT_DIR" ] && [ -f "$PAGE" ]; then
+  if [ "$NOWT" = "true" ]; then
+    VWARN+=("nowt: true 豁免——无树隔离，worker 将在目标检出当前分支提交（分支混入风险）")
+  else
+    AW_MAIN=$(PYTHONPATH="$SCRIPTS_DIR" python3 -c 'import sys, agora_lib
+p = sys.argv[1]; m = agora_lib.main_repo_of(p); print(m or p)' "$PDIR" 2>/dev/null || true)
+    if [ -z "$AW_MAIN" ] || [ ! -d "$AW_MAIN/.git" ]; then
+      VWARN+=("auto-wt 跳过——目标非 git 仓（无树隔离，分支混入风险）")
+    elif ! git -C "$AW_MAIN" rev-parse -q --verify HEAD >/dev/null 2>&1; then
+      VWARN+=("auto-wt 跳过——主仓无提交（unborn HEAD 无基点，无树隔离）")
+    else
+      AW_RC=0
+      (
+        flock -w "${AGORA_LOCK_WAIT:-5}" 7 || exit 3
+        # 锁内重读：并发对手方（同任务并发派发）可能已补建回填——复用其树，防分支独占撞车
+        _AW2=$(sed -n 's/^wt_dir:[[:space:]]*//p' "$PAGE" | head -1)
+        [ -n "$_AW2" ] && { echo "$_AW2"; exit 0; }
+        git -C "$AW_MAIN" worktree prune
+        _WTD="$(dirname "$AW_MAIN")/$(basename "$AW_MAIN")__wt-${TASK}__$(date +%m%d%H%M)"
+        if git -C "$AW_MAIN" show-ref --verify --quiet "refs/heads/wt/$TASK"; then
+          git -C "$AW_MAIN" worktree add -q "$_WTD" "wt/$TASK" || exit 9
+        else
+          _DEFBR=""
+          for _c in "$(git -C "$AW_MAIN" config --get init.defaultBranch 2>/dev/null)" main master; do
+            [ -n "$_c" ] && git -C "$AW_MAIN" show-ref --verify --quiet "refs/heads/$_c" && { _DEFBR="$_c"; break; }
+          done
+          [ -n "$_DEFBR" ] || exit 8
+          git -C "$AW_MAIN" worktree add -q -b "wt/$TASK" "$_WTD" "$_DEFBR" || exit 7
+        fi
+        # amended 任务页回填 wt_dir（机械层；sed 即幂等锚——并发对手方下次派发复用本树不重复建）
+        _WTD_ESC="${_WTD//\\/\\\\}"; _WTD_ESC="${_WTD_ESC//&/\\&}"; _WTD_ESC="${_WTD_ESC//|/\\|}"
+        sed -i "2,/^---\$/s|^---\$|wt_dir: ${_WTD_ESC}\n---|" "$PAGE" || exit 6
+        # 账本同步提交：post.lock 内与 post.sh/task-create 同锁互斥（并发 git index 竞争根除）；
+        # 锁忙/提交失败仅失同步不失锚（页已回填）——降级尽力而为，不阻断派发（九派风暴实证）。
+        # 输出重定向 /dev/null：git commit 空提交时 "On branch master" 状态文本不走 -q，会污染
+        # 本子壳 stdout 的路径回传（AW_OUT 多行→WT_DIR 垃圾→rebuild 打飞，风暴四连败实证）
+        (
+          flock -w "${AGORA_LOCK_WAIT:-5}" 8 || exit 0
+          (cd "$AGORA_HOME" && git add "wiki/tasks/$TASK.md" \
+            && AGORA_MECHANICAL=1 git commit -qm "task: amend $TASK wt_dir auto-provision（gt-85c3）") >/dev/null 2>&1 || exit 0
+        ) 8>"$AGORA_HOME/.git/post.lock"
+        echo "$_WTD"
+      ) 7>"$AW_MAIN/.git/agora-auto-wt.lock" >"$AGORA_HOME/.git/wt-$TASK.$$.out" || AW_RC=$?
+      AW_OUT="$(cat "$AGORA_HOME/.git/wt-$TASK.$$.out" 2>/dev/null | tail -1 || true)"; rm -f "$AGORA_HOME/.git/wt-$TASK.$$.out"
+      case "$AW_RC" in
+        0) WT_DIR="$AW_OUT"; WT_MAIN="$AW_MAIN"; AW_CREATED=1   # 通知面走 JSON wt_created 字段（warnings 面留给合同断言，守卫①严格相等不破）
+           AW_EXT=",\"wt_created\":\"$WT_DIR\"" ;;
+        3) fail SPAWN_PRECHECK "auto-wt 锁超时（agora-auto-wt.lock ${AGORA_LOCK_WAIT:-5}s）" 9 ;;
+        8) fail SPAWN_PRECHECK "auto-wt 默认分支不可解析（init.defaultBranch/main/master 均缺）" 9 ;;
+        7) fail SPAWN_PRECHECK "auto-wt 树创建失败（默认分支基点）: $AW_MAIN" 9 ;;
+        9) fail SPAWN_PRECHECK "auto-wt 树挂载失败（既有分支）: $AW_MAIN" 9 ;;
+        6) fail SPAWN_PRECHECK "auto-wt 任务页回填失败: $PAGE" 9 ;;
+        *) fail SPAWN_PRECHECK "auto-wt 补建失败 rc=$AW_RC: $AW_MAIN" 9 ;;
+      esac
+    fi
+  fi
+fi
 VWARN_EXT=""
 if [ ${#VWARN[@]} -gt 0 ]; then
   VWARN_EXT=",\"warnings\":$(printf '%s\n' "${VWARN[@]}" | python3 -c 'import json,sys;print(json.dumps([l.strip() for l in sys.stdin if l.strip()],ensure_ascii=False))')"
 fi
 
-# 预检（落账前，失败零账本残留；SPAWN_PRECHECK 同步可见——失败必须响）
-"$RUNTIME" --version >/dev/null 2>&1 || fail SPAWN_PRECHECK "runtime 不可用: $RUNTIME" 9
-[ -d "$PDIR" ] || fail SPAWN_PRECHECK "project_dir 不存在: $PDIR" 9
 if [ -n "$WT_DIR" ]; then
   [ -e "$WT_MAIN/.git" ] || fail SPAWN_PRECHECK "wt 主仓不可用: $WT_MAIN" 9
   if [ ! -d "$WT_DIR" ]; then
@@ -255,21 +336,6 @@ if [ -n "$WT_DIR" ]; then
   if [ -n "$SETUPCMD" ]; then
     (cd "$WT_DIR" && timeout "${AGORA_SETUP_TIMEOUT:-600}" bash -c "$SETUPCMD") >/dev/null 2>&1 \
       || fail SETUP_FAILED "项目页 setup: 在树内失败（cmd: $SETUPCMD；装环境未完成不派生）" 9
-  fi
-fi
-
-# 在场优先：目标项目已有「委托子会话」在场 → 只通知不派生（wt 任务豁免——在场会话无树凭据，notified 必死）
-# gt-0ed3：alive 带 delegated 过滤（title 前缀 "agora: gt-"，两 spawn 通道统一命名 gt-2845②）——
-# 用户交互会话占坑不算在场（通知信消费绑定交互会话下一回合 check_mail，异步任务必滞留；实狗粮 d-dc64196f/d-4255f3e3）。
-# gt-762a：delegated 在场再收窄 status=running——worker done 退场后持久会话 title 不变，残留命中把 notified 投给已退场会话（575d/8fe1/7cd9/e96d 四笔死信实证）。
-# API 不通＝通知桥同依赖 API、无法触达——不算在场，总是 spawn（旧 sessions.map 回退删除：交互注册面≠委托在场）；
-# 他机会话本就无法被本机桥触达；跨机派活走 task_create + mention 异步路径
-if [ -z "$WT_DIR" ]; then
-  if [ "$API" = 1 ] && timeout "${AGORA_API_TIMEOUT:-15}" bash "$RT" alive "$PDIR" delegated >/dev/null 2>&1; then
-    bash "$SCRIPTS_DIR/post.sh" --actor "$ACTOR" --project "$PROJNAME" --event ack \
-      --body "dispatch $TASK notified via bridge" --mention "$CHILD" >/dev/null
-    echo "{\"dispatch_id\":\"$DID\",\"mode\":\"notified\",\"child_actor\":\"$CHILD@$PROJNAME\"${VWARN_EXT}}"
-    exit 0
   fi
 fi
 
@@ -399,7 +465,7 @@ if [ "$API" = 1 ]; then
     fi
   fi
   register_session
-  echo "{\"dispatch_id\":\"$DID\",\"mode\":\"spawned\",\"channel\":\"api\",\"session\":\"$SID\",\"child_actor\":\"$CHILD@$PROJNAME\",\"run\":\"$LOG\",\"dedup\":${DEDUP:-false}${VWARN_EXT}}"
+  echo "{\"dispatch_id\":\"$DID\",\"mode\":\"spawned\",\"channel\":\"api\",\"session\":\"$SID\",\"child_actor\":\"$CHILD@$PROJNAME\",\"run\":\"$LOG\",\"dedup\":${DEDUP:-false}${AW_EXT}${VWARN_EXT}}"
   exit 0
 fi
 if ! spawn_attempt 1; then
@@ -411,4 +477,4 @@ if ! spawn_attempt 1; then
 fi
 
 register_session
-echo "{\"dispatch_id\":\"$DID\",\"mode\":\"spawned\",\"child_actor\":\"$CHILD@$PROJNAME\",\"run\":\"$LOG\",\"dedup\":${DEDUP:-false}${VWARN_EXT}}"
+echo "{\"dispatch_id\":\"$DID\",\"mode\":\"spawned\",\"child_actor\":\"$CHILD@$PROJNAME\",\"run\":\"$LOG\",\"dedup\":${DEDUP:-false}${AW_EXT}${VWARN_EXT}}"
