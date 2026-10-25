@@ -29,19 +29,40 @@ dbg() { # $1=entity $2=sid $3=事件——排查落痕（gt-893a：此前零落�
   printf '%s entity=%s sid=%s %s\n' "$(date -Is)" "$1" "${2:--}" "$3" >> "$DBG_LOG" 2>/dev/null || :
 }
 
+bump_fail() { # $1=entity——失败计数累加；读值 sanitize（gt-893a 评审 B1：损坏计数文件不得以 set -u 展开错杀 daemon）
+  local n; n=$(cat "$WM_DIR/$1.fail" 2>/dev/null || echo 0)
+  [[ "$n" =~ ^[0-9]+$ ]] || n=0
+  echo $(( n + 1 )) > "$WM_DIR/$1.fail"
+}
+
 notify() { # $1=entity $2=ref → rc0=投递成功/设计内跳过；rc1=投递失败（scan 不推进水位）
-  local ent="$1" ref="$2" now last sf cands s pick="" w
+  local ent="$1" ref="$2" now last sf raw cands bad s pick="" w
   now=$(date +%s)
   sf="$WM_DIR/$ent.sent"
   last=$(cat "$sf" 2>/dev/null || echo 0)
   (( now - last < DEBOUNCE )) && return 1   # 去抖期＝本轮未投，消息保持 pending（下轮重试）
-  # sessions.map 本机条目：<host> <agent> <session> <ts>；同实体多 sid 取 ts 降序逐个鉴别
-  cands=$(awk -v h="$HOST" -v e="$ent" '$1==h && $2==e {print $4, $3}' \
-        "$AGORA_HOME/sessions.map" 2>/dev/null | sort -r | awk '!seen[$2]++ {print $2}')
-  if [[ -z "$cands" ]]; then
+  # sessions.map 本机条目：<host> <agent> <session> <ts>；同实体多 sid 取 ts 降序逐个鉴别。
+  # sid 白名单硬闸（gt-893a 评审 C1：map 是不可信共享可变文本，注册闸已被懒注册污染实证绕过——
+  # sid 逐字进 API URL 路径且经 for 展开，glob/路径形态可静默换注入目标）
+  raw=$(awk -v h="$HOST" -v e="$ent" '$1==h && $2==e {n++} END{print n+0}' \
+      "$AGORA_HOME/sessions.map" 2>/dev/null)
+  if [[ -z "$raw" || "$raw" == 0 ]]; then   # -z＝map 文件缺失（awk rc2 无 END），同归设计内静默
     dbg "$ent" "-" "skip no-map-entry"   # 会话未在跑＝设计内静默（不算失败）
     echo "$now" > "$sf"
     return 0
+  fi
+  cands=$(awk -v h="$HOST" -v e="$ent" \
+        '$1==h && $2==e && $3 ~ /^[A-Za-z0-9._-]+$/ && $3 !~ /^\.\.?$/ {print $4, $3}' \
+        "$AGORA_HOME/sessions.map" 2>/dev/null | sort -r | awk '!seen[$2]++ {print $2}')
+  bad=$(awk -v h="$HOST" -v e="$ent" \
+      '$1==h && $2==e && ($3 !~ /^[A-Za-z0-9._-]+$/ || $3 ~ /^\.\.?$/) {print $3}' \
+      "$AGORA_HOME/sessions.map" 2>/dev/null | sort -u | tr "\n" ",")
+  [[ -n "$bad" ]] && dbg "$ent" "${bad%,}" "skip bad-sid"
+  if [[ -z "$cands" ]]; then
+    dbg "$ent" "-" "fail no-live-interactive"   # 条目在但全被白名单过滤＝污染面，失败可见不得静默丢提醒
+    bump_fail "$ent"
+    echo "$now" > "$sf"
+    return 1
   fi
   for s in $cands; do
     if w=$(bash "$SCRIPTS_DIR/runtime/opencode.sh" who "$s"); then
@@ -53,7 +74,7 @@ notify() { # $1=entity $2=ref → rc0=投递成功/设计内跳过；rc1=投递�
   done
   if [[ -z "$pick" ]]; then
     dbg "$ent" "-" "fail no-live-interactive"
-    echo $(( $(cat "$WM_DIR/$ent.fail" 2>/dev/null || echo 0) + 1 )) > "$WM_DIR/$ent.fail"
+    bump_fail "$ent"
     echo "$now" > "$sf"   # 尝试即占频：去抖按尝试计（防重试风暴）
     return 1
   fi
@@ -75,7 +96,7 @@ notify() { # $1=entity $2=ref → rc0=投递成功/设计内跳过；rc1=投递�
       return 0
     fi
     dbg "$ent" "$pick" "fail inject-rc!=0 ref=$ref"
-    echo $(( $(cat "$WM_DIR/$ent.fail" 2>/dev/null || echo 0) + 1 )) > "$WM_DIR/$ent.fail"
+    bump_fail "$ent"
     echo "$now" > "$sf"
     return 1
   fi

@@ -865,6 +865,20 @@ grep -q "PROMPT-OK /api/session/ses-t3/prompt" "$NB_HOME/calls.log" \
   && [[ ! -f "$AGORA_HOME/.git/notify-wm/worker3.fail" && -f "$AGORA_HOME/.git/notify-wm/worker3" ]] \
   && ok "interactive 会话注入成功＋计数清零＋水位推进（gt-893a③）" || fail "gt-893a③ 成功路径回归不符"
 rm -f "$NB_HOME/who.json"
+# ④ 消费侧白名单＋计数 sanitize（gt-893a 评审 C1/B1/R2-F1）：污染 sid（含裸点段 ..）不达 API、损坏 .fail 不杀进程
+map_add worker4 "../../evil/sid"
+map_add worker4 "zz*"
+map_add worker4 ".."
+msg_add worker4
+mkdir -p "$AGORA_HOME/.git/notify-wm"; printf 'garbage' > "$AGORA_HOME/.git/notify-wm/worker4.fail"
+nb_reset none
+NB
+[[ $? -eq 0 && "$(grep -cE "api/session/(\.\.|zz)" "$NB_HOME/calls.log")" == 0 \
+    && $(grep -c "sid=\.\.,\.\./\.\./evil/sid,zz\* skip bad-sid" "$DBGLOG") == 1 \
+    && $(grep -c "entity=worker4 sid=- fail no-live-interactive" "$DBGLOG") == 1 \
+    && $(grep -c "entity=worker4 sid=- skip no-map-entry" "$DBGLOG") == 0 \
+    && "$(cat "$AGORA_HOME/.git/notify-wm/worker4.fail")" == 1 ]] \
+  && ok "污染 sid 白名单拦截＋损坏计数 sanitize（gt-893a④）" || fail "gt-893a④ 白名单/sanitize 不符"
 
 echo "===== 项目注册表（wiki/projects） ====="
 # 注册项目页（tester 注册 $PROJ，带默认 verify）
