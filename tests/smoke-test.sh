@@ -540,6 +540,41 @@ grep -q "轮询等 ack" "$PKG/scripts/dispatch.sh" && grep -q "agora_check_mail"
 grep -q "mention 任务页 dispatcher" "$PKG/scripts/dispatch.sh" \
   && ok "BOOT 终态 mention dispatcher 文案（done 推送闭环）" || fail "BOOT 终态 mention 文案缺失"
 
+# gt-e96d：gt-2508 R1 origin 面 6 warning 加固尾巴——逐 warning 一断言
+# ①：--sid/--entity 行伪造字符拒——换行 sid 拒 rc2＋sessions.map 零注入
+SM_LINES0=$(wc -l < "$AGORA_HOME/sessions.map")
+VOUT=$(bash "$PKG/scripts/register-session.sh" --sid "$(printf 'evil\nforeign tester injected')" --entity tester 2>&1); VRC=$?
+VOUT2=$(bash "$PKG/scripts/register-session.sh" --sid sess-e96d-ent --entity "$(printf 'bad\nentity')" 2>&1); VRC2=$?
+[ "$VRC" = 2 ] && [ "$VRC2" = 2 ] && grep -q "VALIDATION_FAILED" <<<"$VOUT" \
+  && [ "$(wc -l < "$AGORA_HOME/sessions.map")" = "$SM_LINES0" ] && ! grep -q "injected" "$AGORA_HOME/sessions.map" \
+  && ok "①sid/entity 行伪造字符拒＋map 零注入（gt-e96d）" || fail "①行伪造校验失效（rc=$VRC/$VRC2 $VOUT $VOUT2）"
+# ②：TTL_H=0 分叉统一——在册即新（与 poll 0=不清同义）；缺省 TTL 同夹具仍拒
+bash "$PKG/scripts/register-session.sh" --sid sess-ttl0 --entity tester >/dev/null
+OLD_TS2=$(date -d "-25 hours" -Iseconds)
+sed -i "s|^\($(hostname) tester sess-ttl0 \).*|\1$OLD_TS2|" "$AGORA_HOME/sessions.map"
+! bash "$PKG/scripts/register-session.sh" --sid sess-ttl0 --entity tester --check-only >/dev/null 2>&1 \
+  && ok "②缺省 TTL 超龄仍拒（分叉基线不弱化）" || fail "②缺省 TTL 应拒超龄（25h 前 ts）"
+T0OUT=$(AGORA_SESSION_TTL_H=0 bash "$PKG/scripts/register-session.sh" --sid sess-ttl0 --entity tester --check-only 2>&1); T0RC=$?
+[ "$T0RC" = 0 ] && grep -q '"fresh": true' <<<"$T0OUT" \
+  && ok "②TTL_H=0 在册即新——与 poll 0=不清同义（gt-e96d）" || fail "②TTL=0 应放行在册（rc=$T0RC $T0OUT）"
+# ③：门吞错修复——内层 rc2 透传 GATE_ERROR，不再误报 REGISTER_REQUIRED
+GTT2=$(TITLE="准入门透传" TC); GTT2=$(echo "$GTT2" | sed -n 's/.*"task":"\(gt-[0-9a-f]*\)".*/\1/p')
+GATE_OUT3=$(AGORA_RUNTIME=true AGORA_SID="$(printf 'bad\nsid')" bash "$PKG/scripts/dispatch.sh" --actor tester@proj --project "$PROJ" --task "$GTT2" 2>&1)
+grep -q "GATE_ERROR" <<<"$GATE_OUT3" && ! grep -q "REGISTER_REQUIRED" <<<"$GATE_OUT3" \
+  && ok "③门内层 rc2→GATE_ERROR 非 REGISTER_REQUIRED 误报（gt-e96d）" || fail "③退出透传失效（$GATE_OUT3）"
+cat "$AGORA_HOME"/log/*/*.md 2>/dev/null | grep "task:$GTT2" | grep -q "event:dispatched" \
+  && fail "③门拒应落账零残留（$GTT2 有 dispatched）" || ok "③门拒零残留（gt-e96d）"
+# ④：门成功 JSON 不再漏 stdout——dispatch stdout 纯单 JSON 可解析
+GATE_OUT4=$(AGORA_RUNTIME=true AGORA_SID=sess-gate-ok bash "$PKG/scripts/dispatch.sh" --actor tester@proj --project "$PROJ" --task "$GTT2" 2>/dev/null)
+echo "$GATE_OUT4" | python3 -c 'import json,sys; r=json.loads(sys.stdin.read()); assert r["mode"]=="spawned", r' \
+  && ok "④门放行 stdout 纯单 JSON（泄漏消除，gt-e96d）" || fail "④stdout 混入门 JSON（$GATE_OUT4）"
+rm -f "$AGORA_HOME"/raw/dispatches/*.live
+# ⑤⑥：docs 漏迁清零＋硬编码机器路径清零（bc2609f 批二尾巴）
+! grep -q "~/agora" "$PKG/docs/Agora宣言-v0.19.md" "$PKG/docs/跨仓委托协议-v1.md" \
+  && ok "⑤协议文档 ~/agora 漏迁清零（gt-e96d）" || fail "⑤协议文档仍有 ~/agora 残留"
+! grep -q "/home/guangbin" "$PKG/README.md" "$PKG/README.zh-CN.md" "$PKG/scripts/poll.sh" "$PKG/scripts/backup.sh" \
+  && ok "⑥硬编码机器路径清零（gt-e96d）" || fail "⑥/home/guangbin 残留"
+
 echo "===== poll 本地保洁 ====="
 # sessions.map TTL：过期本机条目剔除；他机条目与新本机条目保留
 H=$(hostname)

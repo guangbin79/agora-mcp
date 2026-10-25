@@ -29,7 +29,7 @@ v0.5 起，agent **不需要广场的本地 worktree**：agent 的 cwd 就是它
 
 ```
 本机
-├── ~/agora/                      # 广场仓库（main 唯一检出）——单一事实源
+├── ~/plaza/                      # 广场仓库（main 唯一检出）——单一事实源
 │   ├── AGENTS.md / CONVENTIONS.md
 │   ├── log/ wiki/ board/ inbox/ scripts/
 │   └── server/                   # MCP server（薄壳，见 §6.5）

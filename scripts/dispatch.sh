@@ -34,10 +34,16 @@ grep -qE '^can_spawn:[[:space:]]*true' "$ENTITY" || fail SPAWN_FORBIDDEN "$NAME 
 # 派发准入门（gt-6bef）：调用方会话在册未超龄才可派发。MCP serve 模式 server 无会话上下文
 # （env/进程树均无区分度，/proc 实证）——空 AGORA_SID 无法识别调用方，跳过（会话级主闸在
 # enforcer 插件层：原生持 sessionID）；非空（直调 bash/CI 以 sid 显式自证）则严检，同步拒于
-# 落账前（不产生半派发态），hint 给精确修复命令（REGISTER_REQUIRED 错误契约）
+# 落账前（不产生半派发态），hint 给精确修复命令（REGISTER_REQUIRED 错误契约）；门内非 3 退出
+# 不吞——校验/锁忙误报成「不在册」会引错修复方向，GATE_ERROR 透传内层 rc（gt-e96d）
 if [[ -n "${AGORA_SID:-}" ]]; then
-  bash "$SCRIPTS_DIR/register-session.sh" --sid "$AGORA_SID" --entity "$NAME" --check-only \
-    || fail REGISTER_REQUIRED "caller session 不在册或已超龄（AGORA_SID=$AGORA_SID，entity=$NAME）；修复命令见上行 hint" 10
+  GATE_RC=0
+  bash "$SCRIPTS_DIR/register-session.sh" --sid "$AGORA_SID" --entity "$NAME" --check-only >/dev/null || GATE_RC=$?
+  case "$GATE_RC" in
+    0) ;;
+    3) fail REGISTER_REQUIRED "caller session 不在册或已超龄（AGORA_SID=$AGORA_SID，entity=$NAME）；修复命令见上行 hint" 10 ;;
+    *) fail GATE_ERROR "准入门异常退出 rc=$GATE_RC（2 校验/4 锁忙/1 环境，非不在册误报；详情见上行 stderr）" 10 ;;
+  esac
 fi
 
 # 保险丝 2/3：深度与配额——env 与账本推导取更大值（v1.32 账本化：L2/API 模式无 env 通道时账本为唯一来源）

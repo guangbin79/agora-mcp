@@ -4,7 +4,8 @@
 #   注册（缺省）＝幂等 upsert：同 (host,entity,sid) 行原位刷 ts（idle 活性语义——poll 保洁按
 #   最后刷新算，长活会话不超龄），缺行补登（掉册自愈）。实体缺省由 --cwd 经 resolve_entity
 #   裁决（worktree 归一主仓，与 dispatch 同口径）；--entity 显式指定（调用方已持裁决结果时免重解析）。
-#   --check-only＝只校验在册＋未超龄（AGORA_SESSION_TTL_H，缺省 24，与 poll 同源），不过→
+#   --check-only＝只校验在册＋未超龄（AGORA_SESSION_TTL_H，缺省 24，与 poll 同源；<=0＝不设 TTL
+#   在册即新，与 poll「0=不清」同义——两消费点同一契约），不过→
 #   stderr JSON {"code":"REGISTER_REQUIRED","hint":…}，rc=3。
 # 通道契约（gt-6bef）：MCP serve 模式 server 进程无会话上下文（env/进程树均无区分度，/proc 实证），
 # 会话级绑定唯一落点=enforcer 插件（原生持 sessionID）。本脚本是插件/CI（WRAP_ID 等外部 id 作
@@ -18,6 +19,7 @@ while [[ $# -gt 0 ]]; do case "$1" in
   *) echo '{"code":"VALIDATION_FAILED","message":"unknown arg"}' >&2; exit 2;;
 esac; done
 [[ -n "$SID" && ( -n "$ENT" || -n "$CWD" ) ]] || { echo '{"code":"VALIDATION_FAILED","message":"--sid 与 --cwd/--entity 必填"}' >&2; exit 2; }
+[[ "$SID" =~ ^[^[:space:][:cntrl:]]{1,128}$ ]] || { echo '{"code":"VALIDATION_FAILED","message":"--sid 含空白或控制字符（sessions.map 行伪造面），拒绝"}' >&2; exit 2; }
 HINT="bash $SCRIPTS_DIR/register-session.sh --sid <会话id> --cwd <项目目录> 注册；或重启会话（注册 hook 自动登记）；或 post(proposal) 自报名"
 req() { python3 -c 'import json,sys; print(json.dumps({"code":"REGISTER_REQUIRED","hint":sys.argv[1]},ensure_ascii=False),file=sys.stderr)' "$1"; exit 3; }
 if [[ -z "$ENT" ]]; then
@@ -29,6 +31,7 @@ PYEOF
 )
   [[ -n "$ENT" ]] || req "caller not in roster（无实体覆盖 $CWD）：$HINT"
 fi
+[[ "$ENT" =~ ^[^[:space:][:cntrl:]]{1,128}$ ]] || { echo '{"code":"VALIDATION_FAILED","message":"--entity 含空白或控制字符（sessions.map 行伪造面），拒绝"}' >&2; exit 2; }
 SMAP="$AGORA_HOME/sessions.map"
 mkdir -p "$AGORA_HOME/.git" 2>/dev/null || true
 (
@@ -53,7 +56,7 @@ if check:
     except Exception:
         try: ts = float(p[3])
         except Exception: ts = None
-    if ts is None or (datetime.now().timestamp() - ts) / 3600 > ttl_h:
+    if ts is None or (ttl_h > 0 and (datetime.now().timestamp() - ts) / 3600 > ttl_h):
         die(f"session 在册但已超龄或时间戳不可解析（TTL={ttl_h:g}h）")
     print(json.dumps({"registered": True, "fresh": True, "entity": ent}, ensure_ascii=False))
     sys.exit(0)

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# backup.sh —— 每日备份（CONVENTIONS §7）。建议 crontab: 0 3 * * * AGORA_HOME=~/plaza /home/guangbin/agora-mcp/scripts/backup.sh（脚本单源在产品仓，gt-f6e4）
+# backup.sh —— 每日备份（CONVENTIONS §7）。建议 crontab: 0 3 * * * AGORA_HOME=~/plaza ~/agora-mcp/scripts/backup.sh（脚本单源在产品仓，gt-f6e4）
 set -euo pipefail
 AGORA_HOME="${AGORA_HOME:-$HOME/plaza}"
 DEST="${AGORA_BACKUP_DIR:-$HOME/plaza-backups}"

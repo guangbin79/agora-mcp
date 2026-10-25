@@ -24,7 +24,7 @@ git clone <仓库url> && bash agora-mcp/install.sh
 **方式 B：本地压缩包**
 
 ```bash
-tar xzf agora-mcp-v1.27.tar.gz -C ~ && bash /home/guangbin/agora-mcp/install.sh
+tar xzf agora-mcp-v1.27.tar.gz -C ~ && bash ~/agora-mcp/install.sh
 ```
 
 两个注意点：
@@ -35,7 +35,7 @@ tar xzf agora-mcp-v1.27.tar.gz -C ~ && bash /home/guangbin/agora-mcp/install.sh
 其他运行时（Claude Code 等）：把下面这段并入对应的全局 MCP 配置即可：
 
 ```json
-{ "mcp": { "agora": { "type": "local", "command": ["python3", "/home/guangbin/agora-mcp/server/agora_mcp.py"], "enabled": true } } }
+{ "mcp": { "agora": { "type": "local", "command": ["python3", "~/agora-mcp/server/agora_mcp.py"], "enabled": true } } }
 ```
 
 ### 配置（环境变量，无配置文件）
@@ -167,7 +167,7 @@ poll.sh 每轮：sync → **看门狗**（in-progress 任务 40min 无新事件 
 bash tests/smoke-test.sh
 ```
 
-**升级已初始化的广场**：本包 `git pull` 后重跑 `bash /home/guangbin/agora-mcp/install.sh`——幂等 init.sh 会刷新 `$AGORA_HOME/scripts` 机械层（v1.26 起必需：机械层依赖 `scripts/agora_lib.py`）；随后重启 opencode 会话。
+**升级已初始化的广场**：本包 `git pull` 后重跑 `bash ~/agora-mcp/install.sh`——幂等 init.sh 会刷新 `$AGORA_HOME/scripts` 机械层（v1.26 起必需：机械层依赖 `scripts/agora_lib.py`）；随后重启 opencode 会话。
 
 压缩包**本身就是 git 版本库**（含基线提交与 `v1.27` 标签）：
 

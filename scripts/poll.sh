@@ -31,7 +31,7 @@
 #       AGORA_NOTIFY_BRIDGE=0 关闭 notify 桥探活；AGORA_NOTIFY_BRIDGE_PAT 检测模式
 #       （默认 [n]otify-opencode.sh，方括号防 pgrep 自匹配）；AGORA_NOTIFY_BRIDGE_SPAWN
 #       拉起命令覆盖（测试 mock）
-# 用法：crontab -e → */5 * * * * AGORA_HOME=~/plaza bash /home/guangbin/agora-mcp/scripts/poll.sh（脚本单源自定位，gt-f6e4）
+# 用法：crontab -e → */5 * * * * AGORA_HOME=~/plaza bash ~/agora-mcp/scripts/poll.sh（脚本单源自定位，gt-f6e4）
 set -uo pipefail
 AGORA_HOME="${AGORA_HOME:-$HOME/plaza}"
 SCRIPTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"   # 单源自定位：兄弟脚本/库一律本仓 scripts（gt-f6e4）
