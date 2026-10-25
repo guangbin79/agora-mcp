@@ -88,7 +88,7 @@ if [ -z "$WTD" ]; then
   #（实证：六连票 branch:gt-762a-alive-running、gt-762a 票 branch:gt-236a-two-layer-routing）。
   # 该路径无树操作只做已含补票，默认分支即语义目标（「产出先落主支」）；基点探针同下方重建段
   # R2（ocr-3）：origin/HEAD 是克隆时记录的仓库默认分支事实，优先于宿主/全局 init.defaultBranch 启发——
-  # 防 main↔master 迁移窗口双支并存时绑错目标（票面 branch 与祖先判据同源错）。无远端/分离 HEAD 自然跳过
+  # 防 main↔master 迁移窗口双支并存时绑错目标（票面 branch 与祖先判据同源错）。symref 缺失或本地无该具名分支时逐级回落
   DEFBR=""
   for _c in "$(git -C "$MAIN" symbolic-ref -q --short refs/remotes/origin/HEAD 2>/dev/null | sed 's|^origin/||')" "$(git -C "$MAIN" config --get init.defaultBranch 2>/dev/null)" main master; do
     [ -n "$_c" ] && git -C "$MAIN" show-ref --verify --quiet "refs/heads/$_c" && { DEFBR="$_c"; break; }
