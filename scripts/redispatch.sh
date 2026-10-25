@@ -19,7 +19,7 @@ PROJECT="${ACTOR##*@}"
 
 EVAL=$(python3 - "$AGORA_HOME" "$ACTOR" "$TASK" <<'PYEOF'
 import glob, re, sys, json
-from datetime import datetime
+from datetime import datetime, timezone
 def _pts(s):
     try:
         d = datetime.fromisoformat(s)
@@ -27,29 +27,31 @@ def _pts(s):
     except Exception:
         return None
 home, actor, task = sys.argv[1], sys.argv[2], (sys.argv[3] if len(sys.argv) > 3 else "")
-rows_by, mine, dts = {}, set(), {}
-scan_i = 0   # gt-6769：全局扫描序＝ts 同秒并列的确定性次键（append-only 后写者更近）
+rows_by, mine = {}, set()
+first_seen = {}   # gt-9d09：task → 首见扫描序（mine 为 set 无序，破平须锚扫描序因果尾）
 for f in sorted((glob.glob(f"{home}/log/*/*.md") + glob.glob(f"{home}/log/*/.*.md"))):
     try: lines = open(f, encoding="utf-8", errors="replace").read().splitlines()
     except OSError: continue
     for line in lines:
-        scan_i += 1
         m = re.search(r"task:(gt-[0-9a-f]{4,})", line)
         if not m: continue
         em = re.search(r"event:([a-z_]+)", line)
         ts = re.search(r"ts:(\S+)", line)
         if not em or not ts: continue
         t = m.group(1)
+        if t not in rows_by: first_seen[t] = len(first_seen)
         rows_by.setdefault(t, []).append((ts.group(1), em.group(1)))
         if em.group(1) == "dispatched":
             am = re.search(r"\| actor:(\S+)", line)
             if am and am.group(1) == actor:
                 mine.add(t)
-                dts[t] = (ts.group(1).strip(), scan_i)   # gt-6769：pick 按 (ts, 扫描序) 判「最近可回池」
 states = {}
+ts_max = {}   # gt-9d09：task → 行 ts 最大值（offset-aware；naive/解析败不参比=floor）
+_EPOCH = datetime.min.replace(tzinfo=timezone.utc)
 for t, rows in rows_by.items():
     rows.sort(key=lambda r: (_pts(r[0]) or _pts("1970-01-01T00:00:00+00:00")).timestamp())   # gt-6769：tz-aware 序（+00:00/+08:00 混排可比）；稳定排序平局保文件序＝因果序
     term, done_open, inflight = None, False, False
+    _mx = _EPOCH
     for _ts, ev in rows:
         if ev == "done": done_open = True          # done 未闭：merged/cancelled/reopened 才清
         elif ev in ("merged", "cancelled", "reopened"): done_open = False
@@ -57,6 +59,11 @@ for t, rows in rows_by.items():
         if ev == "reopened": term = None; inflight = False   # 返工清终态、清在飞
         elif ev == "dispatched": inflight = True
         elif ev in ("merged", "cancelled"): inflight = False
+        try:
+            _d = datetime.fromisoformat(_ts)   # gt-9d09：新近度锚——mine 是 set 哈希序，cands[-1] 本即随机（探针 6 跑 4 错实证）
+            if _d.tzinfo and _d > _mx: _mx = _d
+        except ValueError: pass
+    ts_max[t] = _mx
     states[t] = {"last": rows[-1][1] if rows else "", "term": term,
                  "done_open": done_open, "inflight": inflight}
 if task:
@@ -65,8 +72,9 @@ if task:
 else:
     cands = [t for t in mine if t in states and
              (states[t]["last"] == "escalated" or states[t]["done_open"])]
-    # gt-6769：pick 按 (ts, 扫描序) 判「最近可回池」——文件/set 序在跨 UTC 日期分片分裂时≠时序（F5 三连挂实证）
-    pick = max(cands, key=lambda t: ((_pts(dts.get(t, ("",))[0]) or _pts("1970-01-01T00:00:00+00:00")).timestamp(), dts.get(t, ("", 0))[1])) if cands else ""
+    # gt-9d09：「最近可回池」按任务行 ts 最大值（offset-aware）判；同 ts 扫描序破平取因果尾——
+    # mine 为 set 本无序，cands[-1] 是哈希随机（探针 6 跑 4 错实证），跨日分片下更无时序意义
+    pick = max(enumerate(cands), key=lambda p: (ts_max.get(p[1], _EPOCH), first_seen.get(p[1], 0), p[0]))[1] if cands else ""
     print(json.dumps({"candidates": cands, "pick": pick, "state": states.get(pick, {})}))
 PYEOF
 ) || fail INTERNAL "账本重放失败" 4

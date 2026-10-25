@@ -25,22 +25,15 @@ PROJECT="${ACTOR##*@}"
 # 自动推导（账本重放；口径逐条对齐 dispatch.sh 保险丝 2/3 的 python 块）
 EVAL=$(python3 - "$AGORA_HOME" "$ACTOR" "$TASK" <<'PYEOF'
 import glob, re, sys, json
+from datetime import datetime, timezone
 home, actor, task = sys.argv[1], sys.argv[2], (sys.argv[3] if len(sys.argv) > 3 else "")
-from datetime import datetime
-def _pts(s):
-    try:
-        d = datetime.fromisoformat(s)
-        return d if d.tzinfo else d.astimezone()
-    except Exception:
-        return None
 disp, terminal, last_alive = {}, set(), {}
-disp_ts, runs, sess = {}, {}, {}
-scan_i = 0   # gt-6769：全局扫描序＝ts 同秒并列的确定性次键（append-only 后写者更近）
+disp_ts = {}   # gt-9d09：task → 最新 dispatched 行 ts（offset-aware）；naive/解析败/缺 ts=floor
+runs, sess = {}, {}
 for f in sorted((glob.glob(f"{home}/log/*/*.md") + glob.glob(f"{home}/log/*/.*.md"))):
     try: lines = open(f, encoding="utf-8", errors="replace").read().splitlines()
     except OSError: continue
     for line in lines:
-        scan_i += 1
         if "event:" not in line: continue
         m = re.search(r"task:(gt-[0-9a-f]{4,})", line)
         if not m: continue
@@ -49,8 +42,13 @@ for f in sorted((glob.glob(f"{home}/log/*/*.md") + glob.glob(f"{home}/log/*/.*.m
             am = re.search(r"\| actor:(\S+)", line)
             if am and am.group(1) == actor:
                 disp[t] = True   # 只认本 actor 派的
-                tmz = re.search(r"\| ts:([^|]+)", line)
-                if tmz: disp_ts[t] = (tmz.group(1).strip(), scan_i)   # gt-6769：pick 按 (ts, 扫描序) 判「最近」；本 actor 口径与 redispatch dts 一致（ocr-17：跨 actor 重派不得污染本 actor 时序）
+                tmz = re.search(r"\| ts:([^|]+)", line)   # gt-9d09：新近度锚——分片文件序≠时序；actor 门防跨 actor 重派污染时序（ocr-17 承 49406f7）
+                try:
+                    _d = datetime.fromisoformat(tmz.group(1).strip()) if tmz else None
+                    # 语义（e2cd8e9 同构）：缺 ts/naive 视作最旧（floor）；仅全部候选均不可比时破平落扫描序
+                    disp_ts[t] = _d if (_d is not None and _d.tzinfo) else None
+                except ValueError:
+                    disp_ts[t] = None
             last_alive[t] = True
             rm2 = re.search(r"\| run:(\S+)", line)           # C 二期（gt-0a34）：--kill 定位 live/pgid 用
             if rm2: runs[t] = rm2.group(1)
@@ -69,8 +67,10 @@ if task:
     print(json.dumps({"candidates": [task], "pick": task,
                       "run": runs.get(task, ""), "session": sess.get(task, "")}))
 else:
-    # gt-6769：pick 按 (ts, 扫描序) 判「最近派发」——文件/set 序在跨 UTC 日期分片分裂时≠时序（F5 三连挂实证）
-    pick = max(cands, key=lambda t: ((_pts(disp_ts.get(t, ("",))[0]) or _pts("1970-01-01T00:00:00+00:00")).timestamp(), disp_ts.get(t, ("", 0))[1])) if cands else ""
+    # gt-9d09：「最近派发」按 dispatched 行 ts（offset-aware fromisoformat）判，文件序仅作同 ts 破平取因果尾——
+    # 跨 UTC 日界分片分裂/旧任务重派场景下文件序尾≠时序尾（rg1/rg2 稳定红；--kill 面即杀错组，高危）
+    _EPOCH = datetime.min.replace(tzinfo=timezone.utc)
+    pick = max(enumerate(cands), key=lambda p: (disp_ts.get(p[1]) or _EPOCH, p[0]))[1] if cands else ""
     print(json.dumps({"candidates": cands, "pick": pick,
                       "run": runs.get(pick, ""), "session": sess.get(pick, "")}))
 PYEOF

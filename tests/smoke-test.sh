@@ -3510,6 +3510,85 @@ find "$AGORA_HOME/raw/dispatches" -name '*.live' | grep -q . \
   && fail "K5 API 返回后 live 残留" || ok "K5 API 返回后 .live 零残留"
 
 echo
+echo "===== gt-9d09：cancel/redispatch 新近度锚——跨日期分片倒转 / naive floor / 同秒 tie / --kill 杀错防护 ====="
+# 红相（2026-10-26 rg1/rg2 现场实证）：跨 UTC 日期分片并存窗口，文件序尾≠时序尾——旧任务今日重派后 ts 真最新，
+# 纯 cands[-1]（文件序）取文件序尾旧任务；--kill 语义下即杀错会话组（高危）。修法与 e2cd8e9（dispatch.sh round-2）同构。
+RDAY=$(date -d yesterday +%F); RTOD=$(date +%F)
+RX1=$(TID "$(TITLE="recency跨分片旧任务重派用例" VERIFY=true PROJECT_DIR="$REPA" TC)")
+RX2=$(TID "$(TITLE="recency跨分片新任务用例" VERIFY=true PROJECT_DIR="$REPA" TC)")
+RK1=$(TID "$(TITLE="recency kill 真靶用例" VERIFY=true PROJECT_DIR="$REPA" TC)")
+RK2=$(TID "$(TITLE="recency kill 不误伤用例" VERIFY=true PROJECT_DIR="$REPA" TC)")
+RQ1=$(TID "$(TITLE="recency回池旧任务重done用例" VERIFY=true PROJECT_DIR="$REPA" TC)")
+RQ2=$(TID "$(TITLE="recency回池新任务用例" VERIFY=true PROJECT_DIR="$REPA" TC)")
+RN1=$(TID "$(TITLE="recency naive floor 用例" VERIFY=true PROJECT_DIR="$REPA" TC)")
+RA1=$(TID "$(TITLE="recency aware 对照用例" VERIFY=true PROJECT_DIR="$REPA" TC)")
+RT1=$(TID "$(TITLE="recency同秒tie用例一" VERIFY=true PROJECT_DIR="$REPA" TC)")
+RT2=$(TID "$(TITLE="recency同秒tie用例二" VERIFY=true PROJECT_DIR="$REPA" TC)")
+mkdir -p "$AGORA_HOME/log/$RDAY" "$AGORA_HOME/log/$RTOD" "$AGORA_HOME/raw/dispatches"
+RSHY="$AGORA_HOME/log/$RDAY/recency.md"; RSHT="$AGORA_HOME/log/$RTOD/recency.md"
+RSZF="$AGORA_HOME/log/$RTOD/zz-recency.md"; : > "$RSHY"; : > "$RSHT"; : > "$RSZF"
+printf -- '---\nname: recency\ndirs:\n  - %s\ncan_spawn: true\n---\n' "$REPA" > "$AGORA_HOME/wiki/entities/recency.md"   # R3 redispatch→dispatch 调用方在册（borch:2674 同款，fixture 本地名册）
+REV() { echo "- seq:$1 | ts:$2 | actor:recency@repa | event:$3 | idem:$4 | seen:t@1 | task:$5 | target:$REPA | run:$6" >> "$7"; }
+# R1 跨日倒转：昨日 RX1→RX2（文件序尾=RX2）；今日 RX1 重派（ts 真最新）——auto-pick 必须 RX1
+REV 1 "$RDAY"T09:00:00+08:00 dispatched r9a "$RX1" "raw/dispatches/d-cafe01.log" "$RSHY"
+REV 2 "$RDAY"T09:00:01+08:00 dispatched r9b "$RX2" "raw/dispatches/d-cafe02.log" "$RSHY"
+REV 3 "$RTOD"T05:30:00+08:00 dispatched r9c "$RX1" "raw/dispatches/d-cafe03.log" "$RSHT"
+OUT=$(CANCEL --actor recency@repa)
+echo "$OUT" | grep -q "\"task\":\"$RX1\"" && echo "$OUT" | grep -qF "$RX2" \
+  && [ -n "$(LEV "$RX1" cancelled)" ] && [ -z "$(LEV "$RX2" cancelled)" ] \
+  && ok "R1 跨日期分片倒转：pick=ts 最新（今日重派者）非文件序尾，candidates 全量可见" || fail "R1 跨日分片倒转（$OUT）"
+CANCEL --actor recency@repa --task "$RX2" >/dev/null   # 收口：勿污染后续同 actor 自动推导
+# R2 --kill 杀错防护：真 stub 进程组×2，auto-pick+kill 只杀 ts 最新（RK1）；RK2 组存活＋.live 在；candidates 全量可见
+REV 4 "$RDAY"T09:10:00+08:00 dispatched r9d "$RK1" "raw/dispatches/d-cafe04.log" "$RSHY"
+REV 5 "$RDAY"T09:10:01+08:00 dispatched r9e "$RK2" "raw/dispatches/d-cafe05.log" "$RSHY"
+REV 6 "$RTOD"T05:31:00+08:00 dispatched r9f "$RK1" "raw/dispatches/d-cafe06.log" "$RSHT"
+setsid bash -c "exec -a $RK1 sleep 60" 2>/dev/null & RK1SPID=$!
+setsid bash -c "exec -a $RK2 sleep 60" 2>/dev/null & RK2SPID=$!
+sleep 0.3
+RK1PGID=$(ps -o pgid= -p "$RK1SPID" 2>/dev/null | tr -d "[:space:]")
+RK2PGID=$(ps -o pgid= -p "$RK2SPID" 2>/dev/null | tr -d "[:space:]")
+case "$RK1PGID" in ''|*[!0-9]*) fail "R2 夹具自检：RK1 进程组未现形" ;; *) ok "R2 夹具自检：双 stub 组在场" ;; esac
+echo "$RK1PGID" > "$AGORA_HOME/raw/dispatches/d-cafe06.log.live"
+echo "$RK2PGID" > "$AGORA_HOME/raw/dispatches/d-cafe05.log.live"
+OUT=$(CANCEL --actor recency@repa --kill)
+RK1DEAD=y; kill -0 -- "-$RK1PGID" 2>/dev/null || RK1DEAD=n
+RK2ALIVE=n; kill -0 -- "-$RK2PGID" 2>/dev/null && RK2ALIVE=y
+[[ "$RK1DEAD" = n ]] && [ "$RK2ALIVE" = y ] && [ ! -f "$AGORA_HOME/raw/dispatches/d-cafe06.log.live" ] \
+  && [ -f "$AGORA_HOME/raw/dispatches/d-cafe05.log.live" ] \
+  && echo "$OUT" | grep -q "\"task\":\"$RK1\"" && echo "$OUT" | grep -qF "$RK2" \
+  && [ -n "$(LEV "$RK1" cancelled)" ] && grep -q "kill:pgid=$RK1PGID" <<<"$(LEV "$RK1" cancelled)" \
+  && ok "R2 --kill 杀错防护：只杀 ts 最新组，他组存活＋.live 在＋candidates 全量可见" \
+  || fail "R2 kill 防护（rk1dead=$RK1DEAD rk2alive=$RK2ALIVE out=$OUT）"
+kill -TERM -- "-$RK1PGID" "-$RK2PGID" 2>/dev/null || true   # 收口：红相下错杀面也要清场
+rm -f "$AGORA_HOME/raw/dispatches/d-cafe05.log.live" "$AGORA_HOME/raw/dispatches/d-cafe06.log.live"
+# R3 redispatch 跨日倒转：昨日 RQ1 done→RQ2 done（文件序尾=RQ2）；今日 RQ1 再 done（ts 真最新 eligible）
+REV 7 "$RDAY"T09:20:00+08:00 dispatched r9g "$RQ1" "raw/dispatches/d-cafe07.log" "$RSHY"
+REV 8 "$RDAY"T09:20:01+08:00 done r9h "$RQ1" "raw/dispatches/d-cafe07.log" "$RSHY"
+REV 9 "$RDAY"T09:20:02+08:00 dispatched r9i "$RQ2" "raw/dispatches/d-cafe08.log" "$RSHY"
+REV 10 "$RDAY"T09:20:03+08:00 done r9j "$RQ2" "raw/dispatches/d-cafe08.log" "$RSHY"
+REV 11 "$RTOD"T05:32:00+08:00 dispatched r9k "$RQ1" "raw/dispatches/d-cafe09.log" "$RSHT"
+REV 12 "$RTOD"T05:32:01+08:00 done r9l "$RQ1" "raw/dispatches/d-cafe09.log" "$RSHT"
+OUT=$(RDISP --actor recency@repa)
+echo "$OUT" | grep -q "\"task\":\"$RQ1\"" && echo "$OUT" | grep -q '"reopened":true' \
+  && [ -n "$(LEV "$RQ1" reopened)" ] && [ -z "$(LEV "$RQ2" reopened)" ] \
+  && ok "R3 redispatch 跨日倒转：pick=ts 最新 done_open（RQ1）非文件序尾" || fail "R3 redispatch 倒转（$OUT）"
+# R4 naive-ts=floor：UTC 形 naive（无 offset）不得经本地化反超 aware——floor 语义（round-2 口径，TZ 双跑稳）
+REV 13 "2026-10-26T09:00:00+00:00" dispatched r9m "$RA1" "raw/dispatches/d-cafe0a.log" "$RSZF"
+REV 14 "2026-10-27T10:00:00" dispatched r9n "$RN1" "raw/dispatches/d-cafe0b.log" "$RSZF"
+OUT=$(CANCEL --actor recency@repa)
+echo "$OUT" | grep -q "\"task\":\"$RA1\"" && echo "$OUT" | grep -qF "$RN1" \
+  && [ -z "$(LEV "$RN1" cancelled)" ] && [ -n "$(LEV "$RA1" cancelled)" ] \
+  && ok "R4 naive-ts=floor：aware 对照胜出（TZ 双跑稳），candidates 含 naive 任务" || fail "R4 naive floor（$OUT）"
+CANCEL --actor recency@repa --task "$RN1" >/dev/null
+# R5 同秒 tie：identical ts → 扫描序破平取因果尾（round-1 max 取首之红相回归 pin）
+REV 15 "2026-12-31T23:59:59+08:00" dispatched r9o "$RT1" "raw/dispatches/d-cafe0c.log" "$RSZF"
+REV 16 "2026-12-31T23:59:59+08:00" dispatched r9p "$RT2" "raw/dispatches/d-cafe0d.log" "$RSZF"
+OUT=$(CANCEL --actor recency@repa)
+echo "$OUT" | grep -q "\"task\":\"$RT2\"" && echo "$OUT" | grep -qF "$RT1" \
+  && ok "R5 同秒 tie 扫描序取尾：identical ts 破平取因果尾（append-only 尾）" || fail "R5 同秒 tie（$OUT）"
+CANCEL --actor recency@repa --task "$RT1" >/dev/null
+
+echo
 echo "===== 并发九派风暴测试场（B批 gt-2e4f）：9 路并发 dispatch——账本写完整性＋配额保险丝 TOCTOU ====="
 # 独立夹具 AGORA_HOME×2（mktemp 隔离，不触主测试账本）；AGORA_RUNTIME=true stub 秒退零会话
 # 修复前实证（最小复现）：配额检查在锁外 → MAX_SPAWN=3 下 9/9 全放行（TOCTOU）；修复=落账前 dispatch.lock 锁内复核
