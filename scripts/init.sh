@@ -32,7 +32,8 @@ done
 owner: mayor
 ---
 # doctor 恢复手册
-- seq 断档/重号：人工核对 git log 定位脏写；不许删行（只追加），发 diagnosed 事件记录。
+- seq 断档/重号：人工核对 git log 定位脏写；不许删行（只追加），发 diagnosed 事件记录＋核销标记 `seq-waive=<date>/<分片名>:<actor>`（conclusion 内；doctor 对命中 (日期分片, actor) 转 ok 并回显来源）。
+- idem 连续重复：保留首条，后续行发 diagnosed 标注无效行 ref＋核销标记 `idem-waive=<date>/<分片名>:<idem>`（不删行）。
 - 重复 idem：保留首条，后续行视为脏数据，发 diagnosed 标注无效行 ref。
 - board 不一致：doctor.sh --fix（重建）。
 - flock 长期不可获取：ps 找持锁进程并 kill；MUST NOT 删除锁文件（锁在 fd 不在文件）。

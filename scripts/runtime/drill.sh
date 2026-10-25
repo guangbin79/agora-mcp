@@ -77,8 +77,8 @@ cleanup() {  # 演练任务统一 cancel --kill：防 drill 孤儿在真广场�
     [ -n "$pair" ] || continue
     a="${pair% *}"; t="${pair#* }"   # TASKS 存 "actor task" 对——每场景独立分域（gt-f8ed）
     [ -n "$t" ] || continue   # mkdrilltask 失败的空 task 不进 cancel 自动推导档（终闸 B-F2）
-    bash "$PKG_SCRIPTS/cancel.sh" --actor "$a" --task "$t" \
-      --reason "drill 清场" --kill >/dev/null 2>&1 || true
+    AGORA_RUNTIME="$RUNTIME" bash "$PKG_SCRIPTS/cancel.sh" --actor "$a" --task "$t" \
+      --reason "drill 清场" --kill >/dev/null 2>&1 || true   # ocr-13：重钉原 RUNTIME——cancel --kill 的 API-abort 门按 opencode 精确匹配，包装路径不得泄漏进 cleanup 面
   done
 }
 trap cleanup EXIT
@@ -361,27 +361,45 @@ guard
 # 全指主广场（anon@proj 污染名册十一例实证）。review-loop e2e 先例：--standalone 私有 server＝
 # 独立 env＋独立 MCP；2026-10-26 /proc 实证纯 --standalone 下 config pin 仍胜子会话进程 env，
 # 故并辅 OPENCODE_CONFIG_CONTENT 同键覆写（合成形状 mcp.<name> 实证可覆盖全局 servers 形状）。
-# 只作用于 spawn 面（包装 runtime 交 dispatch）；poll/health 面维持原 RUNTIME。busy 让行先行，零扰动不落盘。
+# ocr-16：合成内容落 state 文件、由包装器 run 分支按需 export——drill 自身进程 env 保持干净
+# （scen_restart 的 RESTART_CMD/health 调用不得吃合成配置，否则主服务被重绑到演练广场）。
+# busy 让行先行，零扰动不落盘。
+# ocr-14：SERVER_PY 缺席＝畸形安装——standalone 单独不敌 config pin（/proc 实证），隔离前提残缺
+# 须响禁静默降级（无人值守 drill 会带病 spawn 错绑子会话还报绿）。fail-closed 让行，零扰动不落盘。
+if [ ! -f "$SERVER_PY" ]; then
+  SKIPPED="SERVER_PY 缺失（$SERVER_PY）——MCP 绑定隔离不成立（畸形安装）"
+  res "隔离前提（SERVER_PY 在场）" 0 "$SKIPPED"
+  finish
+  echo "drill: $SKIPPED —— fail-closed 让行退出，零扰动" >&2
+  exit 2
+fi
+
 DRILL_BIN="$DRILL_STATE/bin"; mkdir -p "$DRILL_BIN"
 WRAP="$DRILL_BIN/runtime-standalone.sh"
-cat > "$WRAP" <<EOF
-#!/usr/bin/env bash
-# drill 专用 runtime 包装（gt-7cd9）：run 子命令注入 --standalone（私有 server＝子会话进程 env 生效）
-if [ "\$1" = "run" ]; then shift; exec "$RUNTIME" run --standalone "\$@"; fi
-exec "$RUNTIME" "\$@"
-EOF
-chmod +x "$WRAP"
-export AGORA_RUNTIME="$WRAP"
-if [ -f "$SERVER_PY" ]; then   # server 缺席（畸形安装）时跳过覆写，包装层隔离仍在
-  export OPENCODE_CONFIG_CONTENT="$(RUNTIME="$RUNTIME" AGORA_HOME="$AGORA_HOME" SERVER_PY="$SERVER_PY" python3 -c '
-import json, os, sys
+OCC_FILE="$DRILL_BIN/opencode-config.json"
+if [ -f "$SERVER_PY" ]; then   # server 在场：合成沙箱 MCP 覆写（形状 mcp.<name> 实证可覆盖全局 servers 形状）
+  AGORA_HOME="$AGORA_HOME" SERVER_PY="$SERVER_PY" python3 -c '
+import json, os
 print(json.dumps({"mcp": {"agora": {
     "type": "local",
     "command": ["python3", os.environ["SERVER_PY"]],
     "environment": {"AGORA_HOME": os.environ["AGORA_HOME"]},
     "disabled": False,
-}}}))')"
+}}}))' >"$OCC_FILE"
 fi
+cat > "$WRAP" <<EOF
+#!/usr/bin/env bash
+# drill 专用 runtime 包装（gt-7cd9）：run 子命令注入 --standalone（私有 server＝子会话进程 env 生效）
+# ＋按需注入沙箱 MCP 覆写（仅 spawn 面携带，drill 自身进程 env 不沾——ocr-16）
+if [ "\$1" = "run" ]; then
+  shift
+  [ -f "$OCC_FILE" ] && export OPENCODE_CONFIG_CONTENT="\$(cat "$OCC_FILE")"
+  exec "$RUNTIME" run --standalone "\$@"
+fi
+exec "$RUNTIME" "\$@"
+EOF
+chmod +x "$WRAP"
+export AGORA_RUNTIME="$WRAP"   # spawn 面（dispatch 子会话）；poll/health/cleanup 面各调用点重钉原 RUNTIME
 
 for SCEN in "${SCENS[@]}"; do
   case "$SCEN" in

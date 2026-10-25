@@ -12,24 +12,34 @@ import glob, os, re, sys
 from datetime import datetime
 
 home, host = sys.argv[1], sys.argv[2]
+from datetime import datetime
 smap = os.path.join(home, "sessions.map")
 rows = []   # (entity, sid, ts)
+_sl = []
 if os.path.exists(smap):
-    for ln in open(smap, encoding="utf-8", errors="replace").read().splitlines():
-        if ln.startswith("#"):
-            continue
-        p = ln.split()
-        if len(p) >= 4 and p[0] == host:
-            rows.append((p[1], p[2], p[3]))
+    try:
+        _sl = open(smap, encoding="utf-8", errors="replace").read().splitlines()
+    except OSError:
+        _sl = []   # ocr-23：exists 后仍可 EACCES/竞态——「退出码恒 0」契约不破
+for ln in _sl:
+    if ln.startswith("#"):
+        continue
+    p = ln.split()
+    if len(p) >= 4 and p[0] == host:
+        rows.append((p[1], p[2], p[3]))
 
-# 账本扫描：任务最新 dispatched 的 session 与终态集（与 dispatch.sh ledger_scan 同口径）
+# 账本扫描：任务最新 dispatched 的 session 与终态集（与 dispatch.sh ledger_scan 同口径）。
+# ocr-22：「最新派发」按 (ts, 扫描序) 取最大——post.sh 按本地日期分片，混 TZ 萑文件序≠时序
+# ocr-24：reopened 清终态（scan_tasks 同口径）——done→reopened→再派发的活 worker 会话须重新入列
 disp_sid, terminal = {}, set()
+scan_i = 0
 for f in sorted(glob.glob(f"{home}/log/*/*.md") + glob.glob(f"{home}/log/*/.*.md")):
     try:
         lines = open(f, encoding="utf-8", errors="replace").read().splitlines()
     except OSError:
         continue
     for line in lines:
+        scan_i += 1
         if "event:" not in line:
             continue
         m = re.search(r"task:(gt-[0-9a-f]{4,})", line)
@@ -38,13 +48,21 @@ for f in sorted(glob.glob(f"{home}/log/*/*.md") + glob.glob(f"{home}/log/*/.*.md
         t = m.group(1)
         if "event:dispatched" in line:
             sm = re.search(r"\| session:(\S+)", line)
+            tm = re.search(r"\| ts:([^|]+)", line)
             if sm:
-                disp_sid[t] = sm.group(1)   # 文件序+行序，后见覆盖＝最新派发
+                try:
+                    _k = (datetime.fromisoformat(tm.group(1).strip()).timestamp(), scan_i)
+                except Exception:
+                    _k = (0.0, scan_i)
+                if t not in disp_sid or _k > disp_sid[t][1]:
+                    disp_sid[t] = (sm.group(1), _k)   # (ts, 扫描序) 取最大＝最新派发
+        elif "event:reopened" in line:
+            terminal.discard(t)
         elif any(f"event:{e}" in line for e in ("done", "merged", "cancelled")):
             terminal.add(t)
 
 by_sid = {}
-for t, sid in disp_sid.items():
+for t, (sid, _k) in disp_sid.items():
     if t not in terminal:
         by_sid.setdefault(sid, []).append(t)
 

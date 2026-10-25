@@ -1682,6 +1682,15 @@ rm -f "$AH5"/raw/dispatches/*.live
 OUT=$(AGORA_RUNTIME=true AGORA_HOME="$AH5" bash "$PKG/scripts/dispatch.sh" --actor tester@repo --project "$R5" --task "$AWT" 2>&1)
 echo "$OUT" | grep -q '"mode":"spawned"' && [ "$(ls -d "$H5/repo__wt-${AWT}__"* | wc -l)" = "$NB" ] \
   && ok "已有 wt_dir：不重复建树" || fail "已有 wt_dir 重复建树（$OUT）"
+# d) ocr：同任务并发双派发 → per-repo flock＋锁内重读复用对手方回填 → 恰建一树（TOCTOU 回归钉；gt-85c3 并发面）
+CWT=$(TITLE="并发补建任务" VERIFY=true PROJECT_DIR="$R5" AGORA_HOME="$AH5" bash "$PKG/scripts/task-create.sh" | sed -n 's/.*"task":"\(gt-[0-9a-f]*\)".*/\1/p')
+rm -f "$AH5"/raw/dispatches/*.live
+AGORA_RUNTIME=true AGORA_HOME="$AH5" AGORA_LOCK_WAIT=30 bash "$PKG/scripts/dispatch.sh" --actor tester@repo --project "$R5" --task "$CWT" >/dev/null 2>&1 &
+AGORA_RUNTIME=true AGORA_HOME="$AH5" AGORA_LOCK_WAIT=30 bash "$PKG/scripts/dispatch.sh" --actor tester@repo --project "$R5" --task "$CWT" >/dev/null 2>&1 &
+wait
+cd "$T"   # ocr：早前分节 cd 进 H5 内，rm 前必须退出——否则后续分节在已删 cwd 上跑（shell-init getcwd 报错/相对操作哑火）
+[ "$(ls -d "$H5/repo__wt-${CWT}__"* 2>/dev/null | wc -l)" = 1 ] \
+  && ok "同任务并发派发恰建一树（flock＋锁内重读）" || fail "并发重复建树（gt-85c3 锁回归）"
 rm -rf "$H5"
 
 echo "===== gt-575d：重启前挂起盘点＋BOOT done 收尾清单 ====="
@@ -1703,6 +1712,15 @@ AGORA_HOME="$AH7" bash "$PKG/scripts/post.sh" --actor pt575@repo --project repo 
   --task "$P575" --commit HEAD --evidence x >/dev/null
 OUT=$(AGORA_HOME="$AH7" bash "$PKG/scripts/pending-sessions.sh")
 echo "$OUT" | grep -q "可安全重启" && ok "盘点：终态后出列（可安全重启）" || fail "盘点未出列（$OUT）"
+# ocr-24：reopened 清终态（scan_tasks 同口径）——done→reopened→再派发的活 worker 须重新入列
+AGORA_HOME="$AH7" bash "$PKG/scripts/post.sh" --actor pt575@repo --project repo --event reopened \
+  --task "$P575" --reason "返工重开（盘点回归注入）" >/dev/null
+AGORA_HOME="$AH7" bash "$PKG/scripts/post.sh" --actor pt575@repo --project repo --event dispatched \
+  --task "$P575" --target "$REPO7" --child pt575 --run "raw/dispatches/d-p575b.log" --session ses-p575 >/dev/null
+OUT=$(AGORA_HOME="$AH7" bash "$PKG/scripts/pending-sessions.sh")
+echo "$OUT" | grep -q "ses-p575" && ok "盘点：reopened 再派发的活会话重新入列（ocr-24）" || fail "盘点 reopened 盲区（$OUT）"
+AGORA_HOME="$AH7" bash "$PKG/scripts/post.sh" --actor pt575@repo --project repo --event cancelled \
+  --task "$P575" --reason "盘点回归清场" >/dev/null
 grep -q "退场收尾三查" "$PKG/scripts/dispatch.sh" && grep -q "知识积累已提交" "$PKG/scripts/dispatch.sh" \
   && grep -q "worktree 清理确认" "$PKG/scripts/dispatch.sh" && grep -q "遗留项显式注明" "$PKG/scripts/dispatch.sh" \
   && ok "BOOT done 收尾三查清单在场（知识积累/worktree/遗留项）" || fail "BOOT 收尾清单缺失"
@@ -1738,10 +1756,27 @@ OUT=$(AGORA_HOME="$AH8" bash "$PKG/scripts/doctor.sh" 2>&1); RC=$?
 echo "$OUT" | grep -q "seq 断档" && [ "$RC" = 1 ] \
   && ok "C2：seq 缺口未核销置红 rc1" || fail "C2 缺口应红（rc=$RC $OUT）"
 P8 px@repo --project repo --event diagnosed --task "$X1" \
-  --conclusion "seq-waive=px.md:px@repo 缺口行已人工核对（gt-8fe1 测试注入；不删行留痕口径）" >/dev/null
+  --conclusion "seq-waive=$(date +%F)/px.md:px@repo 缺口行已人工核对（gt-8fe1 测试注入；不删行留痕口径）" >/dev/null
 OUT=$(AGORA_HOME="$AH8" bash "$PKG/scripts/doctor.sh" 2>&1); RC=$?
 echo "$OUT" | grep -q "已核销" && [ "$RC" = 0 ] \
   && ok "C2：diagnosed seq-waive 核销后 ok rc0" || fail "C2 核销未生效（rc=$RC $OUT）"
+# C3（ocr-5）：idem 连续重复同通道核销——红文案/键口径（idem 值非 actor）/核销 ok 全链钉死
+printf -- '- seq:90 | ts:%s | actor:px@repo | event:progress | idem:dup8fe1 | seen:repo@90 | task:%s | body:a\n- seq:91 | ts:%s | actor:px@repo | event:progress | idem:dup8fe1 | seen:repo@91 | task:%s | body:b\n' \
+  "$(date -Is)" "$X2" "$(date -Is)" "$X2" >> "$FP8"
+OUT=$(AGORA_HOME="$AH8" bash "$PKG/scripts/doctor.sh" 2>&1); RC=$?
+echo "$OUT" | grep -q "连续重复 idem" && [ "$RC" = 1 ] \
+  && ok "C3：连续重复 idem 置红 rc1" || fail "C3 idem 未红（rc=$RC $OUT）"
+P8 px@repo --project repo --event diagnosed --task "$X2" \
+  --conclusion "idem-waive=$(date +%F)/px.md:dup8fe1 测试注入行已人工核对（不删行留痕口径）" >/dev/null
+OUT=$(AGORA_HOME="$AH8" bash "$PKG/scripts/doctor.sh" 2>&1); RC=$?
+echo "$OUT" | grep -q "已核销" && [ "$RC" = 0 ] \
+  && ok "C3：diagnosed idem-waive 核销后 ok rc0" || fail "C3 idem 核销未生效（rc=$RC $OUT）"
+# C4（ocr-8/9 负例）：他日期同分片名的 seq 缺口不得被既有核销吞——新格式键含 date，跨日必红
+mkdir -p "$AH8/log/2026-10-25"
+printf -- '- seq:50 | ts:2026-10-25T10:00:00+08:00 | actor:px@repo | event:proposal | idem:seqgapneg8fe1 | seen:repo@1 | body:跨日负例注入\n' > "$AH8/log/2026-10-25/px.md"
+OUT=$(AGORA_HOME="$AH8" bash "$PKG/scripts/doctor.sh" 2>&1); RC=$?
+echo "$OUT" | grep -q "seq 断档" && [ "$RC" = 1 ] \
+  && ok "C4：他日期同分片名缺口不误吞（负例红）" || fail "C4 负例被误吞（rc=$RC $OUT）"
 rm -rf "$H8"
 
 # --- post.sh 读取侧三件 + board 心跳 age（gt-4ea1 F/E）---
@@ -2455,6 +2490,7 @@ cat "$AGORA_HOME"/log/*/*.md | grep -E "(^|[|] )task:$D5( |$)" | grep event:disp
 # F5b (gt-6769): 推导「最近」按事件 ts 判——跨分片并存时文件序≠时序（跨 UTC 日期分片分裂＋union 点分片，三连挂实证）；
 # 假行放排序靠后分片＋ts 早 30 分钟：旧码按文件序误选假行（红），修后按 ts 选真源（绿）；混合时区 tz-aware 可比
 F5B="$AGORA_HOME/log/$(date +%F)/repb.md"
+mkdir -p "$(dirname "$F5B")"   # ocr：跨午夜跑批当日分片可能尚无事件落账——缺目录重定向静默失败→断言空转绿
 printf -- '- seq:1 | ts:%s | actor:tester@proj | event:claimed | idem:f5b1 | seen:repb@90 | task:gt-00000f5\n' "$(date -d '30 minutes ago' --iso-8601=seconds)" > "$F5B"
 F5C=$(TID "$(TITLE="推导时序源" VERIFY=true PROJECT_DIR="$PROJ" TC)")
 POST tester@proj --event claimed --task "$F5C" >/dev/null
@@ -3275,6 +3311,9 @@ CA2=$(TID "$(TITLE="cancel多活跃用例二" VERIFY=true PROJECT_DIR="$REPA" TC
 BDSP --actor borch@repa --project "$REPA" --task "$CA2" >/dev/null 2>&1
 CA3=$(TID "$(TITLE="cancel多活跃用例三" VERIFY=true PROJECT_DIR="$REPA" TC)")
 BDSP --actor borch@repa --project "$REPA" --task "$CA3" >/dev/null 2>&1
+# gt-6769 三脚本同钉（ocr-7）：CA2 的早 ts dispatched 行注入排序靠后分片——文件序陷阱在场时旧码误取 CA2
+printf -- '- seq:9 | ts:%s | actor:borch@repa | event:dispatched | idem:cfb1 | task:%s | target:%s | child:cfa | run:raw/dispatches/d-cfa.log\n' \
+  "$(date -d '30 minutes ago' --iso-8601=seconds)" "$CA2" "$REPA" >> "$AGORA_HOME/log/$(date +%F)/repb.md"
 OUT=$(CANCEL --actor borch@repa)
 echo "$OUT" | grep -q "\"task\":\"$CA3\"" && echo "$OUT" | grep -qF "$CA2" \
   && [ -z "$(LEV "$CA2" cancelled)" ] && [ -n "$(LEV "$CA3" cancelled)" ] \
@@ -3481,7 +3520,7 @@ STORM_PIDS=()
 SDSP() {  # SDSP <home> <max_spawn> <task> <out 前缀>：后台发射一路 dispatch，stdout/stderr/rc 分文件收
   local _h="$1" _m="$2" _t="$3" _o="$4"
   (
-    export AGORA_HOME="$_h" AGORA_RUNTIME=true AGORA_MAX_SPAWN="$_m"
+    export AGORA_HOME="$_h" AGORA_RUNTIME=true AGORA_MAX_SPAWN="$_m" AGORA_LOCK_WAIT=30   # ocr：auto-wt 串行化后 5s 缺省在负载抖动下吃紧——本段测 TOCTOU 正确性非锁等待压强
     bash "$PKG/scripts/dispatch.sh" --actor storm@stormrepo --project "$SREPO" --task "$_t" \
       > "$_o.out" 2> "$_o.err"
     echo $? > "$_o.rc"

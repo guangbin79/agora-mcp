@@ -47,9 +47,10 @@ for f in sorted((glob.glob(f"{home}/log/*/*.md") + glob.glob(f"{home}/log/*/.*.m
         t = m.group(1)
         if "event:dispatched" in line:
             am = re.search(r"\| actor:(\S+)", line)
-            if am and am.group(1) == actor: disp[t] = True   # 只认本 actor 派的
-            tmz = re.search(r"\| ts:([^|]+)", line)
-            if tmz: disp_ts[t] = (tmz.group(1).strip(), scan_i)   # gt-6769：pick 按 (ts, 扫描序) 判「最近」
+            if am and am.group(1) == actor:
+                disp[t] = True   # 只认本 actor 派的
+                tmz = re.search(r"\| ts:([^|]+)", line)
+                if tmz: disp_ts[t] = (tmz.group(1).strip(), scan_i)   # gt-6769：pick 按 (ts, 扫描序) 判「最近」；本 actor 口径与 redispatch dts 一致（ocr-17：跨 actor 重派不得污染本 actor 时序）
             last_alive[t] = True
             rm2 = re.search(r"\| run:(\S+)", line)           # C 二期（gt-0a34）：--kill 定位 live/pgid 用
             if rm2: runs[t] = rm2.group(1)

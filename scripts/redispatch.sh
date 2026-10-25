@@ -28,7 +28,7 @@ def _pts(s):
         return None
 home, actor, task = sys.argv[1], sys.argv[2], (sys.argv[3] if len(sys.argv) > 3 else "")
 rows_by, mine, dts = {}, set(), {}
-scan_i = 0   # gt-6769：全局扫描序＝ts 同秒并列的确定性次键（append-only 后写者更近）, {}
+scan_i = 0   # gt-6769：全局扫描序＝ts 同秒并列的确定性次键（append-only 后写者更近）
 for f in sorted((glob.glob(f"{home}/log/*/*.md") + glob.glob(f"{home}/log/*/.*.md"))):
     try: lines = open(f, encoding="utf-8", errors="replace").read().splitlines()
     except OSError: continue
@@ -48,7 +48,7 @@ for f in sorted((glob.glob(f"{home}/log/*/*.md") + glob.glob(f"{home}/log/*/.*.m
                 dts[t] = (ts.group(1).strip(), scan_i)   # gt-6769：pick 按 (ts, 扫描序) 判「最近可回池」
 states = {}
 for t, rows in rows_by.items():
-    rows.sort(key=lambda r: r[0])   # ts 序稳定排序（平局保文件序＝因果序，poll.sh scan_tasks 同款；元组全排会被 ev 字典序重排）
+    rows.sort(key=lambda r: (_pts(r[0]) or _pts("1970-01-01T00:00:00+00:00")).timestamp())   # gt-6769：tz-aware 序（+00:00/+08:00 混排可比）；稳定排序平局保文件序＝因果序
     term, done_open, inflight = None, False, False
     for _ts, ev in rows:
         if ev == "done": done_open = True          # done 未闭：merged/cancelled/reopened 才清

@@ -90,7 +90,6 @@ def apply(shard, i, actor, event, f):
         # 只修出列：入列面（claimed 对 retired 的盲化）语义不动。
         tasks[tid].update(state="done")
         return
-    name = actor.split("@")[0]
     if event == "retired":
         retired.add(actor)
         for t in tasks.values():
