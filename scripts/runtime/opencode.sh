@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# runtime/opencode.sh —— opencode 服务 API 适配器（设计 §三 L2；契约：health/create/inject/alive/status/abort）
+# runtime/opencode.sh —— opencode 服务 API 适配器（设计 §三 L2；契约：health/create/inject/alive/status/who/abort）
 # 全部经 `opencode api`；响应形状 {"data":…}／消息新者在前／outcome+time.idle 状态机（v2.1.2 openapi 实证，gt-d154）。
 # spawn 契约＝create+inject 组合：dispatch 两段调用（create 惰性→落账→inject），保 LEDGER_FAILED→零工作不变量。
 # abort（C 二期 gt-0a34 spike）：POST /api/session/{id}/interrupt（v2.1.2 openapi 实证在场）——cancel --kill 的 API 会话中断面。
@@ -45,6 +45,16 @@ o=d.get("outcome")
 if o in ("failed","interrupted"): print("dead")
 elif o=="succeeded" or d.get("time",{}).get("idle"): print("idle")
 else: print("running")' || { echo dead; exit 0; } ;;
+  who)      # who <sid> → stdout=interactive|dead|delegated（rc0）；rc1=不可达。实体信只投顶层 live 会话：
+            # delegated＝派生 worker（parentID 在场＝subagent 派生；title "agora: gt-" 前缀＝dispatch 派生），
+            # dead＝outcome failed/interrupted（存储持久化致崩溃会话仍可 API 可达，gt-893a）
+    [ -n "${2:-}" ] || { echo "who: sid required" >&2; exit 2; }
+    api GET "/api/session/$2" | jget 'import json,sys
+d=json.load(sys.stdin)["data"]
+o=d.get("outcome")
+if o in ("failed","interrupted"): print("dead")
+elif d.get("parentID") or (d.get("title") or "").startswith("agora: gt-"): print("delegated")
+else: print("interactive")' || exit 1 ;;
   abort)    # abort <sid> → POST /api/session/$sid/interrupt（rc0=中断受理；C 二期 gt-0a34 第六契约）
     [ -n "${2:-}" ] || { echo "abort: sid required" >&2; exit 2; }
     api POST "/api/session/$2/interrupt" >/dev/null ;;

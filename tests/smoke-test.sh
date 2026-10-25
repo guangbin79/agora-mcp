@@ -833,7 +833,7 @@ echo "not found" >&2; exit 1
 NBSTUB
 chmod +x "$NBDIR/opencode"
 DBGLOG="$AGORA_HOME/.git/notify-debug.log"
-map_add() { printf '%s %s %s\n' "$(hostname)" "$1" "$2" >> "$AGORA_HOME/sessions.map"; }
+map_add() { printf '%s %s %s %s\n' "$(hostname)" "$1" "$2" "2027-01-01T00:00:00+08:00" >> "$AGORA_HOME/sessions.map"; }
 msg_add() { mkdir -p "$AGORA_HOME/inbox/$1"; echo "- from:x | ts:y | ref:r893 | summary:ack gt-0000" > "$AGORA_HOME/inbox/$1/$(date +%s%N)-$1.md"; }
 # ① 同实体 worker 会话（dispatch 派生 title 前缀形态）：跳过且失败可见化——零注入＋落痕＋计数＋水位不推进
 map_add worker1 ses-w1 "2027-01-01T00:00:00+08:00"
@@ -841,7 +841,7 @@ msg_add worker1
 printf '%s' '{"data":{"title":"agora: gt-9999 派生worker"}}' > "$NB_HOME/who.json"
 nb_reset none
 NB
-[[ $(nb_calls) == 0 && $(grep -c "entity=worker1 sid=ses-w1 skip delegated-worker" "$DBGLOG") == 1 \
+[[ $(nb_calls) == 0 && $(grep -c "entity=worker1 sid=ses-w1 skip delegated" "$DBGLOG") == 1 \
     && $(grep -c "entity=worker1 sid=- fail no-live-interactive" "$DBGLOG") == 1 \
     && "$(cat "$AGORA_HOME/.git/notify-wm/worker1.fail" 2>/dev/null)" == 1 \
     && ! -f "$AGORA_HOME/.git/notify-wm/worker1" ]] \
