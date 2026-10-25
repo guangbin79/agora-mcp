@@ -21,3 +21,6 @@
 - 乱序构造（smoke T6）：字典序前分片放晚闭合事件（merged/cancelled @T2），字典序后分片放早 done（@T1）——文件序重放得 done_open=True 误诊 done-unmerged；ts 序重放得 done→merged 清位（对）。
 - 平局构造（cancel/redispatch 探针 ④）：同任务 dispatched/claimed/done/reopened/dispatched/merged 六行全在 22:42:47 同秒，裸元组排序尾行变 reopened → term=None → merged 尾态放行；稳定排序尾行 merged → ALREADY_TERMINAL（对）。
 - 诊断侧另有 `\"merged\" in d[\"has\"]` 集合守卫遮蔽 merged 变体（has 与序无关不受乱序影响），cancelled/reopened 变体无守卫、裸露红——守卫只证明「没炸」不证明「对」。
+
+## 实证读面对齐（gt-d31a，2026-10-25）
+- 「修复无效/仍读盲」类实证结论前，先对齐观察路径的代码面：主检出分支是否含修复 commit、init 自举拷贝世代、包装器指向哪个 SCRIPTS。gt-d31a 任务页 10-25 实证「history 仍缺 dispatcher 事件」不可由任何现役路径复现（MCP 面 history(gt-c3d7)=16 含 dotfiles-orch×5；f6e4 已移除 plaza 自举拷贝；bg-wait/agentctl 直连产品仓单源）——盲读源锁定为陈旧拷贝/落后检出（环境考古冒充活缺陷）。点分片修复本尊 f874f92（见上节收口复发）无需再动。
