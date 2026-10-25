@@ -1772,8 +1772,9 @@ OUT=$(AGORA_HOME="$AH8" bash "$PKG/scripts/doctor.sh" 2>&1); RC=$?
 echo "$OUT" | grep -q "已核销" && [ "$RC" = 0 ] \
   && ok "C3：diagnosed idem-waive 核销后 ok rc0" || fail "C3 idem 核销未生效（rc=$RC $OUT）"
 # C4（ocr-8/9 负例）：他日期同分片名的 seq 缺口不得被既有核销吞——新格式键含 date，跨日必红
-mkdir -p "$AH8/log/2026-10-25"
-printf -- '- seq:50 | ts:2026-10-25T10:00:00+08:00 | actor:px@repo | event:proposal | idem:seqgapneg8fe1 | seen:repo@1 | body:跨日负例注入\n' > "$AH8/log/2026-10-25/px.md"
+# gt-9d09 整合差量：负例日期动态取昨日（同 TZ 宇宙恒≠today）——硬编码 2026-10-25 在 TZ=UTC 宇宙与当日重合时被 C2 核销误吞（本机 10-26 实证）
+mkdir -p "$AH8/log/$(date -d yesterday +%F)"
+printf -- '- seq:50 | ts:%sT10:00:00+08:00 | actor:px@repo | event:proposal | idem:seqgapneg8fe1 | seen:repo@1 | body:跨日负例注入\n' "$(date -d yesterday +%F)" > "$AH8/log/$(date -d yesterday +%F)/px.md"
 OUT=$(AGORA_HOME="$AH8" bash "$PKG/scripts/doctor.sh" 2>&1); RC=$?
 echo "$OUT" | grep -q "seq 断档" && [ "$RC" = 1 ] \
   && ok "C4：他日期同分片名缺口不误吞（负例红）" || fail "C4 负例被误吞（rc=$RC $OUT）"
