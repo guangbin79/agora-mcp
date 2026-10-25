@@ -2450,6 +2450,16 @@ D5=$(TID "$(TITLE="推导目标" VERIFY=true PROJECT_DIR="$PROJ" TC)")
 AGORA_RUNTIME=echo AGORA_MAX_SPAWN=9 bash "$PKG/scripts/dispatch.sh" --actor tester@proj --project "$PROJ" --task "$D5" >/dev/null 2>&1
 cat "$AGORA_HOME"/log/*/*.md | grep -E "(^|[|] )task:$D5( |$)" | grep event:dispatched | grep -q "dispatcher_task:$C5" \
   && ok "F5 dispatcher_task 机械推导落账" || fail "F5 推导缺失"
+# F5b (gt-6769): 推导「最近」按事件 ts 判——跨分片并存时文件序≠时序（跨 UTC 日期分片分裂＋union 点分片，三连挂实证）；
+# 假行放排序靠后分片＋ts 早 30 分钟：旧码按文件序误选假行（红），修后按 ts 选真源（绿）；混合时区 tz-aware 可比
+F5B="$AGORA_HOME/log/$(date +%F)/repb.md"
+printf -- '- seq:1 | ts:%s | actor:tester@proj | event:claimed | idem:f5b1 | seen:repb@90 | task:gt-00000f5\n' "$(date -d '30 minutes ago' --iso-8601=seconds)" > "$F5B"
+F5C=$(TID "$(TITLE="推导时序源" VERIFY=true PROJECT_DIR="$PROJ" TC)")
+POST tester@proj --event claimed --task "$F5C" >/dev/null
+F5D=$(TID "$(TITLE="推导时序目标" VERIFY=true PROJECT_DIR="$PROJ" TC)")
+AGORA_RUNTIME=echo AGORA_MAX_SPAWN=9 bash "$PKG/scripts/dispatch.sh" --actor tester@proj --project "$PROJ" --task "$F5D" >/dev/null 2>&1
+LEV "$F5D" dispatched | grep -q "dispatcher_task:$F5C" \
+  && ok "F5b 推导最近按 ts 判（跨分片文件序≠时序不误选）" || fail "F5b 推导按文件序误选（gt-6769）"
 # F6 (A-W2): done-unmerged diagnosed 必 mention 派单方（跑一轮 MERGE_WAIT=0 产生诊断）
 AGORA_MERGE_WAIT_MIN=0 AGORA_ORPHAN_MIN=9999 AGORA_WT_GRACE_MIN=9999 AGORA_DISPATCH_TIMEOUT=9999 AGORA_MAX_SPAWN=9 AGORA_RUNTIME=echo \
   bash "$PKG/scripts/poll.sh" >/dev/null 2>&1

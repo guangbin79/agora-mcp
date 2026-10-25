@@ -26,8 +26,15 @@ PROJECT="${ACTOR##*@}"
 EVAL=$(python3 - "$AGORA_HOME" "$ACTOR" "$TASK" <<'PYEOF'
 import glob, re, sys, json
 home, actor, task = sys.argv[1], sys.argv[2], (sys.argv[3] if len(sys.argv) > 3 else "")
+from datetime import datetime
+def _pts(s):
+    try:
+        d = datetime.fromisoformat(s)
+        return d if d.tzinfo else d.astimezone()
+    except Exception:
+        return None
 disp, terminal, last_alive = {}, set(), {}
-runs, sess = {}, {}
+disp_ts, runs, sess = {}, {}, {}
 for f in sorted((glob.glob(f"{home}/log/*/*.md") + glob.glob(f"{home}/log/*/.*.md"))):
     try: lines = open(f, encoding="utf-8", errors="replace").read().splitlines()
     except OSError: continue
@@ -39,6 +46,8 @@ for f in sorted((glob.glob(f"{home}/log/*/*.md") + glob.glob(f"{home}/log/*/.*.m
         if "event:dispatched" in line:
             am = re.search(r"\| actor:(\S+)", line)
             if am and am.group(1) == actor: disp[t] = True   # 只认本 actor 派的
+            tmz = re.search(r"\| ts:([^|]+)", line)
+            if tmz: disp_ts[t] = tmz.group(1).strip()   # gt-6769：pick 按 ts 判「最近」，不按文件/set 序
             last_alive[t] = True
             rm2 = re.search(r"\| run:(\S+)", line)           # C 二期（gt-0a34）：--kill 定位 live/pgid 用
             if rm2: runs[t] = rm2.group(1)
@@ -57,7 +66,8 @@ if task:
     print(json.dumps({"candidates": [task], "pick": task,
                       "run": runs.get(task, ""), "session": sess.get(task, "")}))
 else:
-    pick = cands[-1] if cands else ""   # 文件序尾＝最近派发
+    # gt-6769：pick 按 ts 判「最近派发」——文件/set 序在跨 UTC 日期分片分裂时≠时序（F5 三连挂实证）
+    pick = max(cands, key=lambda t: (_pts(disp_ts.get(t, "")) or _pts("1970-01-01T00:00:00+00:00")).timestamp()) if cands else ""
     print(json.dumps({"candidates": cands, "pick": pick,
                       "run": runs.get(pick, ""), "session": sess.get(pick, "")}))
 PYEOF

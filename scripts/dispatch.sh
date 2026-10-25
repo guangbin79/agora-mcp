@@ -86,7 +86,8 @@ for f in sorted((glob.glob(f"{home}/log/*/*.md") + glob.glob(f"{home}/log/*/.*.m
             last_alive[t] = True
         elif "event:claimed" in line:
             am = re.search(r'\| actor:(\S+)', line)
-            claimed[t] = am.group(1) if am else ""
+            tmz = re.search(r"\| ts:([^|]+)", line)
+            claimed[t] = (am.group(1) if am else "", tmz.group(1).strip() if tmz else "")
             last_alive[t] = True
         elif any(f"event:{e}" in line for e in ("done", "merged", "cancelled")):
             terminal.add(t); claimed.pop(t, None)
@@ -102,11 +103,21 @@ def depth(t, seen, budget=100):   # 链长上限 100：账本他机可写不可�
 # dispatcher_task 机械推导（终审 A-W1）：未显式传入时取本 actor 最近 claimed 且无终态的任务。
 # gt-7ca0 场景a（actor 碰撞）：同名 actor 的主会话与派生子会话共享身份——claimed 目标与本派发
 # 同项目且该 claimed 无自身链证据（disp 为空＝根任务工人）时，那是子会话的 claim 不是本会话的，排除；
-# 跨项目 claimed（真委托链）与同项目但有链证据（链上工人同仓再派）保留
+# 跨项目 claimed（真委托链）与同项目但有链证据（链上工人同仓再派）保留。
+# gt-6769：「最近」按事件 ts 判（tz-aware 解析，+00:00/+08:00 混排可比），不按文件扫描序——
+# 跨 UTC 日期边界时账本分片分裂（log/10-25 与 10-26 并存），文件序≠时序，插序尾会取错对象（F5 三连挂实证）
 if not dtask and actor:
-    cands = [t for t, a in claimed.items()
+    from datetime import datetime
+    def _pts(s):
+        try:
+            d = datetime.fromisoformat(s)
+            return d if d.tzinfo else d.astimezone()
+        except Exception:
+            return None
+    cands = [t for t, (a, _) in claimed.items()
              if a == actor and not (cur and _norm(tproj.get(t, "")) == cur and not disp.get(t))]
-    if cands: dtask = cands[-1]
+    if cands:
+        dtask = max(cands, key=lambda t: (_pts(claimed[t][1]) or _pts("1970-01-01T00:00:00+00:00")).timestamp())
 nxt = depth(dtask, frozenset()) + 1 if dtask in disp else 1
 # 配额活跃＝dispatched ∩ 无终态 ∩ 非僵尸（last_alive=False＝已死出集；真活由 .live 计数兜底取 max）
 # 分域口径（gt-8c5b）：活跃按 actor 归组（dispatched 行 actor 字段，claimed 兜底）；.live 按 run 路径归属 actor；
@@ -114,7 +125,7 @@ nxt = depth(dtask, frozenset()) + 1 if dtask in disp else 1
 by_actor = {}
 for t in disp:
     if t in terminal or not last_alive.get(t, True): continue
-    a = dact.get(t) or claimed.get(t, "")
+    a = dact.get(t) or claimed.get(t, ("",))[0]
     by_actor[a] = by_actor.get(a, 0) + 1
 live_by, live_tot = {}, 0
 for lf in glob.glob(f"{home}/raw/dispatches/*.live"):
@@ -127,7 +138,7 @@ total = max(live_tot, sum(by_actor.values()))
 # 域归属校验（终闸 C-F2）：任务须计入本 actor 域（dispatched 行 actor 或 claimed 兜底==本 actor）
 # 才豁免——堵伪造无 actor 行借豁免净赚 +1 槽，亦防跨 actor 重派误扣他域槽
 selfact = 1 if (ttask and ttask in disp and ttask not in terminal and last_alive.get(ttask, True)
-                and (dact.get(ttask) or claimed.get(ttask, "")) == actor) else 0
+                and (dact.get(ttask) or claimed.get(ttask, ("",))[0]) == actor) else 0
 print(nxt, me, total, selfact, dtask)
 PYEOF
 }
