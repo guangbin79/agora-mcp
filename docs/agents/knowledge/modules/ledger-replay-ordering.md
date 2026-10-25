@@ -24,3 +24,9 @@
 
 ## 实证读面对齐（gt-d31a，2026-10-25）
 - 「修复无效/仍读盲」类实证结论前，先对齐观察路径的代码面：主检出分支是否含修复 commit、init 自举拷贝世代、包装器指向哪个 SCRIPTS。gt-d31a 任务页 10-25 实证「history 仍缺 dispatcher 事件」不可由任何现役路径复现（MCP 面 history(gt-c3d7)=16 含 dotfiles-orch×5；f6e4 已移除 plaza 自举拷贝；bg-wait/agentctl 直连产品仓单源）——盲读源锁定为陈旧拷贝/落后检出（环境考古冒充活缺陷）。点分片修复本尊 f874f92（见上节收口复发）无需再动。
+
+## 收口复发二（gt-6769）
+- dispatch.sh ledger_scan 的 dispatcher_task 推导（cands[-1]）是文件序残留消费点：同 actor 事件跨 UTC 日期分片分裂（本地 00:00-08:00 长跑跨日界＋写者时区混写）时，昨日分片整目录排前、新 claimed 扫描序反被排后，纯文件序「尾＝最近」取到陈旧遗留 claimed。现场签名：新落账行 ts 带 +00:00（writer-local 时区）落昨日日期分片，seen 计数按分片各自统计（52＋154≈206 全量）。
+- 修法口径：推导「最近」按 claimed 行 ts（fromisoformat offset-aware）判新近度，分片文件序＋行序降为破平兜底（＝append-only 写入因果序）；naive/不可解析 ts 不可跨形态比较，一律退扫描序。writer-local 时区不强统（post.sh 落真实时钟），跨机 ts 可比性另立。
+- 夹具形态：构造性跨日分片断言（F5b）——遗留 claimed 旧瞬间 ts 落今日分片＋新 claimed 新瞬间 ts 落昨日分片，推导必须取新 claimed；比时区环境翻转确定性高，不依赖faketime。
+- 残留同型：cancel.sh 自动推导 pick=cands[-1]（文件序尾＝最近派发）同病未治——--kill 语义下翻车即杀错会话进程组，待红后另立任务。

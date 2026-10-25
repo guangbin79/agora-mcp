@@ -2498,6 +2498,21 @@ F5D=$(TID "$(TITLE="推导时序目标" VERIFY=true PROJECT_DIR="$PROJ" TC)")
 AGORA_RUNTIME=echo AGORA_MAX_SPAWN=9 bash "$PKG/scripts/dispatch.sh" --actor tester@proj --project "$PROJ" --task "$F5D" >/dev/null 2>&1
 LEV "$F5D" dispatched | grep -q "dispatcher_task:$F5C" \
   && ok "F5b 推导最近按 ts 判（跨分片文件序≠时序不误选）" || fail "F5b 推导按文件序误选（gt-6769）"
+# F5b (gt-6769): 跨 UTC 日期分片分裂——同一账本里 claimed 行的时序必须按 ts（offset-aware）判，
+# 不得以分片目录文件序当新近度代理。构造：遗留 claimed（旧瞬间 ts）落今日分片（扫描序靠后），
+# 新 claimed（新瞬间 ts，+00:00 UTC 形态）落昨日分片（扫描序靠前）——推导必须取新 claimed。
+F5B="$T/f5b-agora"; AGORA_HOME="$F5B" AGORA_PKG="$PKG" bash "$PKG/scripts/init.sh" >/dev/null 2>&1
+mkdir -p "$F5B/wiki/entities"
+printf -- '---\nname: ux\ndirs:\n  - %s\ncan_spawn: true\n---\n' "$PROJ" > "$F5B/wiki/entities/ux.md"
+F5B_TODAY=$(date +%F); F5B_YEST=$(date -d "1 day ago" +%F)
+mkdir -p "$F5B/log/$F5B_TODAY" "$F5B/log/$F5B_YEST"
+printf -- '- seq:1 | ts:2026-01-01T00:00:00+08:00 | actor:ux@proj | event:claimed | idem:f5b1 | seen:p@1 | task:gt-f5b1\n' >> "$F5B/log/$F5B_TODAY/proj.md"
+printf -- '- seq:1 | ts:%s | actor:ux@proj | event:claimed | idem:f5b2 | seen:p@1 | task:gt-f5b2\n' "$(date --iso-8601=seconds)" >> "$F5B/log/$F5B_YEST/proj.md"
+F5B_D=$(TITLE="gt6769跨分片推导" VERIFY=true PROJECT_DIR="$PROJ" AGORA_HOME="$F5B" TC | sed -n 's/.*"task":"\(gt-[0-9a-f]*\)".*/\1/p')
+AGORA_RUNTIME=echo AGORA_MAX_SPAWN=9 AGORA_HOME="$F5B" bash "$PKG/scripts/dispatch.sh" --actor ux@proj --project "$PROJ" --task "$F5B_D" >/dev/null 2>&1
+cat "$F5B"/log/*/*.md | grep -E "(^|[|] )task:$F5B_D( |$)" | grep event:dispatched | grep -q "dispatcher_task:gt-f5b2" \
+  && ok "F5b 跨日期分片推导按 ts 新近度（文件序不倒转）" || fail "F5b 分片分裂推导取陈旧 claimed（gt-6769）"
+rm -rf "$F5B"
 # F6 (A-W2): done-unmerged diagnosed 必 mention 派单方（跑一轮 MERGE_WAIT=0 产生诊断）
 AGORA_MERGE_WAIT_MIN=0 AGORA_ORPHAN_MIN=9999 AGORA_WT_GRACE_MIN=9999 AGORA_DISPATCH_TIMEOUT=9999 AGORA_MAX_SPAWN=9 AGORA_RUNTIME=echo \
   bash "$PKG/scripts/poll.sh" >/dev/null 2>&1
